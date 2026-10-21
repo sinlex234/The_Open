@@ -1,0 +1,380 @@
+// The Open One: front end. Plain JS, no build step.
+const $ = s => document.querySelector(s);
+const main = $('#main');
+const TZ = 'America/New_York';
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+// ---------- storage (per-viewer conveniences only) ----------
+const store = {
+  get(k, d) { try { const v = localStorage.getItem('open:' + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem('open:' + k, JSON.stringify(v)); } catch {} },
+};
+
+// ---------- theme ----------
+function applyTheme() { const t = store.get('theme', null); if (t) document.documentElement.dataset.theme = t; else delete document.documentElement.dataset.theme; }
+applyTheme();
+$('#themeBtn').onclick = () => {
+  const light = document.documentElement.dataset.theme === 'light';
+  store.set('theme', light ? 'dark' : 'light'); applyTheme();
+};
+
+// ---------- time helpers ----------
+const nyParts = (t = Date.now()) => {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', weekday: 'short', hourCycle: 'h23' }).formatToParts(new Date(t)).map(x => [x.type, x.value]));
+  return { date: `${p.year}-${p.month}-${p.day}`, h: +p.hour, mi: +p.minute, mins: +p.hour * 60 + +p.minute, dow: p.weekday };
+};
+const fmtTime = t => new Date(t).toLocaleTimeString('en-US', { timeZone: TZ, hour: 'numeric', minute: '2-digit' });
+const fmtDay = (t, opts = { weekday: 'long', month: 'short', day: 'numeric' }) => new Date(t).toLocaleDateString('en-US', { timeZone: TZ, ...opts });
+const dayLabel = dateStr => { const today = nyParts().date; const d = new Date(dateStr + 'T12:00:00Z'); const tm = new Date(today + 'T12:00:00Z'); const diff = Math.round((d - tm) / 864e5); const base = d.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric', timeZone: 'UTC' }); return diff === 0 ? 'Today, ' + base : diff === 1 ? 'Tomorrow, ' + base : base; };
+const ago = t => { if (!t) return ''; const m = Math.round((Date.now() - t) / 60e3); if (m < 1) return 'just now'; if (m < 60) return m + ' min ago'; const h = Math.round(m / 60); if (h < 24) return h + 'h ago'; return Math.round(h / 24) + 'd ago'; };
+const until = t => { const m = Math.round((t - Date.now()) / 60e3); if (m <= 0) return 'now'; if (m < 60) return `in ${m} min`; const h = Math.floor(m / 60), r = m % 60; if (h < 24) return `in ${h}h${r ? ' ' + r + 'm' : ''}`; return 'on ' + fmtDay(t, { weekday: 'long' }); };
+
+// ---------- number helpers ----------
+const num = (v, dp = 2) => v == null || !isFinite(v) ? '—' : Number(v).toLocaleString('en-US', { minimumFractionDigits: dp, maximumFractionDigits: dp });
+const usd = v => { if (v == null || !isFinite(v)) return '—'; if (v >= 1) return '$' + num(v, v >= 1000 ? 0 : 2); const d = Math.max(2, -Math.floor(Math.log10(v)) + 3); return '$' + v.toFixed(Math.min(d, 10)); };
+const big = v => v == null ? '—' : v >= 1e12 ? '$' + (v / 1e12).toFixed(2) + 'T' : v >= 1e9 ? '$' + (v / 1e9).toFixed(1) + 'B' : v >= 1e6 ? '$' + (v / 1e6).toFixed(1) + 'M' : v >= 1e3 ? '$' + (v / 1e3).toFixed(0) + 'K' : '$' + Math.round(v);
+const chg = v => { if (v == null || !isFinite(v)) return '<span class="chg flat">—</span>'; const c = v > 0.005 ? 'up' : v < -0.005 ? 'down' : 'flat'; return `<span class="chg ${c}">${v > 0 ? '+' : ''}${v.toFixed(2)}%</span>`; };
+function spark(vals, w = 90, h = 26) {
+  vals = (vals || []).filter(v => v != null && isFinite(v));
+  if (vals.length < 3) return '';
+  const mn = Math.min(...vals), mx = Math.max(...vals), r = mx - mn || 1;
+  const pts = vals.map((v, i) => `${(i / (vals.length - 1) * w).toFixed(1)},${(h - 2 - (v - mn) / r * (h - 4)).toFixed(1)}`).join(' ');
+  const col = vals[vals.length - 1] >= vals[0] ? 'var(--up)' : 'var(--down)';
+  return `<svg class="spark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true"><polyline points="${pts}" fill="none" stroke="${col}" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
+}
+
+// ---------- data ----------
+const cache = new Map();
+async function api(path, maxAgeMs = 90e3) {
+  const hit = cache.get(path);
+  if (hit && Date.now() - hit.t < maxAgeMs) return hit.p;
+  const p = fetch('/api/data?fn=' + path.replace('?', '&')).then(async r => { const j = await r.json().catch(() => ({})); if (r.status === 404) throw new Error('the data service isn’t set up. Check that data.js and vercel.json are in your GitHub repo'); if (!r.ok || j.error) throw new Error(j.error || 'request failed, ' + r.status); return j; });
+  cache.set(path, { t: Date.now(), p });
+  p.catch(() => cache.delete(path));
+  return p;
+}
+const errBox = (what, msg) => `<div class="err" role="alert"><span>Couldn’t load ${esc(what)} right now (${esc(msg)}). It will try again on the next refresh.</span><button class="btn" onclick="location.reload()">Reload</button></div>`;
+const skel = (n = 4) => Array.from({ length: n }, (_, i) => `<div class="skel" style="width:${90 - i * 12}%"></div>`).join('');
+async function fill(el, what, promise, render) {
+  if (typeof el === 'string') el = document.getElementById(el);
+  if (!el) return;
+  if (!el.innerHTML.trim()) el.innerHTML = skel();
+  try { const d = await promise; if (el.isConnected) el.innerHTML = render(d); }
+  catch (e) { if (el.isConnected) el.innerHTML = errBox(what, e.message); }
+}
+
+// ---------- markets the viewer trades ----------
+const MARKETS = [['futures', 'Futures & indexes'], ['forex', 'Forex'], ['crypto', 'Crypto'], ['memes', 'Memecoins'], ['options', 'Options']];
+let mine = store.get('markets', ['futures']);
+
+// ---------- clock + session ribbon ----------
+const SESSIONS = [
+  { from: 0, to: 120, cls: 'lull', label: 'Overnight' },
+  { from: 120, to: 300, cls: 'london', label: 'London open' },
+  { from: 300, to: 420, cls: 'lull', label: 'Europe' },
+  { from: 420, to: 600, cls: 'ny', label: 'New York morning' },
+  { from: 600, to: 720, cls: 'pm', label: 'Late morning' },
+  { from: 720, to: 810, cls: 'lull', label: 'Lunch' },
+  { from: 810, to: 960, cls: 'pm', label: 'Afternoon' },
+  { from: 960, to: 1080, cls: 'lull', label: 'After hours' },
+  { from: 1200, to: 1440, cls: 'asia', label: 'Asia' },
+];
+const SESSION_WORDS = {
+  'Overnight': 'Overnight. Thin trading between Asia and London',
+  'London open': 'London is open. Often where the day’s first real move starts',
+  'Europe': 'Europe is trading, New York not yet',
+  'New York morning': 'New York morning, the busiest hours of the day',
+  'Late morning': 'Late morning. The opening rush is fading',
+  'Lunch': 'Lunch hour. Quiet, choppy trading',
+  'Afternoon': 'Afternoon session, into the 4:00 close',
+  'After hours': 'After hours. Futures still trade, stocks are closed',
+  'Asia': 'Asia session. The overnight range is forming',
+};
+const TICKS = [[0, '12a', 'Midnight: the day’s opening price'], [120, '2a', ''], [300, '5a', ''], [510, '8:30', 'Most big US news drops here'], [570, '9:30', 'Stock market opens'], [600, '10', 'Second wave of news'], [720, '12p', ''], [840, '2p', 'Fed decisions land here'], [960, '4p', 'Stock market closes'], [1080, '6p', 'Futures reopen'], [1200, '8p', 'Asia session starts'], [1440, '12a', '']];
+let calendarCache = null;
+
+function isClosed(n) { return n.dow === 'Sat' || (n.dow === 'Sun' && n.h < 18) || (n.dow === 'Fri' && n.h >= 17); }
+function currentSession(n) { return SESSIONS.find(s => n.mins >= s.from && n.mins < s.to) || { label: 'Evening', cls: 'lull' }; }
+
+function drawRibbon() {
+  const n = nyParts();
+  const el = $('#ribbon');
+  const x = m => (m / 1440 * 100).toFixed(3) + '%';
+  let h = '<div class="rb-track"></div>';
+  SESSIONS.forEach(s => {
+    const past = n.mins >= s.to;
+    h += `<div class="rb-band ${s.cls}${past ? ' past' : ''}" style="left:calc(${x(s.from)} + 1px);width:calc(${x(s.to - s.from)} - 2px)" data-tip="${esc(s.label)}: ${fmtHM(s.from)}–${fmtHM(s.to)}">${esc(s.label)}</div>`;
+  });
+  TICKS.forEach(([m, lab, tip]) => { h += `<div class="rb-tick${tip ? '' : ' minor'}${m === 570 || m === 600 ? ' dense' : ''}" style="left:${x(Math.min(m, 1439))}"${tip ? ` data-tip="${esc(tip)}"` : ''}>${lab}</div>`; });
+  if (calendarCache) {
+    const today = calendarCache.filter(e => nyParts(e.time).date === n.date && !e.allDay && (e.impact === 'High' || (e.country === 'USD' && e.impact === 'Medium')));
+    const byTime = {};
+    today.forEach(e => { (byTime[e.time] = byTime[e.time] || []).push(e); });
+    Object.values(byTime).forEach(list => {
+      const top = list.find(e => e.impact === 'High') || list[0];
+      const m = nyParts(top.time).mins;
+      const tip = list.map(e => `${e.country} ${e.name}`).join(' / ') + ` at ${fmtTime(top.time)}`;
+      h += `<button class="rb-pin ${top.impact}${top.time < Date.now() ? ' past' : ''}" style="left:${x(m)}" data-tip="${esc(tip)}" aria-label="${esc(tip)}"></button>`;
+    });
+  }
+  if (isClosed(n)) h += `<div class="rb-closed">Futures and forex are closed until Sunday 6 PM</div>`;
+  else h += `<div class="rb-now" style="left:${x(n.mins)}"><span>${fmtTime(Date.now())}</span></div>`;
+  el.innerHTML = h;
+  const s = currentSession(n);
+  $('#sessionNow').innerHTML = isClosed(n) ? '<b>Weekend.</b> Crypto is still trading.' : `<span class="dot" style="background:var(--${s.cls === 'pm' ? 'ny' : s.cls})"></span><b>${esc((SESSION_WORDS[s.label] || s.label).split('.')[0])}.</b> ${esc((SESSION_WORDS[s.label] || '').split('. ').slice(1).join('. '))}`;
+  if (calendarCache) {
+    const next = calendarCache.find(e => e.time > Date.now() - 60e3 && (e.impact === 'High') && (e.country === 'USD' || mine.includes('forex')));
+    $('#nextUp').innerHTML = next ? `Next big release: <b>${esc(next.name)}</b> (${esc(next.country)}) ${until(next.time)}, ${fmtTime(next.time)}` : 'No big releases left this week.';
+  }
+}
+const fmtHM = m => { const h = Math.floor(m / 60) % 24, mi = m % 60; const ap = h >= 12 ? 'pm' : 'am'; const h12 = h % 12 || 12; return h12 + (mi ? ':' + String(mi).padStart(2, '0') : '') + ap; };
+function tick() {
+  const now = new Date();
+  $('#clock').innerHTML = `<b>${now.toLocaleTimeString('en-US', { timeZone: TZ, hour: 'numeric', minute: '2-digit' })}</b> New York<br>${now.toLocaleDateString('en-US', { timeZone: TZ, weekday: 'short', month: 'short', day: 'numeric' })}`;
+  drawRibbon();
+}
+
+// tooltips for ribbon pins/bands
+const tip = $('#tip');
+document.addEventListener('pointerover', e => { const t = e.target.closest('[data-tip]'); if (!t) return; tip.textContent = t.dataset.tip; tip.classList.add('show'); const r = t.getBoundingClientRect(); tip.style.left = Math.min(innerWidth - 270, Math.max(8, r.left + r.width / 2 - 100)) + 'px'; tip.style.top = (r.bottom + 8) + 'px'; });
+document.addEventListener('pointerout', e => { if (e.target.closest('[data-tip]')) tip.classList.remove('show'); });
+document.addEventListener('focusin', e => { const t = e.target.closest('[data-tip]'); if (t) t.dispatchEvent(new PointerEvent('pointerover', { bubbles: true })); });
+document.addEventListener('focusout', () => tip.classList.remove('show'));
+
+// ---------- shared renderers ----------
+function tapeRow(q) { return `<div class="tq"><div class="nm">${esc(q.short)}<small>${esc(q.name)}</small></div><div class="px">${num(q.price, q.dp)}</div>${chg(q.changePct)}</div>`; }
+function qcard(q) { return `<div class="qcard"><div class="top"><span class="nm">${esc(q.short)}</span>${chg(q.changePct)}</div><div class="full">${esc(q.name)}</div><div class="top"><span class="px">${num(q.price, q.dp)}</span>${spark(q.spark)}</div></div>`; }
+function ladder(table, price, dp, fmt = v => num(v, dp), adr = null) {
+  const rows = [...table];
+  const near = adr ? adr * 0.08 : Math.abs(price) * 0.0008;
+  let placed = false, h = '';
+  for (const r of rows) {
+    if (!placed && price >= r.value) { h += `<div class="lrow price"><span class="lb">Price now</span><span class="lv">${fmt(price)}</span></div>`; placed = true; }
+    h += `<div class="lrow${Math.abs(r.value - price) <= near ? ' near' : ''}"><span class="lb">${esc(r.label)}<span class="lh">${esc(r.hint)}</span></span><span class="lv">${fmt(r.value)}</span></div>`;
+  }
+  if (!placed) h += `<div class="lrow price"><span class="lb">Price now</span><span class="lv">${fmt(price)}</span></div>`;
+  return `<div class="ladder"><p class="ladder-t">Levels people are watching, highest first. An amber edge means price is close to that level.</p>${h}</div>`;
+}
+function leaderBlock(L, fmt) {
+  return `<article class="leader">
+    <div>
+      <div class="leader-h"><h2 style="margin:0">${esc(L.name)}</h2><span class="big">${fmt ? fmt(L.price) : num(L.price, L.dp)}</span>${chg(L.changePct)}</div>
+      <ul class="notes">${L.notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul>
+    </div>
+    ${ladder(L.table, L.price, L.dp, fmt, L.levels && L.levels.adr)}
+  </article>`;
+}
+function newsList(items, limit = 14) {
+  if (!items.length) return '<p class="muted">No fresh headlines right now.</p>';
+  return `<ul class="news">${items.slice(0, limit).map(i => `<li><a href="${esc(i.link)}" target="_blank" rel="noopener">${esc(i.title)}</a>
+    ${i.why ? `<div class="why">${esc(i.why)}</div>` : ''}
+    <div class="meta">${i.themeLabel ? `<span class="tag">${esc(i.themeLabel)}</span>` : ''}<span>${esc(i.source)}</span><span>${ago(i.time)}</span></div></li>`).join('')}</ul>`;
+}
+function eventRow(e, mini = false) {
+  const past = e.time < Date.now() - 5 * 60e3, soon = !past && e.time - Date.now() < 60 * 60e3;
+  const fp = [e.forecast && `Expected ${e.forecast}`, e.previous && `Last ${e.previous.split('|')[0]}`].filter(Boolean).join(', ');
+  return `<details class="ev${past ? ' past' : ''}${soon ? ' soon' : ''}"><summary>
+      <span class="t">${e.allDay ? 'All day' : fmtTime(e.time)}</span><span class="imp ${e.impact}" title="${e.impact} impact"></span>
+      ${mini ? '' : `<span class="cc">${esc(e.country)}</span>`}
+      <span class="nm">${esc(e.name)}${e.name !== e.title ? `<small>${mini ? esc(e.country) + ', ' : ''}${esc(e.title)}</small>` : (mini ? `<small>${esc(e.country)}</small>` : '')}</span>
+      ${mini ? '' : `<span class="fp">${esc(fp)}</span>`}</summary>
+    <div class="body">${e.what ? `<p>${esc(e.what)}</p>` : ''}<p>${esc(e.why)}</p>${e.note ? `<p class="note">${esc(e.note)}</p>` : ''}${mini && fp ? `<p class="muted small">${esc(fp)}</p>` : ''}</div></details>`;
+}
+const stamp = d => `<p class="stamp">Updated ${fmtTime(d.updated || Date.now())}</p>`;
+
+// ---------- pages ----------
+const PAGES = {};
+
+PAGES.today = async () => {
+  main.innerHTML = `
+    <div class="chips" role="group" aria-label="Markets you trade"><span class="chips-label">I trade:</span>${MARKETS.map(([k, l]) => `<button class="chip" data-m="${k}" aria-pressed="${mine.includes(k)}">${l}</button>`).join('')}</div>
+    <div class="lead">
+      <article>
+        <div id="brief"></div>
+      </article>
+      <aside class="col-side">
+        <section><h2>Markets right now</h2><div id="tape" class="tape"></div></section>
+        <section class="cal-mini"><h2>Today’s calendar</h2><div id="todayCal"></div></section>
+      </aside>
+    </div>
+    <div class="stack" style="margin-top:40px">
+      <section id="leaders"></section>
+      <section><h2>Headlines</h2><div id="todayNews"></div></section>
+    </div>`;
+  main.querySelectorAll('.chip').forEach(b => b.onclick = () => {
+    const k = b.dataset.m; mine = mine.includes(k) ? mine.filter(x => x !== k) : [...mine, k]; if (!mine.length) mine = [k];
+    store.set('markets', mine); PAGES.today();
+  });
+  fill('brief', 'today’s story', api('brief?markets=' + mine.join(','), 5 * 60e3), d => `
+    <h1 class="head">${esc(d.headline)}</h1>
+    <p class="byline">Morning brief for ${esc(fmtDay(Date.now()))}${d.source === 'ai' ? ', written with AI from today’s data' : ''}</p>
+    <div class="story">${d.paragraphs.map(p => `<p>${esc(p)}</p>`).join('')}</div>${stamp(d)}`);
+  fill('todayCal', 'the calendar', api('calendar', 10 * 60e3), d => {
+    const n = nyParts();
+    const ev = d.events.filter(e => nyParts(e.time).date === n.date && (e.country === 'USD' || e.impact === 'High') && e.impact !== 'Low');
+    return ev.length ? ev.map(e => eventRow(e, true)).join('') : '<p class="muted">Nothing important scheduled today.</p>';
+  });
+  // Tape: pick symbols for the viewer's markets
+  const tapeJobs = [];
+  if (mine.includes('futures') || mine.includes('options')) tapeJobs.push(api('markets?section=futures').then(d => [...d.leaders, ...d.quotes.filter(q => ['VIX', '10Y', 'DXY', 'Gold'].includes(q.short))]));
+  if (mine.includes('forex')) tapeJobs.push(api('markets?section=forex').then(d => d.leaders.filter(q => q.short !== 'Gold')));
+  if (mine.includes('crypto') || mine.includes('memes')) tapeJobs.push(api('crypto').then(d => d.coins.slice(0, 3).map(c => ({ short: c.symbol, name: c.name, price: c.price, dp: c.price > 100 ? 0 : 2, changePct: c.ch24 }))));
+  fill('tape', 'prices', Promise.allSettled(tapeJobs).then(rs => { const ok = rs.filter(r => r.status === 'fulfilled').flatMap(r => r.value); if (!ok.length) throw new Error('no prices'); const seen = new Set(); return ok.filter(q => !seen.has(q.short) && seen.add(q.short)); }), qs => qs.map(tapeRow).join(''));
+  const first = mine[0];
+  const leadJob = first === 'forex' ? api('markets?section=forex').then(d => ({ title: 'Where the euro sits', L: d.leaders[0] }))
+    : first === 'crypto' || first === 'memes' ? api('crypto').then(d => ({ title: 'Where Bitcoin sits', L: d.btc && { ...d.btc, name: 'Bitcoin', dp: 0 }, fmt: v => '$' + num(v, 0) }))
+    : api('markets?section=futures').then(d => ({ title: d.leaders[0] && d.leaders[0].short === 'NQ' ? 'Where Nasdaq futures sit' : 'Where index futures sit', L: d.leaders[0] }));
+  fill('leaders', 'levels', leadJob, ({ title, L, fmt }) => L ? `<h2>${esc(title)}</h2>${leaderBlock(L, fmt)}` : '');
+  const newsSec = mine.length === 1 ? mine[0] : 'all';
+  fill('todayNews', 'headlines', api('news?section=' + newsSec), d => newsList(d.items, 12));
+};
+
+PAGES.futures = async () => {
+  main.innerHTML = `<h1 class="head">Futures &amp; indexes</h1>
+    <p class="sec-intro" id="futIntro"></p>
+    <div id="futLeaders"></div>
+    <section style="margin-top:34px"><h2>Everything else</h2><div id="futQuotes"></div></section>
+    <div class="grid2" style="margin-top:40px">
+      <section class="cal-mini"><h2>US news this week</h2><div id="futCal"></div></section>
+      <section><h2>Headlines that move indexes</h2><div id="futNews"></div></section>
+    </div>`;
+  const d = api('markets?section=futures');
+  fill('futIntro', 'summary', d, x => esc(x.macro.join(' ') || 'Here’s how the main index futures are set up.'));
+  fill('futLeaders', 'futures', d, x => x.leaders.map(L => leaderBlock(L)).join('') + stamp(x) + (x.leaders.length < 2 ? '<p class="muted small">Some data didn’t load.</p>' : ''));
+  fill('futQuotes', 'prices', d, x => `<div class="qgrid">${x.quotes.map(qcard).join('')}</div>`);
+  fill('futCal', 'the calendar', api('calendar', 10 * 60e3), x => {
+    const ev = x.events.filter(e => e.country === 'USD' && e.impact !== 'Low' && e.time > Date.now() - 6 * 36e5).slice(0, 12);
+    return ev.length ? ev.map(e => `<div class="small muted" style="margin-top:10px">${esc(fmtDay(e.time, { weekday: 'short', month: 'short', day: 'numeric' }))}</div>` + eventRow(e, true)).join('') : '<p class="muted">Nothing major coming up.</p>';
+  });
+  fill('futNews', 'headlines', api('news?section=futures'), x => newsList(x.items, 12));
+};
+
+PAGES.forex = async () => {
+  main.innerHTML = `<h1 class="head">Forex</h1>
+    <p class="sec-intro" id="fxIntro"></p>
+    <div class="grid2" style="margin:18px 0 10px"><section><h2>Strongest to weakest today</h2><div id="fxStrength"></div></section><section><h2>Other pairs</h2><div id="fxQuotes" class="tape"></div></section></div>
+    <div id="fxLeaders"></div>
+    <div class="grid2" style="margin-top:40px">
+      <section class="cal-mini"><h2>Central banks &amp; big releases</h2><div id="fxCal"></div></section>
+      <section><h2>Currency headlines</h2><div id="fxNews"></div></section>
+    </div>`;
+  const d = api('markets?section=forex');
+  fill('fxIntro', 'summary', d, x => esc((x.strength && x.strength.length > 1 ? `The ${x.strength[0].ccy} is leading and the ${x.strength[x.strength.length - 1].ccy} is lagging today. ` : '') + x.macro.join(' ')));
+  fill('fxStrength', 'currency strength', d, x => {
+    const s = x.strength || []; const mx = Math.max(0.05, ...s.map(r => Math.abs(r.score)));
+    return `<div class="strength">${s.map(r => { const w = Math.abs(r.score) / mx * 50; return `<div class="srow"><b>${r.ccy}</b><div class="b"><i style="${r.score >= 0 ? `left:50%;width:${w}%;background:var(--up)` : `left:${50 - w}%;width:${w}%;background:var(--down)`}"></i></div><span style="text-align:right">${r.score > 0 ? '+' : ''}${r.score.toFixed(2)}%</span></div>`; }).join('')}</div><p class="muted small">Average move of each currency against the others today.</p>`;
+  });
+  fill('fxQuotes', 'pairs', d, x => x.quotes.map(tapeRow).join(''));
+  fill('fxLeaders', 'pairs', d, x => x.leaders.map(L => leaderBlock(L)).join('') + stamp(x));
+  fill('fxCal', 'the calendar', api('calendar', 10 * 60e3), x => {
+    const ev = x.events.filter(e => e.impact === 'High' && e.time > Date.now() - 6 * 36e5).slice(0, 14);
+    return ev.length ? ev.map(e => `<div class="small muted" style="margin-top:10px">${esc(fmtDay(e.time, { weekday: 'short', month: 'short', day: 'numeric' }))}</div>` + eventRow(e, true)).join('') : '<p class="muted">Nothing major coming up.</p>';
+  });
+  fill('fxNews', 'headlines', api('news?section=forex'), x => newsList(x.items, 12));
+};
+
+PAGES.crypto = async () => {
+  main.innerHTML = `<h1 class="head">Crypto</h1>
+    <div class="lead"><div><div id="cIntro" class="story"></div></div><aside><h2>Crypto mood</h2><div id="cMood"></div></aside></div>
+    <div id="cBtc" style="margin-top:30px"></div>
+    <div class="grid2" style="margin-top:34px">
+      <section><h2>Biggest coins</h2><div id="cCoins"></div></section>
+      <section><h2>What people are searching for</h2><div id="cTrend"></div></section>
+    </div>
+    <section style="margin-top:40px"><h2>Crypto headlines</h2><div id="cNews"></div></section>`;
+  const d = api('crypto');
+  fill('cIntro', 'summary', d, x => x.lines.map(l => `<p>${esc(l)}</p>`).join('') + (x.summary ? `<p class="muted small">Total value of all crypto: ${big(x.summary.mcap)}. Traded in the last day: ${big(x.summary.vol)}.</p>` : ''));
+  fill('cMood', 'mood', d, x => x.fear ? `<div class="gauge"><span class="num">${x.fear.value}</span><div><b>${esc(x.fear.label)}</b><div class="muted small">out of 100</div></div></div><div class="gbar"><i style="left:${x.fear.value}%"></i></div><div class="em-ends"><span>Fear</span><span>Greed</span></div><p class="small muted">Readings near the ends have often marked turning points.</p>` : '<p class="muted">Not available.</p>');
+  fill('cBtc', 'Bitcoin levels', d, x => x.btc ? `<h2>Bitcoin levels</h2>${leaderBlock({ ...x.btc, name: 'Bitcoin', dp: 0 }, v => '$' + num(v, 0))}<p class="muted small">Crypto never closes, so “yesterday” here means midnight to midnight, New York time.</p>` : '');
+  fill('cCoins', 'coins', d, x => `<table class="t"><thead><tr><th>Coin</th><th>Price</th><th>24h</th><th class="hide-sm">7 days</th></tr></thead><tbody>${x.coins.map(c => `<tr><td class="n">${c.image ? `<img class="coin-img" src="${esc(c.image)}" alt="" loading="lazy">` : ''}${esc(c.symbol)}<small>${esc(c.name)}</small></td><td>${usd(c.price)}</td><td>${chg(c.ch24)}</td><td class="hide-sm">${spark(c.spark, 80, 22)}</td></tr>`).join('')}</tbody></table>`);
+  fill('cTrend', 'trending', d, x => x.trending.length ? `<table class="t"><thead><tr><th>Coin</th><th>Rank</th><th>24h</th></tr></thead><tbody>${x.trending.map(c => `<tr><td class="n">${c.image ? `<img class="coin-img" src="${esc(c.image)}" alt="" loading="lazy">` : ''}${esc(c.symbol)}<small>${esc(c.name)}</small></td><td>${c.rank ? '#' + c.rank : '—'}</td><td>${chg(c.ch24)}</td></tr>`).join('')}</tbody></table><p class="muted small">The most-searched coins on CoinGecko in the last day. Attention often comes before big moves, in either direction.</p>` : '<p class="muted">Not available.</p>');
+  fill('cNews', 'headlines', api('news?section=crypto'), x => newsList(x.items, 14));
+};
+
+PAGES.memes = async () => {
+  main.innerHTML = `<h1 class="head">Memecoins</h1>
+    <div class="lead"><div><div id="mIntro" class="story"></div></div>
+      <aside><div class="callout">Most new tokens go to zero. Watch liquidity: it decides whether you can actually sell. “Promoted” means someone paid to put the token in front of buyers.</div></aside></div>
+    <div class="grid2" style="margin-top:34px">
+      <section><h2>Getting the most attention</h2><p class="muted small" style="margin-top:-6px">The most-promoted tokens on DexScreener right now</p><div id="mHot"></div></section>
+      <section><h2>The established names</h2><div id="mMajors"></div><h2 style="margin-top:34px">Memecoin headlines</h2><div id="mNews"></div></section>
+    </div>`;
+  const d = api('memes');
+  fill('mIntro', 'summary', d, x => x.lines.map(l => `<p>${esc(l)}</p>`).join('') || '<p>Here’s where the attention is.</p>');
+  fill('mHot', 'tokens', d, x => x.hot.length ? x.hot.map(t => `<div class="tok"><div class="nm">${t.icon ? `<img class="coin-img" src="${esc(t.icon)}" alt="" loading="lazy">` : ''}<a href="${esc(t.url)}" target="_blank" rel="noopener" style="text-decoration:none">${esc(t.name)}</a><small>${esc(t.symbol)} on ${esc(t.chain)}</small></div><div>${chg(t.ch24)}</div>
+      <div class="stats"><span>Price ${usd(t.price)}</span><span>Value ${big(t.mcap)}</span><span>Liquidity ${big(t.liq)}</span><span>Traded today ${big(t.vol24)}</span><span>Last hour ${t.ch1 == null ? '—' : (t.ch1 > 0 ? '+' : '') + t.ch1.toFixed(1) + '%'}</span></div>
+      ${t.notes.length ? `<div class="flags">${t.notes.map(n => `<span class="flag ${n.tone}">${esc(n.text)}</span>`).join('')}</div>` : ''}</div>`).join('') : '<p class="muted">Nothing to show right now.</p>');
+  fill('mMajors', 'memecoins', d, x => `<table class="t"><thead><tr><th>Coin</th><th>Price</th><th>24h</th><th class="hide-sm">7 days</th></tr></thead><tbody>${x.majors.map(c => `<tr><td class="n">${c.image ? `<img class="coin-img" src="${esc(c.image)}" alt="" loading="lazy">` : ''}${esc(c.symbol)}<small>${esc(c.name)}, ${big(c.mcap)}</small></td><td>${usd(c.price)}</td><td>${chg(c.ch24)}</td><td class="hide-sm">${chg(c.ch7)}</td></tr>`).join('')}</tbody></table>`);
+  fill('mNews', 'headlines', api('news?section=memes'), x => newsList(x.items.filter(i => i.markets.includes('memes')).concat(x.items.filter(i => !i.markets.includes('memes'))), 8));
+};
+
+PAGES.options = async () => {
+  main.innerHTML = `<h1 class="head">Options</h1>
+    <p class="sec-intro" id="oIntro"></p>
+    <section style="margin-top:22px"><h2>How far the market is expected to move today</h2><div id="oEM"></div></section>
+    <div class="grid2" style="margin-top:36px">
+      <section><h2>Fear gauges</h2><div id="oVol" class="tape"></div></section>
+      <section><h2>Expiration dates</h2><div id="oOpex"></div></section>
+    </div>
+    <section style="margin-top:40px"><h2>Headlines</h2><div id="oNews"></div></section>`;
+  const d = api('markets?section=options');
+  fill('oIntro', 'summary', d, x => esc([...(x.structure || []), ...x.macro].join(' ')));
+  fill('oEM', 'expected move', d, x => x.expectedMove.length ? `<div class="em">${x.expectedMove.map(e => `<div class="em-card"><h3>${esc(e.name)}</h3><div class="rng">± ${num(e.move, 0)} points</div><div class="muted small">About ${(e.move / e.price * 100).toFixed(2)}% either way, based on what options traders are paying</div><div class="em-bar"><i></i></div><div class="em-ends"><span>${num(e.price - e.move, 0)}</span><span>${num(e.price, 0)}</span><span>${num(e.price + e.move, 0)}</span></div></div>`).join('')}</div><p class="muted small" style="max-width:70ch">Roughly two days out of three stay inside this range. A day that breaks well past it is unusual, and that’s often when trends start or traders get caught on the wrong side.</p>` : '<p class="muted">Not available.</p>');
+  fill('oVol', 'fear gauges', d, x => x.quotes.filter(q => /VIX|VXN/.test(q.short)).map(tapeRow).join('') + `<p class="muted small">Higher numbers mean traders are paying more for protection. Under 15 is calm, over 25 is nervous.</p>`);
+  fill('oOpex', 'expiration dates', d, x => {
+    const o = x.opex; if (!o) return '';
+    const lab = dt => new Date(dt + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC' });
+    return `<div class="callout"><p style="margin:0 0 8px"><b>${o.daysTo === 0 ? 'Today is' : 'Next is'} monthly expiration${o.next.quarterly ? ', a big quarterly one' : ''}:</b> ${lab(o.next.date)}${o.daysTo > 0 ? ` (${o.daysTo} day${o.daysTo > 1 ? 's' : ''} away)` : ''}.</p>
+      <p style="margin:0 0 8px">${o.next.quarterly ? 'Quarterly expirations (“triple witching”) bring huge volume, especially at the open and the close.' : 'Around expiration, prices often get pulled toward big round-number strike prices and can stall there.'}</p>
+      <p style="margin:0" class="muted">Index options also expire every weekday (same-day or “0DTE” options), which adds to late-day swings.</p></div>
+      <div style="margin-top:12px">${o.upcoming.slice(1).map(u => `<div class="earn-row" style="grid-template-columns:1fr auto"><span>${lab(u.date)}</span><span class="when">${u.quarterly ? 'Quarterly' : 'Monthly'}</span></div>`).join('')}</div>`;
+  });
+  fill('oNews', 'headlines', api('news?section=options'), x => newsList(x.items, 10));
+};
+
+PAGES.calendar = async () => {
+  const f = store.get('calFilter', { imp: ['High', 'Medium'], ccy: ['USD'] });
+  const CCY = ['USD', 'EUR', 'GBP', 'JPY', 'CAD', 'AUD', 'NZD', 'CHF', 'CNY'];
+  main.innerHTML = `<h1 class="head">Economic calendar</h1>
+    <p class="sec-intro">Every scheduled release this week and next, explained in plain English. Tap any event to see what it is and how price tends to react. Red means big, amber medium, grey small.</p>
+    <div class="chips" role="group" aria-label="Impact"><span class="chips-label">Show:</span>${['High', 'Medium', 'Low'].map(i => `<button class="chip" data-imp="${i}" aria-pressed="${f.imp.includes(i)}">${i === 'High' ? 'Big' : i === 'Medium' ? 'Medium' : 'Small'}</button>`).join('')}</div>
+    <div class="chips" role="group" aria-label="Currencies"><span class="chips-label">Countries:</span>${CCY.map(c => `<button class="chip" data-ccy="${c}" aria-pressed="${f.ccy.includes(c)}">${c}</button>`).join('')}</div>
+    <div id="calList"></div>`;
+  main.querySelectorAll('[data-imp]').forEach(b => b.onclick = () => { const k = b.dataset.imp; f.imp = f.imp.includes(k) ? f.imp.filter(x => x !== k) : [...f.imp, k]; store.set('calFilter', f); PAGES.calendar(); });
+  main.querySelectorAll('[data-ccy]').forEach(b => b.onclick = () => { const k = b.dataset.ccy; f.ccy = f.ccy.includes(k) ? f.ccy.filter(x => x !== k) : [...f.ccy, k]; store.set('calFilter', f); PAGES.calendar(); });
+  fill('calList', 'the calendar', api('calendar', 10 * 60e3), d => {
+    const ev = d.events.filter(e => f.imp.includes(e.impact) && (f.ccy.includes(e.country) || (e.country === 'All' && f.imp.includes('Low'))));
+    if (!ev.length) return '<p class="muted">Nothing matches those filters. Try adding more countries or sizes.</p>';
+    const days = {};
+    ev.forEach(e => { const k = nyParts(e.time).date; (days[k] = days[k] || []).push(e); });
+    const today = nyParts().date;
+    return Object.entries(days).filter(([k]) => k >= today || Object.keys(days).length < 4).map(([k, list]) => `<div class="cal-day"><h3>${esc(dayLabel(k))}</h3>${list.map(e => eventRow(e)).join('')}</div>`).join('') + stamp(d);
+  });
+};
+
+PAGES.earnings = async () => {
+  main.innerHTML = `<h1 class="head">Earnings</h1>
+    <p class="sec-intro" id="eIntro"></p>
+    <div id="eList" style="margin-top:20px"></div>`;
+  const d = api('earnings', 15 * 60e3);
+  fill('eIntro', 'summary', d, x => esc(x.lines.join(' ')));
+  fill('eList', 'earnings', d, x => x.days.map(day => `<div class="cal-day"><h3>${esc(dayLabel(day.date))}</h3>${day.rows.length ? day.rows.map(r => `<div class="earn-row"><span class="sym">${esc(r.symbol)}</span><span>${esc(r.name)}${r.heavy ? '<span class="badge">Moves the index</span>' : ''}<span class="muted small" style="display:block">${r.mcap ? big(r.mcap) + ' company' : ''}${r.eps ? ', expected ' + esc(r.eps) + ' a share' : ''}</span></span><span class="when">${r.when === 'before' ? 'Before the open' : r.when === 'after' ? 'After the close' : 'Time not set'}</span></div>`).join('') : '<p class="muted" style="padding:10px 0">No big companies reporting.</p>'}</div>`).join('') + '<p class="muted small">Showing companies worth $20B or more, plus the heavyweights that drive the Nasdaq and S&P.</p>' + stamp(x));
+};
+
+// ---------- router ----------
+function route() {
+  const page = (location.hash.slice(1) || 'today').split('?')[0];
+  const fn = PAGES[page] || PAGES.today;
+  document.querySelectorAll('#tabs a').forEach(a => a.setAttribute('aria-current', a.getAttribute('href') === '#' + (PAGES[page] ? page : 'today') ? 'page' : 'false'));
+  const cur = document.querySelector('#tabs a[aria-current="page"]'); if (cur) cur.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  document.title = page === 'today' || !PAGES[page] ? 'The Open One' : cur.textContent.replace('&amp;', '&') + ' | The Open One';
+  fn();
+}
+addEventListener('hashchange', () => { route(); main.focus({ preventScroll: true }); });
+
+// ---------- start ----------
+api('calendar', 10 * 60e3).then(d => { calendarCache = d.events; drawRibbon(); }).catch(() => {});
+tick(); setInterval(tick, 30e3);
+route();
+// Refresh the open page every 2 minutes (the API caches, so this is cheap)
+setInterval(() => { if (document.visibilityState === 'visible') { cache.clear(); api('calendar').then(d => { calendarCache = d.events; }).catch(() => {}); route(); } }, 120e3);
