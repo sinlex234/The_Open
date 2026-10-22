@@ -28,13 +28,11 @@ html{-webkit-text-size-adjust:100%}
 body{margin:0;color:var(--ink);font-family:var(--sans);font-size:16px;line-height:1.55;font-feature-settings:"tnum" 1;
   background:var(--bg);
   background-image:
-    radial-gradient(900px 520px at 12% -8%,var(--glow-a),transparent 70%),
-    radial-gradient(800px 500px at 92% 4%,var(--glow-b),transparent 70%),
-    linear-gradient(var(--line) 1px,transparent 1px),linear-gradient(90deg,var(--line) 1px,transparent 1px);
-  background-size:auto,auto,56px 56px,56px 56px;
+    radial-gradient(1100px 600px at 10% -12%,var(--glow-a),transparent 70%),
+    radial-gradient(900px 560px at 95% -4%,var(--glow-b),transparent 70%);
+  background-repeat:no-repeat;
   background-attachment:fixed;
 }
-body::before{content:"";position:fixed;inset:0;pointer-events:none;background:linear-gradient(180deg,transparent 0,var(--bg) 640px);opacity:.92;z-index:-1}
 a{color:inherit}
 :focus-visible{outline:2px solid var(--focus);outline-offset:2px;border-radius:6px}
 .skip{position:absolute;left:-999px;top:8px;background:var(--ink);color:var(--bg);padding:8px 12px;border-radius:8px;z-index:10}
@@ -391,7 +389,12 @@ body.locked .mast,body.locked .ribbon-wrap,body.locked main,body.locked .foot,bo
 .brief-h{font-family:var(--display);font-size:clamp(22px,2.6vw,30px);line-height:1.15;letter-spacing:-.03em;margin:0 0 8px;font-weight:700}
 
 /* charts & heatmaps */
-.ticker{max-width:1240px;margin:10px auto 0;padding:0 24px;min-height:46px}
+.ticker{max-width:1192px;margin:14px auto 0;height:48px;overflow:hidden;border-radius:14px;background:var(--surface);border:1px solid var(--line);padding:0 6px;box-sizing:border-box}
+@media (min-width:1241px){.ticker{max-width:1192px}}
+@media (max-width:1240px){.ticker{margin-left:24px;margin-right:24px}}
+/* TradingView frames: match the page's colour scheme so 'transparent' widgets don't get a white backdrop */
+.tradingview-widget-container,.tradingview-widget-container iframe{color-scheme:light;background:transparent!important}
+:root[data-theme="light"] .tradingview-widget-container iframe{color-scheme:light}
 .chart-sec{margin:6px 0 30px}
 .chart-h{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px}
 .chart-h h2{margin:0}
@@ -412,7 +415,7 @@ body.locked .mast,body.locked .ribbon-wrap,body.locked main,body.locked .foot,bo
   .gate-form,.wz-card{padding:20px}
   .gate-points li{font-size:14.5px}
   .wz-opts{grid-template-columns:1fr 1fr}
-  .ticker{padding:0 12px}
+  .ticker{margin-left:16px;margin-right:16px;border-radius:12px}
   .acct-menu,.alerts-panel{right:16px;top:58px}
   .av{width:34px;height:34px;font-size:13px}
   .icon-btn{width:34px;height:34px}
