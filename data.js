@@ -1150,9 +1150,14 @@ async function askClaude({ system, user, maxTokens = 900 }) {
     });
     const j = await r.json();
     if (!r.ok) throw new Error(j.error && j.error.message || "Claude API " + r.status);
-    const text = (j.content || []).map((c) => c.text || "").join("");
+    const text = (j.content || []).filter((c) => c.type === "text").map((c) => c.text || "").join("");
     const s = text.indexOf("{"), e = text.lastIndexOf("}");
-    return JSON.parse(text.slice(s, e + 1));
+    if (s < 0 || e <= s) throw new Error(`No JSON in reply (stop: ${j.stop_reason}, model: ${j.model}, ${text.length} chars, blocks: ${(j.content || []).map((c) => c.type).join("/")}): ${text.slice(0, 80)}`);
+    try {
+      return JSON.parse(text.slice(s, e + 1));
+    } catch (err) {
+      throw new Error(`Bad JSON in reply (stop: ${j.stop_reason}, ${text.length} chars): ${err.message}`);
+    }
   } finally {
     clearTimeout(t);
   }
@@ -1216,7 +1221,7 @@ async function build11(lens = "general", level = "pro") {
   if (hasAI()) {
     try {
       const ai = await askClaude({
-        maxTokens: 1400,
+        maxTokens: 3e3,
         system: VOICE + "\n" + LENS[lens] + (level === "beginner" ? "\nThe reader is newer to trading: explain a little more, one idea per sentence." : "\nThe reader is experienced: be brief and specific."),
         user: `Write the live market desk for right now. Data:
 ${JSON.stringify(facts)}
@@ -1286,7 +1291,7 @@ async function build12(q) {
   if (hasAI()) {
     try {
       const ai = await askClaude({
-        maxTokens: 500,
+        maxTokens: 900,
         system: VOICE + "\n" + LENS[lens] + (level === "beginner" ? "\nThe reader is newer to trading." : "\nThe reader is experienced; keep it tight."),
         user: `Headline: "${title}" (${source}).${summary ? `
 Summary: ${summary}` : ""}${reaction2 ? `
