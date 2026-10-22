@@ -95,7 +95,20 @@ function parseRSS(xml, source) {
   }
   return items;
 }
-async function yahooChart(symbol, { interval = "15m", range = "10d" } = {}) {
+var _memo = /* @__PURE__ */ new Map();
+function memo(key, ttlMs, fn) {
+  const hit = _memo.get(key);
+  if (hit && Date.now() - hit.t < ttlMs) return hit.p;
+  const p = fn();
+  _memo.set(key, { t: Date.now(), p });
+  p.catch(() => _memo.delete(key));
+  return p;
+}
+function yahooChart(symbol, opts = {}) {
+  const { interval = "15m", range = "10d" } = opts;
+  return memo(`yc:${symbol}:${interval}:${range}`, 6e4, () => yahooChartRaw(symbol, { interval, range }));
+}
+async function yahooChartRaw(symbol, { interval = "15m", range = "10d" } = {}) {
   const path = `/v8/finance/chart/${encodeURIComponent(symbol)}?interval=${interval}&range=${range}&includePrePost=true`;
   let j;
   try {
@@ -404,15 +417,15 @@ async function build2(section = "futures") {
   const out = { section, leaders, quotes, macro: macroLines(byShort), errors, updated: Date.now() };
   if (section === "forex") {
     const pairs = [...leaders, ...quotes].filter((x) => /^[A-Z]{3}\/[A-Z]{3}$/.test(x.short) && x.changePct != null);
-    const score = {}, cnt = {};
+    const score2 = {}, cnt = {};
     pairs.forEach((p) => {
       const [b, q] = p.short.split("/");
-      score[b] = (score[b] || 0) + p.changePct;
+      score2[b] = (score2[b] || 0) + p.changePct;
       cnt[b] = (cnt[b] || 0) + 1;
-      score[q] = (score[q] || 0) - p.changePct;
+      score2[q] = (score2[q] || 0) - p.changePct;
       cnt[q] = (cnt[q] || 0) + 1;
     });
-    out.strength = Object.keys(score).map((c) => ({ ccy: c, score: score[c] / cnt[c] })).sort((a, b) => b.score - a.score);
+    out.strength = Object.keys(score2).map((c) => ({ ccy: c, score: score2[c] / cnt[c] })).sort((a, b) => b.score - a.score);
   }
   if (section === "options") {
     const v = byShort.VIX, v9 = byShort.VIX9D, v3 = byShort.VIX3M, vxn = byShort.VXN, spx = byShort.SPX, ndx = byShort.NDX;
@@ -760,6 +773,505 @@ ${JSON.stringify(out)}` }]
   return { ...out, updated: Date.now() };
 }
 
+// api/wire.js
+var GN = (q) => `https://news.google.com/rss/search?q=${encodeURIComponent(q)}+when:1d&hl=en-US&gl=US&ceid=US:en`;
+var FEEDS3 = {
+  "CNBC": "https://www.cnbc.com/id/100003114/device/rss/rss.html",
+  "CNBC Markets": "https://www.cnbc.com/id/20910258/device/rss/rss.html",
+  "MarketWatch": "https://feeds.content.dowjones.io/public/rss/mw_topstories",
+  "MarketWatch Pulse": "https://feeds.content.dowjones.io/public/rss/mw_marketpulse",
+  "WSJ Markets": "https://feeds.content.dowjones.io/public/rss/RSSMarketsMain",
+  "Federal Reserve": "https://www.federalreserve.gov/feeds/press_all.xml",
+  "ECB": "https://www.ecb.europa.eu/rss/press.html",
+  "Investing.com Forex": "https://www.investing.com/rss/news_1.rss",
+  "CoinDesk": "https://www.coindesk.com/arc/outboundfeeds/rss/",
+  "Cointelegraph": "https://cointelegraph.com/rss",
+  "Decrypt": "https://decrypt.co/feed",
+  // Google News topic searches pull in Reuters, Bloomberg, AP, FT and others
+  "GN: stock market": GN("stock market today"),
+  "GN: Nasdaq": GN("Nasdaq futures OR S&P 500 futures"),
+  "GN: Fed": GN("Federal Reserve interest rates"),
+  "GN: economy": GN("inflation OR jobs report OR economic data"),
+  "GN: dollar": GN("dollar forex currency"),
+  "GN: oil gold": GN("oil prices OR gold prices"),
+  "GN: crypto": GN("bitcoin OR crypto market"),
+  "GN: earnings": GN("earnings stock shares"),
+  "GN: geopolitics": GN("tariffs OR sanctions OR war markets")
+};
+var SECTION_FEEDS = {
+  all: Object.keys(FEEDS3),
+  futures: ["CNBC", "CNBC Markets", "MarketWatch", "MarketWatch Pulse", "WSJ Markets", "Federal Reserve", "GN: stock market", "GN: Nasdaq", "GN: Fed", "GN: economy", "GN: earnings", "GN: geopolitics"],
+  forex: ["Investing.com Forex", "ECB", "Federal Reserve", "WSJ Markets", "GN: dollar", "GN: Fed", "GN: economy", "GN: oil gold", "GN: geopolitics"],
+  crypto: ["CoinDesk", "Cointelegraph", "Decrypt", "GN: crypto"]
+};
+var REACT = {
+  NQ: { sym: "NQ=F", label: "NQ", dp: 2, unit: "pts" },
+  ES: { sym: "ES=F", label: "ES", dp: 2, unit: "pts" },
+  BTC: { sym: "BTC-USD", label: "BTC", dp: 0, unit: "$" },
+  GOLD: { sym: "GC=F", label: "Gold", dp: 1, unit: "$" },
+  OIL: { sym: "CL=F", label: "Oil", dp: 2, unit: "$" },
+  EURUSD: { sym: "EURUSD=X", label: "EUR/USD", dp: 5, unit: "pips", pip: 1e-4 }
+};
+function reactKey(h) {
+  if (h.theme === "crypto" || h.theme === "memes") return "BTC";
+  if (h.theme === "gold") return "GOLD";
+  if (h.theme === "energy") return "OIL";
+  if (h.theme === "dollar") return "EURUSD";
+  return "NQ";
+}
+function priceAt(bars, t) {
+  for (const b of bars) if (b.t + 5 * 6e4 > t) return b.o;
+  return null;
+}
+function reaction(bars, t, cfg) {
+  if (!bars || bars.length < 2 || !t || t < bars[0].t || Date.now() - t > 36 * 36e5) return null;
+  const p0 = priceAt(bars, t), p1 = bars[bars.length - 1].c;
+  if (p0 == null) return null;
+  const d = p1 - p0;
+  const pct2 = d / p0 * 100;
+  const amount = cfg.pip ? Math.round(d / cfg.pip) : +d.toFixed(cfg.dp);
+  return { label: cfg.label, from: +p0.toFixed(cfg.dp), now: +p1.toFixed(cfg.dp), change: amount, unit: cfg.unit, pct: +pct2.toFixed(2) };
+}
+var STRONG = /\b(surge|soar|plunge|tumble|crash|slump|record|biggest|worst|best|jump|sink|slide|rally|spike|selloff|sell-off|rout|halt|emergency|unexpected|surprise|shock|hotter|cooler|beats?|miss(es|ed)?|cuts?|hikes?)\b/i;
+var THEME_W = { rates: 3, inflation: 3, jobs: 3, trade: 2.5, world: 2.5, earnings: 2, ai: 2, energy: 1.5, gov: 1.5, dollar: 1.5, gold: 1, crypto: 1.5, memes: 1, options: 1 };
+function score(h) {
+  let s = THEME_W[h.theme] || 0.5;
+  if (STRONG.test(h.title)) s += 1.5;
+  if (/\b(fed|powell|cpi|payrolls|jobs report|fomc|tariff)\b/i.test(h.title)) s += 1;
+  s += Math.min(3, (h.count - 1) * 0.8);
+  const ageH = h.time ? (Date.now() - h.time) / 36e5 : 12;
+  s -= Math.min(3, ageH / 6);
+  return s;
+}
+var norm = (t) => t.toLowerCase().replace(/[’']/g, "").replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter((w) => w.length > 3 && !STOP.has(w));
+var STOP = /* @__PURE__ */ new Set(["with", "from", "that", "this", "after", "over", "into", "than", "what", "says", "said", "will", "more", "amid", "their", "have", "about", "stock", "stocks", "market", "markets", "today", "news"]);
+function similar(a, b) {
+  const A = new Set(a), B = new Set(b);
+  let i = 0;
+  A.forEach((w) => {
+    if (B.has(w)) i++;
+  });
+  return i / Math.max(1, Math.min(A.size, B.size));
+}
+async function build8(section = "all") {
+  const names = SECTION_FEEDS[section] || SECTION_FEEDS.all;
+  const { res, errors } = await settle(Object.fromEntries(names.map((n) => [n, getText(FEEDS3[n]).then((x) => parseRSS(x, n))])));
+  let raw = names.flatMap((n) => (res[n] || []).map((i) => {
+    if (n.startsWith("GN:")) {
+      const m = i.title.match(/^(.*) - ([^-]+)$/);
+      if (m) return { ...i, title: m[1].trim(), source: m[2].trim(), summary: "" };
+    }
+    return i;
+  }));
+  const cutoff = Date.now() - 2 * 864e5;
+  raw = raw.filter((i) => i.title && (!i.time || i.time > cutoff));
+  raw.sort((a, b) => (b.time || 0) - (a.time || 0));
+  const clusters = [];
+  for (const it of raw) {
+    const words = norm(it.title);
+    const c = clusters.find((c2) => similar(c2.words, words) >= 0.6);
+    if (c) {
+      c.count++;
+      if (!c.sources.includes(it.source)) c.sources.push(it.source);
+      if (it.time && (!c.first || it.time < c.first)) c.first = it.time;
+      continue;
+    }
+    clusters.push({ ...it, words, count: 1, sources: [it.source], first: it.time });
+  }
+  let items = clusters.map((c) => {
+    const { words, ...rest } = c;
+    return tagHeadline({ ...rest, time: c.first || c.time });
+  }).map((h) => ({ ...h, score: score(h) }));
+  if (section !== "all") items = items.filter((i) => i.markets.includes(section) || i.score > 3.5);
+  items.forEach((h) => {
+    h.impact = h.score >= 4.5 ? "high" : h.score >= 2.5 ? "medium" : "low";
+    h.breaking = h.impact === "high" && h.time && Date.now() - h.time < 45 * 6e4;
+    h.id = (h.time || 0).toString(36) + "-" + norm(h.title).slice(0, 4).join("-");
+  });
+  items.sort((a, b) => (b.time || 0) - (a.time || 0));
+  items = items.slice(0, 80);
+  const keys = [...new Set(items.map(reactKey))];
+  const charts = await settle(Object.fromEntries(keys.map((k) => [k, yahooChart(REACT[k].sym, { interval: "5m", range: "2d" })])));
+  items.forEach((h) => {
+    const k = reactKey(h);
+    const c = charts.res[k];
+    h.reaction = c ? reaction(c.bars, h.time, REACT[k]) : null;
+  });
+  const failed = Object.keys(errors).length;
+  return { section, items, sources: names.length - failed, errors, updated: Date.now() };
+}
+
+// api/movers.js
+var GIANTS = [
+  ["NVDA", "Nvidia", 9.5, /nvidia|nvda/i],
+  ["MSFT", "Microsoft", 8.4, /microsoft|msft/i],
+  ["AAPL", "Apple", 8, /\bapple\b|aapl/i],
+  ["AMZN", "Amazon", 5.4, /amazon|amzn/i],
+  ["AVGO", "Broadcom", 5.2, /broadcom|avgo/i],
+  ["META", "Meta", 3.8, /\bmeta\b|facebook|instagram/i],
+  ["GOOGL", "Alphabet", 5.4, /alphabet|google|googl/i],
+  ["TSLA", "Tesla", 3, /tesla|tsla|musk/i],
+  ["COST", "Costco", 2.3, /costco/i],
+  ["NFLX", "Netflix", 1.4, /netflix/i],
+  ["AMD", "AMD", 1.4, /\bamd\b|advanced micro/i],
+  ["PLTR", "Palantir", 1.6, /palantir/i]
+];
+var SECTORS = [
+  ["XLK", "Tech"],
+  ["SMH", "Chips"],
+  ["XLC", "Communication"],
+  ["XLY", "Consumer spending"],
+  ["XLF", "Banks & finance"],
+  ["XLV", "Health care"],
+  ["XLE", "Energy"],
+  ["XLI", "Industrials"],
+  ["XLP", "Everyday goods"],
+  ["XLU", "Utilities"],
+  ["XLRE", "Real estate"],
+  ["XLB", "Materials"]
+];
+async function quote2(sym) {
+  const c = await yahooChart(sym, { interval: "5m", range: "1d" });
+  const m = c.meta || {};
+  const price = m.regularMarketPrice ?? (c.bars.length ? c.bars[c.bars.length - 1].c : null);
+  const prev = m.chartPreviousClose ?? m.previousClose;
+  return { price, prev, pct: price != null && prev ? (price - prev) / prev * 100 : null, spark: c.bars.map((b) => b.c).filter((_, i, a) => a.length < 60 || i % Math.ceil(a.length / 60) === 0) };
+}
+async function build9() {
+  const jobs = { nq: yahooChart("NQ=F", { interval: "5m", range: "1d" }), news: build8("futures") };
+  GIANTS.forEach(([s]) => {
+    jobs["g:" + s] = quote2(s);
+  });
+  SECTORS.forEach(([s]) => {
+    jobs["s:" + s] = quote2(s);
+  });
+  const { res, errors } = await settle(jobs);
+  const nqPrice = res.nq ? res.nq.meta.regularMarketPrice ?? res.nq.bars.slice(-1)[0].c : null;
+  const nqPrev = res.nq ? res.nq.meta.chartPreviousClose ?? res.nq.meta.previousClose : null;
+  const news = res.news ? res.news.items : [];
+  const giants = GIANTS.map(([sym, name, w, re]) => {
+    const q = res["g:" + sym];
+    if (!q || q.pct == null) return null;
+    const pts = nqPrice ? w / 100 * q.pct / 100 * nqPrice : null;
+    const story = news.find((n) => re.test(n.title));
+    return { sym, name, weight: w, price: q.price, pct: +q.pct.toFixed(2), nqPts: pts != null ? +pts.toFixed(1) : null, spark: q.spark, story: story ? { title: story.title, link: story.link, source: story.source, time: story.time } : null };
+  }).filter(Boolean).sort((a, b) => Math.abs(b.nqPts || 0) - Math.abs(a.nqPts || 0));
+  const sectors = SECTORS.map(([sym, name]) => {
+    const q = res["s:" + sym];
+    return q && q.pct != null ? { sym, name, pct: +q.pct.toFixed(2) } : null;
+  }).filter(Boolean).sort((a, b) => b.pct - a.pct);
+  const nqChange = nqPrice && nqPrev ? nqPrice - nqPrev : null;
+  const giantsTotal = giants.reduce((s, g) => s + (g.nqPts || 0), 0);
+  const lines = [];
+  if (giants.length && nqChange != null) {
+    const top = giants[0];
+    lines.push(`NQ is ${nqChange >= 0 ? "up" : "down"} ${Math.abs(nqChange).toFixed(0)} points today. The ${giants.length} biggest Nasdaq stocks account for about ${giantsTotal >= 0 ? "+" : ""}${giantsTotal.toFixed(0)} of those points.`);
+    lines.push(`${top.name} is the biggest single driver, ${top.nqPts >= 0 ? "adding" : "taking off"} roughly ${Math.abs(top.nqPts).toFixed(0)} points (${top.pct >= 0 ? "+" : ""}${top.pct}%).`);
+    const share = Math.abs(nqChange) > 1 ? giantsTotal / nqChange : null;
+    if (share != null) lines.push(share > 0.7 ? "This move is mostly about a handful of giant stocks, not the whole market." : share < 0.3 ? "The move is broad: it\u2019s coming from across the market, not just the giants." : "Both the giants and the rest of the market are contributing.");
+  }
+  if (sectors.length > 2) {
+    const best = sectors[0], worst = sectors[sectors.length - 1];
+    lines.push(`Strongest corner of the market: ${best.name.toLowerCase()} (${best.pct >= 0 ? "+" : ""}${best.pct}%). Weakest: ${worst.name.toLowerCase()} (${worst.pct >= 0 ? "+" : ""}${worst.pct}%).`);
+    const defensive = ["XLU", "XLP", "XLV"].map((s) => sectors.find((x) => x.sym === s)).filter(Boolean);
+    const growth = ["XLK", "SMH", "XLY"].map((s) => sectors.find((x) => x.sym === s)).filter(Boolean);
+    if (defensive.length && growth.length) {
+      const d = defensive.reduce((s, x) => s + x.pct, 0) / defensive.length, g = growth.reduce((s, x) => s + x.pct, 0) / growth.length;
+      if (d - g > 0.5) lines.push("Money is moving into safer, slower stocks: a cautious mood.");
+      else if (g - d > 0.5) lines.push("Money is moving into growth and tech: a confident mood.");
+    }
+  }
+  return { nq: nqPrice ? { price: nqPrice, change: nqChange } : null, giants, sectors, lines, giantsTotal: +giantsTotal.toFixed(1), errors, updated: Date.now() };
+}
+
+// api/recap.js
+var INST = {
+  NQ: { sym: "NQ=F", name: "Nasdaq futures (NQ)", dp: 2, unit: "points", start: 18 },
+  ES: { sym: "ES=F", name: "S&P futures (ES)", dp: 2, unit: "points", start: 18 },
+  EURUSD: { sym: "EURUSD=X", name: "EUR/USD", dp: 5, unit: "pips", pip: 1e-4, start: 17 },
+  GBPUSD: { sym: "GBPUSD=X", name: "GBP/USD", dp: 5, unit: "pips", pip: 1e-4, start: 17 },
+  USDJPY: { sym: "USDJPY=X", name: "USD/JPY", dp: 3, unit: "pips", pip: 0.01, start: 17 },
+  GOLD: { sym: "GC=F", name: "Gold", dp: 1, unit: "dollars", start: 18 },
+  BTC: { sym: "BTC-USD", name: "Bitcoin", dp: 0, unit: "dollars", start: 0 }
+};
+var SESS = [
+  { id: "asia", label: "Asia", from: -240, to: 0 },
+  // 8 PM – midnight (the evening before)
+  { id: "london", label: "London", from: 120, to: 300 },
+  // 2 – 5 AM
+  { id: "nyam", label: "New York morning", from: 420, to: 660 },
+  // 7 – 11 AM
+  { id: "nypm", label: "New York afternoon", from: 810, to: 960 }
+  // 1:30 – 4 PM
+];
+function nyToMs(date, mins) {
+  const want = Date.parse(date + "T00:00:00Z") + mins * 6e4;
+  let g = want + 4 * 36e5;
+  const n = ny(g);
+  const got = Date.parse(n.date + "T00:00:00Z") + n.mins * 6e4;
+  return g + (want - got);
+}
+var fmtT = (t) => new Date(t).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" });
+async function build10(key = "NQ") {
+  const I = INST[key] || INST.NQ;
+  const { res, errors } = await settle({ c5: yahooChart(I.sym, { interval: "5m", range: "5d" }), cal: build(), news: build8("all") });
+  if (!res.c5 || res.c5.bars.length < 20) throw new Error("No intraday data for " + I.name);
+  const bars = res.c5.bars.map((b) => ({ ...b, n: ny(b.t) }));
+  const now = Date.now(), nn = ny(now);
+  const day = nn.h >= 18 ? addDays(nn.date, 1) : nn.date;
+  const minsOf = (b) => b.n.date === day ? b.n.mins : b.n.date === addDays(day, -1) ? b.n.mins - 1440 : b.n.date === addDays(day, -2) ? b.n.mins - 2880 : null;
+  const dayBars = bars.filter((b) => {
+    const m = minsOf(b);
+    return m != null && m >= -360;
+  });
+  const fmt = (v) => v == null ? "\u2014" : Number(v).toLocaleString("en-US", { minimumFractionDigits: I.dp, maximumFractionDigits: I.dp });
+  const size = (d) => I.pip ? `${Math.round(Math.abs(d) / I.pip)} pips` : I.unit === "dollars" ? `$${Math.abs(d).toLocaleString("en-US", { maximumFractionDigits: I.dp })}` : `${Math.abs(d).toFixed(I.dp > 2 ? 2 : 1)} points`;
+  const prevDayBars = bars.filter((b) => {
+    const m = minsOf(b);
+    return m != null && m < -360 && m >= -1440 - 360;
+  });
+  const prevHigh = prevDayBars.length ? Math.max(...prevDayBars.map((b) => b.h)) : null;
+  const prevLow = prevDayBars.length ? Math.min(...prevDayBars.map((b) => b.l)) : null;
+  const ranges15 = [];
+  for (let i = 3; i < bars.length; i += 3) ranges15.push(Math.abs(bars[i].c - bars[i - 3].c));
+  const typical15 = ranges15.length ? ranges15.sort((a, b) => a - b)[Math.floor(ranges15.length * 0.5)] : null;
+  const sessions = [];
+  let prevRef = { label: "yesterday", high: prevHigh, low: prevLow };
+  const refs = [];
+  for (const s of SESS) {
+    const bs = dayBars.filter((b) => {
+      const m = minsOf(b);
+      return m >= s.from && m < s.to;
+    });
+    const mNow = nn.h >= 18 ? nn.mins - 1440 : nn.mins;
+    const status = mNow < s.from ? "upcoming" : mNow < s.to ? "live" : "done";
+    if (!bs.length) {
+      sessions.push({ id: s.id, label: s.label, status: status === "done" ? "no data" : status, text: status === "upcoming" ? `Starts at ${fmtT(Date.now() + (s.from - mNow) * 6e4)}.` : "No trading data for this session." });
+      continue;
+    }
+    const o = bs[0].o, c = bs[bs.length - 1].c, h = Math.max(...bs.map((b) => b.h)), l = Math.min(...bs.map((b) => b.l));
+    const took = [];
+    for (const r of [...refs, prevRef]) {
+      if (r.high != null && h > r.high && !took.some((t) => t.side === "high")) took.push({ side: "high", label: `${r.label}\u2019s high`, level: r.high, held: c > r.high });
+      if (r.low != null && l < r.low && !took.some((t) => t.side === "low")) took.push({ side: "low", label: `${r.label}\u2019s low`, level: r.low, held: c < r.low });
+    }
+    const pos = h > l ? (c - l) / (h - l) : 0.5;
+    const dir = c > o ? "up" : c < o ? "down" : "flat";
+    let text = `${s.label} ${status === "live" ? "is" : "was"} ${dir === "flat" ? "flat" : dir} ${size(c - o)}, in a ${size(h - l)} range (${fmt(l)} \u2013 ${fmt(h)}).`;
+    took.forEach((t) => {
+      text += t.held ? ` It broke ${t.label} (${fmt(t.level)}) and held beyond it.` : ` It poked through ${t.label} (${fmt(t.level)}) but slipped back, a classic fake-out.`;
+    });
+    if (!took.length && refs.length) text += " It stayed inside the earlier ranges, so those highs and lows are still untouched.";
+    text += pos > 0.75 ? " It finished near its high." : pos < 0.25 ? " It finished near its low." : " It finished mid-range.";
+    sessions.push({ id: s.id, label: s.label, status, open: o, close: c, high: h, low: l, change: c - o, took, text });
+    refs.unshift({ label: s.label, high: h, low: l });
+  }
+  const moves = [];
+  if (typical15) {
+    const thr = Math.max(typical15 * 3, 0);
+    let i = 3;
+    while (i < dayBars.length) {
+      const d = dayBars[i].c - dayBars[i - 3].o;
+      if (Math.abs(d) >= thr) {
+        let j = i;
+        while (j + 1 < dayBars.length && Math.sign(dayBars[j + 1].c - dayBars[j].c) === Math.sign(d) && j - i < 6) j++;
+        const start = dayBars[i - 3], end = dayBars[j];
+        moves.push({ t: start.t, end: end.t, from: start.o, to: end.c, change: end.c - start.o });
+        i = j + 4;
+      } else i++;
+    }
+  }
+  const events = (res.cal && res.cal.events || []).filter((e) => ny(e.time).date === day && e.impact !== "Low" && (e.country === "USD" || e.impact === "High"));
+  const news = (res.news && res.news.items || []).filter((h) => h.time && h.impact !== "low");
+  const timeline = [];
+  moves.sort((a, b) => Math.abs(b.change) - Math.abs(a.change)).slice(0, 8).forEach((m) => {
+    const ev = events.filter((e) => e.time >= m.t - 15 * 6e4 && e.time <= m.t + 10 * 6e4);
+    const hd = news.filter((h) => h.time >= m.t - 60 * 6e4 && h.time <= m.end + 10 * 6e4).sort((a, b) => b.score - a.score).slice(0, 2);
+    timeline.push({ kind: "move", t: m.t, change: m.change, from: m.from, to: m.to, text: `${I.name.split(" (")[0]} ${m.change > 0 ? "jumped" : "dropped"} ${size(m.change)} in about ${Math.max(15, Math.round((m.end - m.t) / 6e4) + 5)} minutes (${fmt(m.from)} \u2192 ${fmt(m.to)}).`, cause: ev.length ? `Lined up with ${ev.map((e) => e.name).join(" and ")} at ${fmtT(ev[0].time)}.` : hd.length ? "Around the time of the stories below." : "No scheduled release or major headline lines up with this one.", events: ev.map((e) => ({ name: e.name, title: e.title, time: e.time, forecast: e.forecast, previous: e.previous })), news: hd.map((h) => ({ title: h.title, link: h.link, source: h.source, time: h.time })) });
+  });
+  events.forEach((e) => {
+    if (!timeline.some((x) => x.events && x.events.some((v) => v.time === e.time && v.title === e.title))) timeline.push({ kind: "event", t: e.time, text: e.name, sub: e.title + (e.forecast ? `, expected ${e.forecast}` : "") + (e.previous ? `, last ${e.previous.split("|")[0]}` : ""), upcoming: e.time > now, impact: e.impact });
+  });
+  SESS.forEach((s) => {
+    const t = nyToMs(s.from < 0 ? addDays(day, -1) : day, (s.from + 1440) % 1440);
+    if (t <= now && t > now - 30 * 36e5) timeline.push({ kind: "session", t, text: `${s.label} session opened` });
+  });
+  timeline.sort((a, b) => a.t - b.t);
+  return { key, name: I.name, unit: I.unit, day, price: dayBars.length ? dayBars[dayBars.length - 1].c : null, sessions, timeline, typical15, errors, updated: Date.now() };
+}
+
+// api/_lib/ai.js
+var hasAI = () => !!process.env.ANTHROPIC_API_KEY;
+async function askClaude({ system, user, maxTokens = 900 }) {
+  const key = process.env.ANTHROPIC_API_KEY;
+  if (!key) return null;
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 25e3);
+  try {
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      signal: ctrl.signal,
+      headers: { "x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+      body: JSON.stringify({ model: process.env.ANTHROPIC_MODEL || "claude-haiku-5-5", max_tokens: maxTokens, system, messages: [{ role: "user", content: user }] })
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error && j.error.message || "Claude API " + r.status);
+    const text = (j.content || []).map((c) => c.text || "").join("");
+    const s = text.indexOf("{"), e = text.lastIndexOf("}");
+    return JSON.parse(text.slice(s, e + 1));
+  } finally {
+    clearTimeout(t);
+  }
+}
+var VOICE = `You write for The Open One, a trading news site. Rules:
+- Plain everyday English. Short sentences. No hype, no emojis, no "in conclusion".
+- Never tell anyone to buy or sell. Describe what happened and why it matters.
+- Only use the facts and numbers you are given. If a cause isn't supported by the headlines given, say the move has no clear news behind it.
+- Write prices and points exactly as given.
+- Quietly reflect price-action thinking in everyday words: stop orders resting above obvious highs and below obvious lows, first moves after news often faking out, the session times (Asia, London, New York), the pricey vs cheap half of a range, gaps price tends to revisit. Do NOT use jargon such as liquidity sweep, FVG, order block, premium/discount, BOS, CHoCH, killzone.`;
+var LENS = {
+  ict: "The reader trades ICT / smart-money style: emphasise which obvious highs and lows have been run or are still sitting there, session timing, and whether moves look like fake-outs, without using ICT jargon.",
+  pa: "The reader trades price action and support/resistance: emphasise key levels, breaks that held or failed, and ranges.",
+  ind: "The reader uses indicators: mention momentum and trend in plain words (stretched, fading, steady trend) based on the moves given.",
+  news: "The reader trades the news: emphasise scheduled releases, surprises vs expectations, and how fast price reacted.",
+  general: "The reader is still finding a style: explain cause and effect simply."
+};
+
+// api/desk.js
+var fmtT2 = (t) => new Date(t).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" });
+var THEMES_FOR = { NQ: ["ai", "earnings", "rates", "inflation", "jobs", "trade", "world", "gov"], ES: ["earnings", "rates", "inflation", "jobs", "trade", "world", "gov", "energy"], BTC: ["crypto", "memes", "rates"], Gold: ["gold", "rates", "world", "dollar"], Dollar: ["dollar", "rates", "inflation", "jobs"], "10Y": ["rates", "inflation", "jobs", "gov"], Oil: ["energy", "world", "trade"], "EUR/USD": ["dollar", "rates"], VIX: ["world", "trade", "rates"] };
+async function build11(lens = "general", level = "pro") {
+  if (!LENS[lens]) lens = "general";
+  const { res } = await settle({ fut: build2("futures"), fx: build2("forex"), cr: build3(), mv: build9(), news: build8("all"), cal: build(), rc: build10("NQ") });
+  const now = Date.now(), today = ny(now).date;
+  const snap = [];
+  const add = (key, name, q, extra = {}) => {
+    if (q && q.price != null) snap.push({ key, name, price: q.price, dp: q.dp ?? 2, pct: q.changePct != null ? +q.changePct.toFixed(2) : null, change: q.change != null ? +q.change.toFixed(q.dp ?? 2) : null, ...extra });
+  };
+  const F = res.fut, by = (s) => F && [...F.leaders, ...F.quotes].find((x) => x.short === s);
+  add("NQ", "Nasdaq futures", by("NQ"), { notes: by("NQ") && by("NQ").notes });
+  add("ES", "S&P futures", by("ES"), { notes: by("ES") && by("ES").notes });
+  if (res.cr && res.cr.btc) add("BTC", "Bitcoin", { price: res.cr.btc.price, changePct: res.cr.btc.changePct, dp: 0 });
+  add("Gold", "Gold", by("Gold"));
+  add("Oil", "Crude oil", by("Oil"));
+  add("Dollar", "US dollar index", by("DXY"));
+  add("10Y", "10-year Treasury yield", by("10Y"));
+  add("VIX", "Fear gauge (VIX)", by("VIX"));
+  if (res.fx) {
+    const e = res.fx.leaders.find((x) => x.short === "EUR/USD");
+    add("EUR/USD", "Euro vs dollar", e);
+  }
+  const stories = (res.news && res.news.items || []).filter((h) => h.time && now - h.time < 12 * 36e5).sort((a, b) => b.score - a.score).slice(0, 16);
+  const refs = stories.map((h, i) => ({ i: i + 1, title: h.title, link: h.link, source: h.source, time: h.time, theme: h.themeLabel, reaction: h.reaction }));
+  const events = (res.cal && res.cal.events || []).filter((e) => ny(e.time).date === today && e.impact !== "Low" && (e.country === "USD" || e.impact === "High"));
+  const nextUp = (res.cal && res.cal.events || []).filter((e) => e.time > now && e.impact === "High").slice(0, 4);
+  const facts = {
+    time_ny: fmtT2(now),
+    markets: snap.map(({ notes, ...m }) => m),
+    nq_level_notes: (snap.find((s) => s.key === "NQ") || {}).notes || [],
+    giants: res.mv ? res.mv.giants.slice(0, 6).map((g) => ({ name: g.name, pct: g.pct, nq_points: g.nqPts })) : [],
+    movers_summary: res.mv ? res.mv.lines : [],
+    sectors: res.mv ? res.mv.sectors.map((s) => ({ name: s.name, pct: s.pct })) : [],
+    sessions_nq: res.rc ? res.rc.sessions.map((s) => ({ session: s.label, status: s.status, summary: s.text })) : [],
+    big_moves_nq: res.rc ? res.rc.timeline.filter((t) => t.kind === "move").map((t) => ({ time: fmtT2(t.t), what: t.text, cause: t.cause })) : [],
+    releases_today: events.map((e) => ({ time: fmtT2(e.time), name: e.name, country: e.country, forecast: e.forecast, previous: e.previous, done: e.time < now })),
+    coming_up: nextUp.map((e) => ({ when: new Date(e.time).toLocaleString("en-US", { timeZone: "America/New_York", weekday: "short", hour: "numeric", minute: "2-digit" }), name: e.name, country: e.country })),
+    stories: refs.map((r) => ({ ref: r.i, title: r.title, source: r.source, minutes_ago: Math.round((now - r.time) / 6e4), price_since: r.reaction ? `${r.reaction.label} ${r.reaction.change > 0 ? "+" : ""}${r.reaction.change} ${r.reaction.unit}` : null }))
+  };
+  let out = null;
+  if (hasAI()) {
+    try {
+      const ai = await askClaude({
+        maxTokens: 1400,
+        system: VOICE + "\n" + LENS[lens] + (level === "beginner" ? "\nThe reader is newer to trading: explain a little more, one idea per sentence." : "\nThe reader is experienced: be brief and specific."),
+        user: `Write the live market desk for right now. Data:
+${JSON.stringify(facts)}
+
+Return ONLY JSON: {"headline": "under 80 chars, what is moving and why", "big_picture": "2-3 sentences", "markets": [{"key": one of ${JSON.stringify(snap.map((s) => s.key))}, "text": "1-2 sentences: what it's doing and the most likely reason, citing stories as [n]", "refs": [n...]}] (cover every market given, most important first), "watch": ["2-4 short items: what could move things next, with times"], "for_you": "2-3 sentences written for this reader's style"}. Cite only story refs that support the point. If nothing explains a move, say so.`
+      });
+      if (ai && ai.headline) {
+        out = { headline: ai.headline, bigPicture: ai.big_picture, markets: (ai.markets || []).map((m) => ({ ...snap.find((s) => s.key === m.key), text: m.text, refs: (m.refs || []).filter((n) => refs[n - 1]) })).filter((m) => m.key), watch: ai.watch || [], forYou: ai.for_you || "", source: "ai" };
+      }
+    } catch (e) {
+      out = null;
+    }
+  }
+  if (!out) out = rules(snap, stories, refs, res, events, nextUp, lens, level);
+  return { ...out, refs, lens, level, updated: now };
+}
+function rules(snap, stories, refs, res, events, nextUp, lens, level) {
+  const dir = (p) => p > 0.05 ? "up" : p < -0.05 ? "down" : "flat";
+  const biggest = [...snap].filter((s) => s.pct != null && s.key !== "VIX" && s.key !== "10Y").sort((a, b) => Math.abs(b.pct) - Math.abs(a.pct))[0];
+  const topStory = stories[0];
+  const used = /* @__PURE__ */ new Set();
+  const marketsOut = snap.map((s) => {
+    const themes = THEMES_FOR[s.key] || [];
+    let ix = -1;
+    for (const th of themes) {
+      ix = stories.findIndex((h, i) => h.theme === th && !used.has(i));
+      if (ix >= 0) break;
+    }
+    if (ix < 0) for (const th of themes.slice(0, 2)) {
+      ix = stories.findIndex((h) => h.theme === th);
+      if (ix >= 0) break;
+    }
+    if (ix >= 0) used.add(ix);
+    const verb = /futures$/.test(s.name) ? "are" : "is";
+    let text = s.pct == null ? "" : `${s.name} ${verb} ${dir(s.pct)}${dir(s.pct) === "flat" ? "" : " " + Math.abs(s.pct).toFixed(2) + "%"} today.`;
+    if (s.key === "NQ" && res.mv && res.mv.lines[1]) text += " " + res.mv.lines[1];
+    if (ix >= 0) text += ` The main story touching it: \u201C${stories[ix].title}\u201D [${ix + 1}].`;
+    else text += " No single headline stands out as the cause.";
+    if (s.notes && s.notes[1] && (lens === "ict" || lens === "pa")) text += " " + s.notes[1];
+    return { ...s, text, refs: ix >= 0 ? [ix + 1] : [] };
+  });
+  const headline = biggest ? `${biggest.name} ${biggest.pct >= 0 ? "rises" : "falls"} ${Math.abs(biggest.pct).toFixed(1)}%${topStory && topStory.themeLabel ? `, ${topStory.themeLabel.toLowerCase()} in focus` : ""}` : "Markets at a glance";
+  const bp = [];
+  if (res.mv && res.mv.lines[0]) bp.push(res.mv.lines[0]);
+  if (res.fut && res.fut.macro.length) bp.push(res.fut.macro[0]);
+  if (topStory) bp.push(`The most important story right now: \u201C${topStory.title}\u201D (${topStory.source}).`);
+  const watch = nextUp.map((e) => `${e.name} (${e.country}), ${new Date(e.time).toLocaleString("en-US", { timeZone: "America/New_York", weekday: "short", hour: "numeric", minute: "2-digit" })}`);
+  const nyam = res.rc && res.rc.sessions.find((s) => s.id === "nyam" && s.status !== "upcoming");
+  const lensLine = {
+    ict: nyam ? nyam.text : "Watch which side of the overnight range gets run first once New York opens.",
+    pa: "Watch whether price holds above or below yesterday\u2019s high and low; breaks that fail often reverse.",
+    ind: biggest ? `${biggest.name} has the strongest move today; momentum is ${Math.abs(biggest.pct) > 1 ? "stretched" : "steady"}.` : "",
+    news: events.length ? `Today\u2019s releases: ${events.map((e) => `${e.name} at ${fmtT2(e.time)}`).join(", ")}.` : "No big scheduled releases left today; headlines are the wildcard.",
+    general: "Big moves usually come with news; when there isn\u2019t any, price tends to drift between yesterday\u2019s high and low."
+  }[lens];
+  return { headline, bigPicture: bp.join(" "), markets: marketsOut, watch, forYou: lensLine, source: "rules" };
+}
+
+// api/explain.js
+async function build12(q) {
+  const title = String(q.title || "").slice(0, 300), summary = String(q.summary || "").slice(0, 600), source = String(q.source || "").slice(0, 80);
+  const lens = LENS[q.lens] ? q.lens : "general", level = q.level === "beginner" ? "beginner" : "pro";
+  const assets = String(q.assets || "").slice(0, 120), reaction2 = String(q.reaction || "").slice(0, 80);
+  if (!title) throw new Error("No headline given");
+  const tag = tagHeadline({ title, summary });
+  if (hasAI()) {
+    try {
+      const ai = await askClaude({
+        maxTokens: 500,
+        system: VOICE + "\n" + LENS[lens] + (level === "beginner" ? "\nThe reader is newer to trading." : "\nThe reader is experienced; keep it tight."),
+        user: `Headline: "${title}" (${source}).${summary ? `
+Summary: ${summary}` : ""}${reaction2 ? `
+Price since it broke: ${reaction2}` : ""}
+The reader trades: ${assets || "US index futures"}.
+Return ONLY JSON: {"what": "1-2 sentences, what happened in plain English", "why": "1-2 sentences, why markets care", "reaction": "1 sentence on how price has reacted, using only the number given, or say it's too early / not measurable", "for_you": "1-2 sentences on what it means for the instruments this reader trades"}`
+      });
+      if (ai && ai.what) return { ...ai, source: "ai" };
+    } catch (e) {
+    }
+  }
+  return {
+    what: title + ".",
+    why: tag.why || "It may not move the big markets much on its own.",
+    reaction: reaction2 ? `Since the story broke: ${reaction2}.` : "Too early or not measurable yet.",
+    for_you: tag.markets && tag.markets.length ? `It mainly touches ${tag.markets.map((m) => ({ futures: "index futures", forex: "currencies", crypto: "crypto", memes: "memecoins", options: "options" })[m] || m).join(", ")}.` : "",
+    source: "rules"
+  };
+}
+
 // api/_lib/router.js
 var ROUTES = {
   calendar: [() => build(), 900],
@@ -768,7 +1280,12 @@ var ROUTES = {
   memes: [() => build4(), 120],
   earnings: [() => build5(), 1800],
   news: [(q) => build6(String(q.section || "all")), 300],
-  brief: [(q) => build7(String(q.markets || "futures").split(",").filter(Boolean)), 600]
+  brief: [(q) => build7(String(q.markets || "futures").split(",").filter(Boolean)), 600],
+  wire: [(q) => build8(String(q.section || "all")), 120],
+  movers: [() => build9(), 120],
+  recap: [(q) => build10(String(q.sym || "NQ").toUpperCase()), 180],
+  desk: [(q) => build11(String(q.lens || "general"), q.level === "beginner" ? "beginner" : "pro"), hasAI() ? 900 : 180],
+  explain: [(q) => build12(q), 86400]
 };
 async function handler(req, res) {
   const q = req.query || {};

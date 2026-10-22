@@ -363,29 +363,126 @@ function planHTML(D) {
     </div>`;
 }
 
+// ---------- news-site layer: live desk, wire, movers, recaps ----------
+const lens = () => has('strategy', 'ict') ? 'ict' : has('strategy', 'pa') ? 'pa' : has('strategy', 'news') ? 'news' : has('strategy', 'ind') ? 'ind' : 'general';
+const level = () => isBeginner() ? 'beginner' : 'pro';
+const ASSET_TO_DESK = { NQ: 'NQ', MNQ: 'NQ', ES: 'ES', MES: 'ES', YM: 'ES', RTY: 'ES', CL: 'Oil', GC: 'Gold', XAUUSD: 'Gold', EURUSD: 'EUR/USD', GBPUSD: 'Dollar', USDJPY: 'Dollar', AUDUSD: 'Dollar', USDCAD: 'Dollar', USDCHF: 'Dollar', NZDUSD: 'Dollar', EURGBP: 'EUR/USD', BTC: 'BTC', ETH: 'BTC', SOL: 'BTC', XRP: 'BTC', BNB: 'BTC', DOGE: 'BTC', alts: 'BTC', SPX: 'ES', NDX: 'NQ', bigtech: 'NQ', growth: 'ES', etfs: 'ES', single: 'ES' };
+const ASSET_TO_RECAP = { NQ: 'NQ', MNQ: 'NQ', NDX: 'NQ', bigtech: 'NQ', ES: 'ES', MES: 'ES', SPX: 'ES', YM: 'ES', RTY: 'ES', EURUSD: 'EURUSD', GBPUSD: 'GBPUSD', USDJPY: 'USDJPY', GC: 'GOLD', XAUUSD: 'GOLD', BTC: 'BTC', ETH: 'BTC', SOL: 'BTC' };
+const RECAP_NAMES = { NQ: 'NQ', ES: 'ES', EURUSD: 'EUR/USD', GBPUSD: 'GBP/USD', USDJPY: 'USD/JPY', GOLD: 'Gold', BTC: 'Bitcoin' };
+const myDeskKeys = () => [...new Set(myAssets().map(a => ASSET_TO_DESK[a.id]).filter(Boolean))];
+const myRecapKeys = () => { const k = [...new Set(myAssets().map(a => ASSET_TO_RECAP[a.id]).filter(Boolean))]; return k.length ? k : ['NQ']; };
+
+function reactChip(r) {
+  if (!r) return '';
+  const sign = r.change > 0 ? '+' : r.change < 0 ? '−' : '';
+  const amt = Math.abs(r.change).toLocaleString('en-US', { maximumFractionDigits: r.unit === 'pts' ? 1 : 0 });
+  const val = r.unit === '$' ? `${sign}$${amt}` : `${sign}${amt} ${r.unit}`;
+  const cls = r.change > 0 ? 'up' : r.change < 0 ? 'down' : 'flat';
+  return `<span class="react ${cls}" title="Price when the story broke: ${r.from}, now ${r.now}">${esc(r.label)} ${val} since</span>`;
+}
+function withRefs(text, refs) {
+  return esc(text).replace(/\[(\d+)\]/g, (m, n) => { const r = refs[+n - 1]; return r ? `<a class="ref" href="${esc(r.link)}" target="_blank" rel="noopener" title="${esc(r.title)} (${esc(r.source)})">${n}</a>` : ''; });
+}
+function deskHTML(d) {
+  const mine = myDeskKeys();
+  const mk = [...d.markets].sort((a, b) => (mine.includes(b.key) - mine.includes(a.key)));
+  const usedRefs = [...new Set(mk.flatMap(m => m.refs || []))].sort((a, b) => a - b).slice(0, 10);
+  const pxFmt = m => m.key === 'BTC' ? '$' + num(m.price, 0) : m.key === '10Y' ? num(m.price, 2) + '%' : num(m.price, m.dp);
+  return `<div class="desk-top"><span class="live-dot"></span><span class="desk-kicker">Why markets are moving</span><span class="desk-meta">Updated ${fmtTime(d.updated)}${d.source === 'ai' ? ', written by AI from live prices and news' : ''}</span></div>
+    <h1 class="head desk-h">${esc(d.headline)}</h1>
+    <p class="desk-bp">${withRefs(d.bigPicture || '', d.refs)}</p>
+    <div class="desk-grid">${mk.map(m => `<article class="dk${mine.includes(m.key) ? ' mine' : ''}">
+      <div class="dk-h"><b>${esc(m.key)}</b>${mine.includes(m.key) ? '<span class="dk-you">You trade this</span>' : ''}<span class="dk-px">${pxFmt(m)}</span>${chg(m.pct)}</div>
+      <p>${withRefs(m.text || '', d.refs)}</p></article>`).join('')}</div>
+    <div class="desk-foot">
+      ${d.forYou ? `<div class="desk-you"><h3>For you</h3><p>${withRefs(d.forYou, d.refs)}</p></div>` : ''}
+      ${d.watch && d.watch.length ? `<div class="desk-watch"><h3>What could move things next</h3><ul>${d.watch.map(w => `<li>${esc(w)}</li>`).join('')}</ul></div>` : ''}
+    </div>
+    ${usedRefs.length ? `<details class="desk-src"><summary>Sources (${usedRefs.length})</summary><ol>${usedRefs.map(n => { const r = d.refs[n - 1]; return `<li value="${n}"><a href="${esc(r.link)}" target="_blank" rel="noopener">${esc(r.title)}</a> <span class="muted small">${esc(r.source)}, ${ago(r.time)}</span></li>`; }).join('')}</ol></details>` : ''}`;
+}
+
+// ----- news wire -----
+const explainOpen = new Set();
+function wireItem(i, opts = {}) {
+  const fy = forYouHeadline(i);
+  const id = esc(i.id);
+  return `<li class="wi imp-${i.impact}" data-id="${id}">
+    <div class="wi-top">${i.breaking ? '<span class="badge-break">Breaking</span>' : ''}<span class="imp-dot ${i.impact}" title="${i.impact} impact"></span><span class="wi-time">${ago(i.time)}</span>${i.themeLabel ? `<span class="tag">${esc(i.themeLabel)}</span>` : ''}${reactChip(i.reaction)}</div>
+    <a class="wi-title" href="${esc(i.link)}" target="_blank" rel="noopener">${esc(i.title)}</a>
+    ${!isBeginner() && fy ? '' : i.why ? `<div class="why">${esc(i.why)}</div>` : ''}
+    ${fy ? `<div class="fy"><b>For you</b> ${esc(fy)}</div>` : ''}
+    <div class="wi-meta"><span>${esc(i.source)}${i.count > 1 ? `, and ${i.count - 1} more outlet${i.count > 2 ? 's' : ''}` : ''}</span>
+      ${opts.noExplain ? '' : `<button class="linkbtn wi-x" data-x="${id}" aria-expanded="${explainOpen.has(i.id)}">${explainOpen.has(i.id) ? 'Hide explanation' : 'Explain this'}</button>`}</div>
+    <div class="wi-explain" id="x-${id}" ${explainOpen.has(i.id) ? '' : 'hidden'}></div></li>`;
+}
+function explainURL(i) {
+  const r = i.reaction ? `${i.reaction.label} ${i.reaction.change > 0 ? '+' : ''}${i.reaction.change} ${i.reaction.unit} since it broke` : '';
+  const p = new URLSearchParams({ title: i.title, summary: (i.summary || '').slice(0, 400), source: i.source || '', reaction: r, lens: lens(), level: level(), assets: myAssets().map(a => a.id).join(',') });
+  return 'explain?' + p.toString();
+}
+function wireBind(root, items) {
+  root.querySelectorAll('.wi-x').forEach(b => b.onclick = async () => {
+    const id = b.dataset.x, item = items.find(x => x.id === id), box = root.querySelector('#x-' + CSS.escape(id));
+    if (!item || !box) return;
+    if (explainOpen.has(id)) { explainOpen.delete(id); box.hidden = true; b.textContent = 'Explain this'; b.setAttribute('aria-expanded', 'false'); return; }
+    explainOpen.add(id); box.hidden = false; b.textContent = 'Hide explanation'; b.setAttribute('aria-expanded', 'true');
+    fillExplain(box, item);
+  });
+  root.querySelectorAll('.wi-explain:not([hidden])').forEach(box => { const id = box.id.slice(2); const item = items.find(x => x.id === id); if (item) fillExplain(box, item); });
+}
+function fillExplain(box, item) {
+  box.innerHTML = '<div class="skel" style="width:80%"></div><div class="skel" style="width:60%"></div>';
+  api(explainURL(item), 864e5).then(x => {
+    box.innerHTML = `<dl class="xp"><dt>What happened</dt><dd>${esc(x.what)}</dd><dt>Why markets care</dt><dd>${esc(x.why)}</dd><dt>How price reacted</dt><dd>${esc(x.reaction)}</dd>${x.for_you ? `<dt>For you</dt><dd>${esc(x.for_you)}</dd>` : ''}</dl>${x.source === 'ai' ? '<p class="muted small">Written by AI from the headline and live prices.</p>' : ''}`;
+  }).catch(e => { box.innerHTML = errBox('the explanation', e.message); });
+}
+
+// ----- movers -----
+function giantsChart(g, limit = 12) {
+  const rows = g.slice(0, limit); const mx = Math.max(1, ...rows.map(x => Math.abs(x.nqPts || 0)));
+  return `<div class="gchart">${rows.map(x => { const w = Math.abs(x.nqPts || 0) / mx * 50; const up = (x.nqPts || 0) >= 0;
+    return `<div class="gc-row"><span class="gc-n"><b>${esc(x.sym)}</b><small>${esc(x.name)}</small></span>
+      <span class="gc-bar"><i class="${up ? 'up' : 'down'}" style="${up ? `left:50%;width:${w}%` : `left:${50 - w}%;width:${w}%`}"></i></span>
+      <span class="gc-v ${up ? 'pos' : 'neg'}">${up ? '+' : '−'}${Math.abs(x.nqPts || 0).toFixed(1)} pts</span>${chg(x.pct)}</div>`; }).join('')}</div>`;
+}
+
+// ----- recaps & timeline -----
+function recapHTML(d) {
+  const cards = d.sessions.map(s => `<div class="rc ${s.status}"><div class="rc-h"><b>${esc(s.label)}</b><span class="rc-st">${s.status === 'live' ? 'Live now' : s.status === 'done' ? 'Done' : s.status === 'upcoming' ? 'Later' : 'No data'}</span>${s.change != null ? chg(s.open ? s.change / s.open * 100 : null) : ''}</div><p>${esc(s.text)}</p></div>`).join('');
+  const tl = d.timeline.length ? `<ol class="tl">${d.timeline.map(t => `<li class="tl-${t.kind}${t.upcoming ? ' up' : ''}${t.kind === 'move' ? (t.change > 0 ? ' gain' : ' loss') : ''}"><span class="tl-t">${fmtTime(t.t)}</span><div class="tl-b"><b>${esc(t.text)}</b>${t.sub ? `<span class="muted small">${esc(t.sub)}</span>` : ''}${t.cause ? `<span class="tl-c">${esc(t.cause)}</span>` : ''}${(t.news || []).map(n => `<a class="tl-n" href="${esc(n.link)}" target="_blank" rel="noopener">${esc(n.title)} <span class="muted">(${esc(n.source)})</span></a>`).join('')}</div></li>`).join('')}</ol>` : '<p class="muted">Nothing notable yet today.</p>';
+  return `<div class="rc-grid">${cards}</div><h3 class="tl-h">Today’s timeline</h3>${tl}${stamp(d)}`;
+}
+function recapSection(boxId, pickId, keys) {
+  const pick = document.getElementById(pickId), box = document.getElementById(boxId); if (!pick || !box) return;
+  const cur = store.get('recapKey:' + boxId, keys[0]); const first = keys.includes(cur) ? cur : keys[0];
+  pick.innerHTML = keys.map(k => `<button class="chip" data-k="${k}" aria-pressed="${k === first}">${esc(RECAP_NAMES[k] || k)}</button>`).join('');
+  const load = k => { box.innerHTML = ''; fill(box, 'the session recap', api('recap?sym=' + k, 3 * 60e3), recapHTML); };
+  pick.querySelectorAll('button').forEach(b => b.onclick = () => { pick.querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', x === b)); store.set('recapKey:' + boxId, b.dataset.k); load(b.dataset.k); });
+  if (refreshing && box.innerHTML) fill(box, 'the session recap', api('recap?sym=' + first, 3 * 60e3), recapHTML); else load(first);
+}
+
 PAGES.today = async () => {
   if (layout(`
-    <section class="plan" id="plan"></section>
-    <section class="chart-sec"><div class="chart-h"><h2>Live chart</h2><div class="chips tight" id="todayPick"></div></div><div id="todayChart" class="tvbox"></div><p class="muted small" id="todayNote"></p></section>
-    <div class="lead">
-      <article><div id="brief"></div></article>
+    <div class="lead desk-lead">
+      <section class="desk" id="desk" aria-live="polite"></section>
       <aside class="col-side">
         <section><h2>Your markets right now</h2><div id="tape" class="tape"></div></section>
-        <section class="cal-mini"><h2>Everything on today’s calendar</h2><div id="todayCal"></div></section>
+        <section class="cal-mini"><h2>Today’s calendar</h2><div id="todayCal"></div></section>
       </aside>
     </div>
-    <div class="stack" style="margin-top:34px">
-      <section id="leaders"></section>
-      <section><h2>Headlines, yours first</h2><div id="todayNews"></div></section>
+    <section class="plan" id="plan"></section>
+    <section class="chart-sec"><div class="chart-h"><h2>Live chart</h2><div class="chips tight" id="todayPick"></div></div><div id="todayChart" class="tvbox"></div><p class="muted small" id="todayNote"></p></section>
+    <section class="block"><div class="chart-h"><h2>How today has played out</h2><div class="chips tight" id="rcPick"></div></div><div id="recap"></div></section>
+    <div class="grid2 block">
+      <section><div class="chart-h"><h2>Who’s moving NQ</h2><a class="pc-link" href="#movers">All movers</a></div><div id="miniMovers"></div></section>
+      <section><div class="chart-h"><h2>Latest news</h2><a class="pc-link" href="#news">Full news wire</a></div><div id="miniWire"></div></section>
     </div>`)) {
     chartPicker('todayChart', 'todayPick', myAssets(), 'todayNote');
   }
+  recapSection('recap', 'rcPick', myRecapKeys());
   const D = personalData();
+  fill('desk', 'the live desk', api(`desk?lens=${lens()}&level=${level()}`, 5 * 60e3), deskHTML);
   fill('plan', 'your game plan', D, d => planHTML(d)).then(() => { const b = document.getElementById('planAlerts'); if (b) b.onclick = openAlerts; });
-  fill('brief', 'today’s story', api('brief?markets=' + briefMarkets().join(','), 5 * 60e3), d => `
-    <h2 class="brief-h">${esc(d.headline)}</h2>
-    <p class="byline">The wider market for ${esc(fmtDay(Date.now()))}${d.source === 'ai' ? ', written with AI from today’s data' : ''}</p>
-    <div class="story">${d.paragraphs.map(p => `<p>${esc(p)}</p>`).join('')}</div>${stamp(d)}`);
   fill('todayCal', 'the calendar', api('calendar', 10 * 60e3), d => {
     const n = nyParts();
     const ev = d.events.filter(e => nyParts(e.time).date === n.date && (e.country === 'USD' || e.impact === 'High') && e.impact !== 'Low');
@@ -396,8 +493,57 @@ PAGES.today = async () => {
     if (d.fut) d.fut.quotes.filter(q => ['VIX', '10Y', 'DXY'].includes(q.short)).forEach(q => rows.push(q));
     if (!rows.length) throw new Error('no prices'); return rows;
   }), qs => qs.map(tapeRow).join(''));
-  fill('leaders', 'levels', D.then(d => myAssets().map(a => assetView(a, d)).find(v => v && v.L)), v => v ? `<h2>Where ${esc(v.a.id)} sits</h2>${leaderBlock(v.L, v.money ? x => '$' + num(x, 0) : undefined)}` : '');
-  fill('todayNews', 'headlines', api('news?section=all'), d => newsList(rankNews(d.items), 12));
+  fill('miniMovers', 'movers', api('movers', 2 * 60e3), x => (x.lines[0] ? `<p class="muted small">${esc(x.lines[0])}</p>` : '') + giantsChart(x.giants, 6));
+  const wireP = api('wire?section=all', 60e3);
+  fill('miniWire', 'news', wireP, x => `<ul class="wire compact">${rankNews(x.items).slice(0, 7).map(i => wireItem(i, { noExplain: true })).join('')}</ul>`);
+};
+
+PAGES.news = async () => {
+  const f = store.get('wireFilter', { section: 'all', impact: 'all', mineFirst: true, theme: '' });
+  layout(`<h1 class="head">News wire</h1>
+    <p class="sec-intro">Every market-moving story from ${'<span id="srcCount">dozens of</span>'} sources, grouped when several outlets report the same thing, rated by impact, with the price move since it broke. Tap <b>Explain this</b> on any story for a plain-English breakdown${me.answers ? ' written for how you trade' : ''}.</p>
+    <div class="chips" role="group" aria-label="Market"><span class="chips-label">Market:</span>${[['all', 'Everything'], ['futures', 'Stocks & futures'], ['forex', 'Forex'], ['crypto', 'Crypto']].map(([k, l]) => `<button class="chip" data-sec="${k}" aria-pressed="${f.section === k}">${l}</button>`).join('')}</div>
+    <div class="chips" role="group" aria-label="Impact"><span class="chips-label">Show:</span>${[['all', 'All stories'], ['medium', 'Medium and high'], ['high', 'High impact only']].map(([k, l]) => `<button class="chip" data-imp="${k}" aria-pressed="${f.impact === k}">${l}</button>`).join('')}<button class="chip" id="mineFirst" aria-pressed="${f.mineFirst}">My markets first</button></div>
+    <div class="chips" id="themeChips" role="group" aria-label="Topic"></div>
+    <div class="newbar" id="newBar" hidden></div>
+    <ul class="wire" id="wireList"></ul>`);
+  const rerender = () => { refreshing = false; PAGES.news(); };
+  main.querySelectorAll('[data-sec]').forEach(b => b.onclick = () => { f.section = b.dataset.sec; f.theme = ''; store.set('wireFilter', f); rerender(); });
+  main.querySelectorAll('[data-imp]').forEach(b => b.onclick = () => { f.impact = b.dataset.imp; store.set('wireFilter', f); rerender(); });
+  document.getElementById('mineFirst').onclick = () => { f.mineFirst = !f.mineFirst; store.set('wireFilter', f); rerender(); };
+  const P = api('wire?section=' + f.section, 60e3);
+  P.then(d => {
+    const sc = document.getElementById('srcCount'); if (sc) sc.textContent = d.sources;
+    const themes = [...new Set(d.items.map(i => i.themeLabel).filter(Boolean))];
+    const tc = document.getElementById('themeChips');
+    if (tc) { tc.innerHTML = `<span class="chips-label">Topic:</span><button class="chip" data-th="" aria-pressed="${!f.theme}">All topics</button>` + themes.map(t => `<button class="chip" data-th="${esc(t)}" aria-pressed="${f.theme === t}">${esc(t)}</button>`).join(''); tc.querySelectorAll('[data-th]').forEach(b => b.onclick = () => { f.theme = b.dataset.th; store.set('wireFilter', f); rerender(); }); }
+    const seen = store.get('wireSeen', []);
+    const fresh = d.items.filter(i => !seen.includes(i.id)).length;
+    if (refreshing && fresh && seen.length) { const nb = document.getElementById('newBar'); if (nb) { nb.hidden = false; nb.textContent = `${fresh} new ${fresh === 1 ? 'story' : 'stories'} added at the top`; } }
+    store.set('wireSeen', d.items.map(i => i.id).slice(0, 120));
+  }).catch(() => {});
+  fill('wireList', 'the news wire', P, d => {
+    let items = d.items.filter(i => f.impact === 'all' || (f.impact === 'high' ? i.impact === 'high' : i.impact !== 'low')).filter(i => !f.theme || i.themeLabel === f.theme);
+    if (f.mineFirst) items = rankNews(items);
+    return items.length ? items.map(i => wireItem(i)).join('') : '<li class="muted">No stories match those filters right now.</li>';
+  }).then(() => P.then(d => wireBind(document.getElementById('wireList') || main, d.items)).catch(() => {}));
+};
+
+PAGES.movers = async () => {
+  layout(`<h1 class="head">What’s moving</h1>
+    <p class="sec-intro" id="mvIntro"></p>
+    <div class="grid2 block">
+      <section><h2>The giants behind NQ</h2><p class="muted small" style="margin-top:-6px">How many NQ points each of the biggest Nasdaq stocks is adding or taking away today (based on approximate index weights).</p><div id="mvGiants"></div></section>
+      <section><h2>Sectors</h2><div id="mvSectors"></div></section>
+    </div>
+    <section class="block"><h2>The stories behind the moves</h2><div id="mvStories"></div></section>
+    <section class="block"><h2>Biggest movers in US stocks</h2><div id="mvHot" class="tvbox"></div></section>`);
+  const d = api('movers', 2 * 60e3);
+  fill('mvIntro', 'summary', d, x => esc(x.lines.join(' ')));
+  fill('mvGiants', 'the giants', d, x => giantsChart(x.giants) + stamp(x));
+  fill('mvSectors', 'sectors', d, x => { const mx = Math.max(0.2, ...x.sectors.map(s => Math.abs(s.pct))); return `<div class="strength">${x.sectors.map(s => { const w = Math.abs(s.pct) / mx * 50; return `<div class="srow wide"><b>${esc(s.name)}</b><div class="b"><i style="${s.pct >= 0 ? `left:50%;width:${w}%;background:var(--up)` : `left:${50 - w}%;width:${w}%;background:var(--down)`}"></i></div><span style="text-align:right">${s.pct > 0 ? '+' : ''}${s.pct.toFixed(2)}%</span></div>`; }).join('')}</div>`; });
+  fill('mvStories', 'stories', d, x => { const st = x.giants.filter(g => g.story); return st.length ? `<ul class="wire compact">${st.map(g => `<li class="wi"><div class="wi-top"><b>${esc(g.name)}</b>${chg(g.pct)}<span class="muted small">${g.nqPts >= 0 ? '+' : ''}${g.nqPts} NQ pts</span></div><a class="wi-title" href="${esc(g.story.link)}" target="_blank" rel="noopener">${esc(g.story.title)}</a><div class="wi-meta"><span>${esc(g.story.source)}, ${ago(g.story.time)}</span></div></li>`).join('')}</ul>` : '<p class="muted">No company-specific stories behind today’s moves yet.</p>'; });
+  if (!refreshing) tvWidget('mvHot', 'hotlists', { colorTheme: tvTheme(), dateRange: '1D', exchange: 'US', showChart: true, locale: 'en', isTransparent: true, showSymbolLogo: true, showFloatingTooltip: false, width: '100%', height: '100%' }, 560);
 };
 
 PAGES.futures = async () => {
@@ -405,6 +551,7 @@ PAGES.futures = async () => {
     <p class="sec-intro" id="futIntro"></p>
     <section class="chart-sec"><div class="chart-h"><h2>Live chart</h2><div class="chips tight" id="futPick"></div></div><div id="futChart" class="tvbox"></div><p class="muted small" id="futNote"></p></section>
     <div id="futLeaders"></div>
+    <section class="block"><div class="chart-h"><h2>How today has played out</h2><div class="chips tight" id="futRcPick"></div></div><div id="futRecap"></div></section>
     <section style="margin-top:30px"><h2>Everything else</h2><div id="futQuotes"></div></section>
     <div class="grid2" style="margin-top:34px">
       <section class="cal-mini"><h2>US news this week</h2><div id="futCal"></div></section>
@@ -413,6 +560,7 @@ PAGES.futures = async () => {
     const mine = myAssets().filter(a => ['fut', 'futq'].includes(a.src));
     chartPicker('futChart', 'futPick', [...mine, { id: 'NQ', tv: 'OANDA:NAS100USD' }, { id: 'ES', tv: 'OANDA:SPX500USD' }, { id: 'YM', tv: 'OANDA:US30USD' }, { id: 'RTY', tv: 'OANDA:US2000USD' }], 'futNote');
   }
+  recapSection('futRecap', 'futRcPick', ['NQ', 'ES']);
   const d = api('markets?section=futures');
   fill('futIntro', 'summary', d, x => esc(x.macro.join(' ') || 'Here’s how the main index futures are set up.'));
   fill('futLeaders', 'futures', d, x => x.leaders.map(L => leaderBlock(L)).join('') + stamp(x));
@@ -430,6 +578,7 @@ PAGES.forex = async () => {
     <section class="chart-sec"><div class="chart-h"><h2>Live chart</h2><div class="chips tight" id="fxPick"></div></div><div id="fxChart" class="tvbox"></div></section>
     <div class="grid2" style="margin:24px 0 10px"><section><h2>Strongest to weakest today</h2><div id="fxStrength"></div></section><section><h2>Other pairs</h2><div id="fxQuotes" class="tape"></div></section></div>
     <div id="fxLeaders"></div>
+    <section class="block"><div class="chart-h"><h2>How today has played out</h2><div class="chips tight" id="fxRcPick"></div></div><div id="fxRecap"></div></section>
     <div class="grid2" style="margin-top:34px">
       <section class="cal-mini"><h2>Central banks &amp; big releases</h2><div id="fxCal"></div></section>
       <section><h2>Currency headlines</h2><div id="fxNews"></div></section>
@@ -437,6 +586,7 @@ PAGES.forex = async () => {
     const mine = myAssets().filter(a => ['fx', 'fxq'].includes(a.src));
     chartPicker('fxChart', 'fxPick', [...mine, { id: 'EUR/USD', tv: 'FX:EURUSD' }, { id: 'GBP/USD', tv: 'FX:GBPUSD' }, { id: 'USD/JPY', tv: 'FX:USDJPY' }, { id: 'Gold', tv: 'OANDA:XAUUSD' }]);
   }
+  recapSection('fxRecap', 'fxRcPick', ['EURUSD', 'GBPUSD', 'USDJPY', 'GOLD']);
   const d = api('markets?section=forex');
   fill('fxIntro', 'summary', d, x => esc((x.strength && x.strength.length > 1 ? `The ${x.strength[0].ccy} is leading and the ${x.strength[x.strength.length - 1].ccy} is lagging today. ` : '') + x.macro.join(' ')));
   fill('fxStrength', 'currency strength', d, x => {
@@ -457,6 +607,7 @@ PAGES.crypto = async () => {
     <div class="lead"><div><div id="cIntro" class="story"></div></div><aside><h2>Crypto mood</h2><div id="cMood"></div></aside></div>
     <section class="chart-sec"><div class="chart-h"><h2>Live chart</h2><div class="chips tight" id="cPick"></div></div><div id="cChart" class="tvbox"></div></section>
     <div id="cBtc" style="margin-top:24px"></div>
+    <section class="block"><div class="chart-h"><h2>How today has played out</h2><div class="chips tight" id="cRcPick"></div></div><div id="cRecap"></div></section>
     <div class="grid2" style="margin-top:30px">
       <section><h2>Biggest coins</h2><div id="cCoins"></div></section>
       <section><h2>What people are searching for</h2><div id="cTrend"></div></section>
@@ -465,6 +616,7 @@ PAGES.crypto = async () => {
     const mine = myAssets().filter(a => ['btc', 'coin'].includes(a.src));
     chartPicker('cChart', 'cPick', [...mine, { id: 'BTC', tv: 'BINANCE:BTCUSDT' }, { id: 'ETH', tv: 'BINANCE:ETHUSDT' }, { id: 'SOL', tv: 'BINANCE:SOLUSDT' }]);
   }
+  recapSection('cRecap', 'cRcPick', ['BTC']);
   const d = api('crypto');
   fill('cIntro', 'summary', d, x => x.lines.map(l => `<p>${esc(l)}</p>`).join('') + (x.summary ? `<p class="muted small">Total value of all crypto: ${big(x.summary.mcap)}. Traded in the last day: ${big(x.summary.vol)}.</p>` : ''));
   fill('cMood', 'mood', d, x => x.fear ? `<div class="gauge"><span class="num">${x.fear.value}</span><div><b>${esc(x.fear.label)}</b><div class="muted small">out of 100</div></div></div><div class="gbar"><i style="left:${x.fear.value}%"></i></div><div class="em-ends"><span>Fear</span><span>Greed</span></div><p class="small muted">Readings near the ends have often marked turning points.</p>` : '<p class="muted">Not available.</p>');
@@ -589,7 +741,8 @@ function orderTabs() {
   const links = [...nav.querySelectorAll('a')];
   const mineFirst = links.filter(a => a.dataset.m && a.dataset.m.split(' ').some(m => mk.includes(m)));
   const rest = links.filter(a => a.getAttribute('href') !== '#today' && !mineFirst.includes(a));
-  [links.find(a => a.getAttribute('href') === '#today'), ...mineFirst, ...rest].forEach(a => nav.appendChild(a));
+  const fixed = ['#today', '#news', '#movers'].map(h => links.find(a => a.getAttribute('href') === h)).filter(Boolean);
+  [...fixed, ...mineFirst, ...rest.filter(a => !fixed.includes(a))].forEach(a => nav.appendChild(a));
 }
 async function levelRows() {
   const D = await personalData();
