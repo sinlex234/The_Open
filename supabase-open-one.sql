@@ -1,5 +1,5 @@
--- The Open One: run once in your Crema Supabase project (SQL Editor → New query → paste → Run).
--- It stores each person's setup answers. Accounts, usernames and Google sign-in are shared with Crema.
+-- The Open One: run once in your Supabase project (SQL Editor → New query → paste → Run).
+-- It stores each person's setup answers. Accounts, usernames and Google sign-in come from the profiles setup.
 create table if not exists public.open_profiles (
   user_id    uuid primary key default auth.uid() references auth.users(id) on delete cascade,
   answers    jsonb not null default '{}'::jsonb,

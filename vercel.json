@@ -27,6 +27,10 @@
     {
       "src": "config.js",
       "use": "@vercel/static"
+    },
+    {
+      "src": "glossary.js",
+      "use": "@vercel/static"
     }
   ],
   "routes": [

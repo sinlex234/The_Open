@@ -796,13 +796,25 @@ var FEEDS3 = {
   "GN: oil gold": GN("oil prices OR gold prices"),
   "GN: crypto": GN("bitcoin OR crypto market"),
   "GN: earnings": GN("earnings stock shares"),
-  "GN: geopolitics": GN("tariffs OR sanctions OR war markets")
+  "GN: geopolitics": GN("tariffs OR sanctions OR war markets"),
+  "BBC Business": "https://feeds.bbci.co.uk/news/business/rss.xml",
+  "NPR Economy": "https://feeds.npr.org/1017/rss.xml",
+  "GN: world economy": GN("global economy OR world economy OR recession"),
+  "GN: China": GN("China economy OR yuan OR Chinese stocks"),
+  "GN: Europe": GN("ECB OR eurozone economy OR European stocks"),
+  "GN: Japan": GN("Bank of Japan OR yen OR Nikkei"),
+  "GN: tech": GN("AI chips OR big tech stocks OR semiconductor stocks"),
+  "GN: policy": GN("White House economy OR Congress budget OR tariffs"),
+  "GN: energy": GN("OPEC OR natural gas prices OR energy prices"),
+  "GN: memecoins": GN("memecoin OR meme coin OR pump.fun")
 };
 var SECTION_FEEDS = {
   all: Object.keys(FEEDS3),
-  futures: ["CNBC", "CNBC Markets", "MarketWatch", "MarketWatch Pulse", "WSJ Markets", "Federal Reserve", "GN: stock market", "GN: Nasdaq", "GN: Fed", "GN: economy", "GN: earnings", "GN: geopolitics"],
-  forex: ["Investing.com Forex", "ECB", "Federal Reserve", "WSJ Markets", "GN: dollar", "GN: Fed", "GN: economy", "GN: oil gold", "GN: geopolitics"],
-  crypto: ["CoinDesk", "Cointelegraph", "Decrypt", "GN: crypto"]
+  futures: ["CNBC", "CNBC Markets", "MarketWatch", "MarketWatch Pulse", "WSJ Markets", "Federal Reserve", "GN: stock market", "GN: Nasdaq", "GN: Fed", "GN: economy", "GN: earnings", "GN: geopolitics", "GN: tech", "GN: policy", "GN: world economy"],
+  options: ["CNBC Markets", "MarketWatch Pulse", "WSJ Markets", "GN: stock market", "GN: Nasdaq", "GN: Fed", "GN: earnings", "GN: tech"],
+  forex: ["Investing.com Forex", "ECB", "Federal Reserve", "WSJ Markets", "GN: dollar", "GN: Fed", "GN: economy", "GN: oil gold", "GN: geopolitics", "GN: China", "GN: Europe", "GN: Japan"],
+  crypto: ["CoinDesk", "Cointelegraph", "Decrypt", "GN: crypto"],
+  memes: ["CoinDesk", "Cointelegraph", "Decrypt", "GN: crypto", "GN: memecoins"]
 };
 var REACT = {
   NQ: { sym: "NQ=F", label: "NQ", dp: 2, unit: "pts" },
@@ -858,6 +870,19 @@ function similar(a, b) {
   });
   return i / Math.max(1, Math.min(A.size, B.size));
 }
+function sectionOf(h) {
+  const t = h.title || "";
+  if (h.theme === "crypto" || h.theme === "memes") return "crypto";
+  if (/\b(fed|fomc|powell|ecb|lagarde|bank of (england|japan|canada)|boj|boe|central bank|rate (cut|hike|decision)s?)\b/i.test(t)) return "centralbanks";
+  if (["rates", "inflation", "jobs"].includes(h.theme)) return "economy";
+  if (["trade", "world", "gov"].includes(h.theme)) return "world";
+  if (h.theme === "ai") return "tech";
+  if (["earnings", "options"].includes(h.theme)) return "companies";
+  if (["energy", "gold"].includes(h.theme)) return "commodities";
+  if (h.theme === "dollar") return "currencies";
+  if (/\b(china|europe|japan|uk|germany|india|russia|ukraine|israel|iran|gaza|opec|g7|g20|imf|world bank)\b/i.test(t)) return "world";
+  return "markets";
+}
 async function build8(section = "all") {
   const names = SECTION_FEEDS[section] || SECTION_FEEDS.all;
   const { res, errors } = await settle(Object.fromEntries(names.map((n) => [n, getText(FEEDS3[n]).then((x) => parseRSS(x, n))])));
@@ -892,6 +917,8 @@ async function build8(section = "all") {
     h.impact = h.score >= 3.8 ? "high" : h.score >= 2.2 ? "medium" : "low";
     h.breaking = h.impact === "high" && h.time && Date.now() - h.time < 45 * 6e4;
     h.id = (h.time || 0).toString(36) + "-" + norm(h.title).slice(0, 4).join("-");
+    h.section = sectionOf(h);
+    if (h.markets.includes("futures") && !h.markets.includes("stocks")) h.markets.push("stocks");
   });
   items.sort((a, b) => (b.time || 0) - (a.time || 0));
   items = items.slice(0, 80);
@@ -1176,141 +1203,233 @@ var LENS = {
   general: "The reader is still finding a style: explain cause and effect simply."
 };
 
+// api/profile.js
+var MARKET_NAMES = { stocks: "stocks and ETFs", futures: "futures", forex: "forex", options: "options", crypto: "crypto", memes: "memecoins", learning: "learning the markets" };
+var STRAT_NAMES = {
+  ict: "ICT / smart money concepts", pa: "price action and support/resistance", orderflow: "order flow and volume", ind: "indicators", news: "trading scheduled news",
+  trend: "trend following and breakouts", algo: "automated trading", sd: "supply and demand zones", carry: "carry trades", fundamentals: "fundamentals and central banks",
+  value: "value investing", growth: "growth investing", momentum: "momentum and breakouts", earnings: "earnings plays", dividends: "dividend investing", ta: "chart analysis",
+  index: "buy-and-hold index investing", buy: "buying calls and puts", sell: "selling option premium", spreads: "option spreads", zero: "same-day (0DTE) options", hedge: "hedging with options",
+  hold: "buying and holding", swing: "swing trading", perps: "leveraged perpetual futures", narratives: "rotating between crypto sectors and narratives", onchain: "on-chain data", defi: "DeFi and yield",
+  launches: "catching new token launches", trending: "riding trending coins", kols: "following influencer calls", wallets: "copy-trading wallets", charts: "chart setups", unsure: "still finding a strategy"
+};
+function parseProfile(p) {
+  const out = [];
+  String(p || "").split(";").slice(0, 7).forEach((seg) => {
+    const [m, s = "", a = "", h = ""] = seg.split(":");
+    if (!MARKET_NAMES[m] || out.some((x) => x.m === m)) return;
+    out.push({ m, strats: s.split(".").filter((x) => STRAT_NAMES[x]).slice(0, 6), assets: a.split(".").filter((x) => /^[A-Za-z0-9]{2,10}$/.test(x)).slice(0, 8), hold: h.split(".").filter((x) => /^[a-z0-9]{2,10}$/.test(x)).slice(0, 4) });
+  });
+  return out;
+}
+var HOLD_NAMES = { scalp: "minutes", day: "within the day", swing: "days to weeks", position: "months", invest: "years", hold: "months or longer", zero: "same day", days: "a few days", weeks: "weeks", months: "months", minutes: "minutes", hours: "hours" };
+function profileText(prof, level, detail) {
+  let t = !prof.length ? "The reader follows the markets in general. " : "The reader trades: " + prof.map((x) => `${MARKET_NAMES[x.m]}${x.assets.length ? " (" + x.assets.join(", ") + ")" : ""}${x.strats.length ? ", using " + x.strats.map((s) => STRAT_NAMES[s]).join(", ") : ""}${x.hold.length ? ", usually holding for " + x.hold.map((h) => HOLD_NAMES[h] || h).join(" or ") : ""}`).join("; ") + ". ";
+  t += level === "beginner" ? "They are fairly new: explain cause and effect simply, one idea per sentence. " : "They are experienced: be specific and brief. ";
+  if (detail === "quick") t += "Keep every part short. ";
+  if (detail === "deep") t += "They like fuller explanations. ";
+  return t;
+}
+var VOICE2 = `You write for The Open One, a news site that explains what is happening in the world and how it moves financial markets, for everyday traders and investors of every kind (stocks, futures, forex, options, crypto, memecoins). Rules:
+- Plain everyday English. Short sentences. If you use a market term, explain it in a few words the first time.
+- Lead with the real-world cause (economy, central banks, politics, conflict, companies, technology, energy, regulation), then the market effect.
+- Never tell anyone to buy or sell, and never promise what prices will do. Describe what happened, why it matters, how markets reacted and what people are watching.
+- Only use the facts and numbers you are given. If a move has no supporting story, say there is no clear news behind it.
+- Write prices and changes exactly as given. No hype, no emojis, no exclamation marks.`;
+
+// api/world.js
+var WORLD = [
+  ["us", "US stocks", [["^GSPC", "S&P 500", 2], ["^IXIC", "Nasdaq", 2], ["^DJI", "Dow", 0], ["^RUT", "Russell 2000", 2]]],
+  ["fut", "US futures", [["ES=F", "S&P 500 futures", 2], ["NQ=F", "Nasdaq 100 futures", 2], ["YM=F", "Dow futures", 0]]],
+  ["eu", "Europe", [["^STOXX50E", "Euro Stoxx 50", 2], ["^GDAXI", "Germany DAX", 2], ["^FTSE", "UK FTSE 100", 2]]],
+  ["asia", "Asia", [["^N225", "Japan Nikkei 225", 0], ["^HSI", "Hong Kong Hang Seng", 0], ["000001.SS", "China Shanghai", 2]]],
+  ["rates", "US bond yields", [["^IRX", "3-month", 3], ["^FVX", "5-year", 3], ["^TNX", "10-year", 3], ["^TYX", "30-year", 3]]],
+  ["fx", "Currencies", [["DX-Y.NYB", "US dollar index", 2], ["EURUSD=X", "EUR/USD", 4], ["USDJPY=X", "USD/JPY", 2], ["GBPUSD=X", "GBP/USD", 4], ["USDCNY=X", "USD/CNY", 4]]],
+  ["cmd", "Commodities", [["CL=F", "US crude oil", 2], ["BZ=F", "Brent crude", 2], ["NG=F", "Natural gas", 3], ["GC=F", "Gold", 1], ["SI=F", "Silver", 2], ["HG=F", "Copper", 3]]],
+  ["crypto", "Crypto", [["BTC-USD", "Bitcoin", 0], ["ETH-USD", "Ethereum", 2], ["SOL-USD", "Solana", 2]]],
+  ["vol", "Volatility", [["^VIX", "VIX fear gauge", 2]]]
+];
+async function build13() {
+  const jobs = {};
+  WORLD.forEach(([, , list]) => list.forEach(([s]) => {
+    jobs[s] = yahooChart(s, { interval: "15m", range: "1d" });
+  }));
+  const { res, errors } = await settle(jobs);
+  const groups = WORLD.map(([id, name, list]) => ({
+    id, name,
+    rows: list.map(([sym, label, dp]) => {
+      const c = res[sym];
+      if (!c) return null;
+      const q = quoteFromMeta(c.meta, c.bars);
+      if (q.price == null) return null;
+      return { sym, label, dp, price: q.price, change: q.change, pct: q.changePct != null ? +q.changePct.toFixed(2) : null, unit: id === "rates" ? "%" : "", spark: c.bars.map((b) => +b.c.toFixed(dp + 1)).filter((_, i, a) => a.length < 50 || i % Math.ceil(a.length / 50) === 0) };
+    }).filter(Boolean)
+  })).filter((g) => g.rows.length);
+  return { groups, errors, updated: Date.now() };
+}
+
 // api/desk.js
 var fmtT2 = (t) => new Date(t).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" });
-var THEMES_FOR = { NQ: ["ai", "earnings", "rates", "inflation", "jobs", "trade", "world", "gov"], ES: ["earnings", "rates", "inflation", "jobs", "trade", "world", "gov", "energy"], BTC: ["crypto", "memes", "rates"], Gold: ["gold", "rates", "world", "dollar"], Dollar: ["dollar", "rates", "inflation", "jobs"], "10Y": ["rates", "inflation", "jobs", "gov"], Oil: ["energy", "world", "trade"], "EUR/USD": ["dollar", "rates"], VIX: ["world", "trade", "rates"] };
-async function build11(lens = "general", level = "pro") {
-  if (!LENS[lens]) lens = "general";
-  const { res } = await settle({ fut: build2("futures"), fx: build2("forex"), cr: build3(), mv: build9(), news: build8("all"), cal: build(), rc: build10("NQ") });
+var SECTION_OF_MARKET = { stocks: ["futures"], futures: ["futures"], forex: ["forex"], options: ["options", "futures"], crypto: ["crypto"], memes: ["memes", "crypto"], learning: [] };
+var STRAT_TIP = {
+  ict: "News-driven spikes often run the obvious highs or lows first and then reverse; the New York open and the minutes after big releases are when that tends to happen.",
+  pa: "Watch whether the moves today break and hold beyond yesterday’s high or low, or slip back inside.",
+  sd: "News spikes into well-defined zones are where reactions tend to show up first.",
+  orderflow: "Expect volume to bunch up around the scheduled releases; that is when the real buying and selling shows.",
+  ind: "Fast news moves can stretch indicators quickly; signals right after a release are less reliable.",
+  news: "The scheduled releases below are your main events; surprises against the forecast drive the biggest moves.",
+  trend: "Trends tend to resume after news shocks fade unless the news genuinely changes the outlook.",
+  fundamentals: "Central-bank comments and data surprises are what shift currency trends over days and weeks.",
+  carry: "Anything that changes interest-rate expectations changes the carry between currencies.",
+  value: "Day-to-day headlines matter less to you than earnings and the interest-rate outlook.",
+  growth: "Growth stocks are the most sensitive to bond yields; rising yields tend to weigh on them.",
+  momentum: "Strong sectors today are where momentum traders are crowding.",
+  earnings: "Check which big companies report this week; results can move whole sectors.",
+  dividends: "Higher bond yields make dividend stocks look less attractive by comparison.",
+  index: "For long-term index investors most daily headlines are noise; the big picture is rates, earnings and the economy.",
+  buy: "Big scheduled events make options pricier beforehand and cheaper right after.",
+  sell: "Fear rising (a higher VIX) makes premium richer but moves bigger; scheduled news is when that risk is highest.",
+  spreads: "Expected moves are larger on news days; spread widths that worked last week may be too tight today.",
+  zero: "Same-day options react hardest to releases and the last hour; news days can swing them fully either way.",
+  hedge: "Hedges are cheapest when things are calm; costs jump once fear rises.",
+  hold: "For holders, the big picture is interest rates, flows into crypto funds and regulation, not daily swings.",
+  swing: "Rate news and risk mood decide whether crypto swings continue over the next few days.",
+  perps: "Leverage gets punished on news spikes; funding and liquidations pile up when everyone leans one way.",
+  narratives: "Money rotates fast between crypto sectors when the overall mood changes.",
+  onchain: "Watch whether big holders move coins onto exchanges after major news.",
+  defi: "Rate and regulation news change the appeal of on-chain yield.",
+  launches: "When the wider crypto mood turns risk-off, new launches lose buyers fastest.",
+  trending: "Trending coins depend on the wider mood; when Bitcoin wobbles, attention dries up quickly.",
+  kols: "Calls work best in a risk-on mood; in a nervous market they fade faster.",
+  wallets: "Smart wallets often de-risk before big macro events.",
+  charts: "News days can blow through chart levels; give setups more room or wait for the dust to settle.",
+  unsure: "Use today to watch how markets react to the news below; it is the fastest way to learn what moves them."
+};
+function relevantFor(h, m) {
+  const secs = SECTION_OF_MARKET[m] || [];
+  return h.markets && h.markets.some((x) => secs.includes(x));
+}
+async function build11(q = {}) {
+  const prof = parseProfile(q.p);
+  const level = q.lvl === "beginner" ? "beginner" : "pro";
+  const detail = ["quick", "deep"].includes(q.d) ? q.d : "balanced";
+  const { res } = await settle({ world: build13(), news: build8("all"), cal: build(), mv: build9() });
   const now = Date.now(), today = ny(now).date;
-  const snap = [];
-  const add = (key, name, q, extra = {}) => {
-    if (q && q.price != null) snap.push({ key, name, price: q.price, dp: q.dp ?? 2, pct: q.changePct != null ? +q.changePct.toFixed(2) : null, change: q.change != null ? +q.change.toFixed(q.dp ?? 2) : null, ...extra });
-  };
-  const F = res.fut, by = (s) => F && [...F.leaders, ...F.quotes].find((x) => x.short === s);
-  add("NQ", "Nasdaq futures", by("NQ"), { notes: by("NQ") && by("NQ").notes });
-  add("ES", "S&P futures", by("ES"), { notes: by("ES") && by("ES").notes });
-  if (res.cr && res.cr.btc) add("BTC", "Bitcoin", { price: res.cr.btc.price, changePct: res.cr.btc.changePct, dp: 0 });
-  add("Gold", "Gold", by("Gold"));
-  add("Oil", "Crude oil", by("Oil"));
-  add("Dollar", "US dollar index", by("DXY"));
-  add("10Y", "10-year Treasury yield", by("10Y"));
-  add("VIX", "Fear gauge (VIX)", by("VIX"));
-  if (res.fx) {
-    const e = res.fx.leaders.find((x) => x.short === "EUR/USD");
-    add("EUR/USD", "Euro vs dollar", e);
-  }
-  const stories = (res.news && res.news.items || []).filter((h) => h.time && now - h.time < 12 * 36e5).sort((a, b) => b.score - a.score).slice(0, 16);
-  const refs = stories.map((h, i) => ({ i: i + 1, title: h.title, link: h.link, source: h.source, time: h.time, theme: h.themeLabel, reaction: h.reaction }));
+  const rows = res.world ? res.world.groups.flatMap((g) => g.rows.map((r) => ({ ...r, group: g.name, gid: g.id }))) : [];
+  const pick = (sym) => rows.find((r) => r.sym === sym);
+  const stories = (res.news && res.news.items || []).filter((h) => h.time && now - h.time < 14 * 36e5).sort((a, b) => b.score - a.score).slice(0, 18);
+  const refs = stories.map((h, i) => ({ i: i + 1, title: h.title, link: h.link, source: h.source, time: h.time, theme: h.themeLabel, section: h.section, reaction: h.reaction }));
   const events = (res.cal && res.cal.events || []).filter((e) => ny(e.time).date === today && e.impact !== "Low" && (e.country === "USD" || e.impact === "High"));
-  const nextUp = (res.cal && res.cal.events || []).filter((e) => e.time > now && e.impact === "High").slice(0, 4);
+  const seenNext = /* @__PURE__ */ new Set();
+  const nextUp = (res.cal && res.cal.events || []).filter((e) => e.time > now && e.impact === "High").filter((e) => { const k = e.name + e.country + e.time; if (seenNext.has(k)) return false; seenNext.add(k); return true; }).slice(0, 5);
   const facts = {
     time_ny: fmtT2(now),
-    markets: snap.map(({ notes, ...m }) => m),
-    nq_level_notes: (snap.find((s) => s.key === "NQ") || {}).notes || [],
-    giants: res.mv ? res.mv.giants.slice(0, 6).map((g) => ({ name: g.name, pct: g.pct, nq_points: g.nqPts })) : [],
-    movers_summary: res.mv ? res.mv.lines : [],
+    world_markets: rows.map((r) => ({ name: r.label, group: r.group, price: r.price, change_pct: r.pct })),
+    stories: refs.map((r) => ({ ref: r.i, title: r.title, source: r.source, topic: r.theme, minutes_ago: Math.round((now - r.time) / 6e4), price_since: r.reaction ? `${r.reaction.label} ${r.reaction.change > 0 ? "+" : ""}${r.reaction.change} ${r.reaction.unit}` : null })),
+    us_stock_drivers: res.mv ? res.mv.lines : [],
     sectors: res.mv ? res.mv.sectors.map((s) => ({ name: s.name, pct: s.pct })) : [],
-    sessions_nq: res.rc ? res.rc.sessions.map((s) => ({ session: s.label, status: s.status, summary: s.text })) : [],
-    big_moves_nq: res.rc ? res.rc.timeline.filter((t) => t.kind === "move").map((t) => ({ time: fmtT2(t.t), what: t.text, cause: t.cause })) : [],
     releases_today: events.map((e) => ({ time: fmtT2(e.time), name: e.name, country: e.country, forecast: e.forecast, previous: e.previous, done: e.time < now })),
-    coming_up: nextUp.map((e) => ({ when: new Date(e.time).toLocaleString("en-US", { timeZone: "America/New_York", weekday: "short", hour: "numeric", minute: "2-digit" }), name: e.name, country: e.country })),
-    stories: refs.map((r) => ({ ref: r.i, title: r.title, source: r.source, minutes_ago: Math.round((now - r.time) / 6e4), price_since: r.reaction ? `${r.reaction.label} ${r.reaction.change > 0 ? "+" : ""}${r.reaction.change} ${r.reaction.unit}` : null }))
+    coming_up: nextUp.map((e) => ({ when: new Date(e.time).toLocaleString("en-US", { timeZone: "America/New_York", weekday: "short", hour: "numeric", minute: "2-digit" }), name: e.name, country: e.country }))
   };
+  const marketIds = prof.map((x) => x.m);
   let out = null, aiStatus = hasAI() ? "ok" : "no key";
   if (hasAI()) {
     try {
       const ai = await askClaude({
-        maxTokens: 3e3,
-        system: VOICE + "\n" + LENS[lens] + (level === "beginner" ? "\nThe reader is newer to trading: explain a little more, one idea per sentence." : "\nThe reader is experienced: be brief and specific."),
-        user: `Write the live market desk for right now. Data:
+        maxTokens: 3200,
+        system: VOICE2 + "\n" + profileText(prof, level, detail),
+        user: `Write the front page of the site for right now. Data:
 ${JSON.stringify(facts)}
 
-Return ONLY JSON: {"headline": "under 80 chars, what is moving and why", "big_picture": "2-3 sentences", "markets": [{"key": one of ${JSON.stringify(snap.map((s) => s.key))}, "text": "1-2 sentences: what it's doing and the most likely reason, citing stories as [n]", "refs": [n...]}] (cover every market given, most important first), "watch": ["2-4 short items: what could move things next, with times"], "for_you": "2-3 sentences written for this reader's style"}. Cite only story refs that support the point. If nothing explains a move, say so.`
+Return ONLY JSON:
+{"headline": "under 90 characters: the main thing happening in the world and its effect on markets",
+ "summary": "2-3 sentences: what is going on in the world right now and how markets are taking it",
+ "stories": [{"ref": n, "headline": "short plain headline under 75 characters", "why": "1-2 sentences: why it matters for markets", "effects": [{"market": "short name such as Stocks, Tech stocks, Bonds, Dollar, Euro, Yen, Oil, Gold, Bitcoin, Memecoins", "dir": "up|down|mixed"}]}],
+ "across": [{"area": "Stocks", "text": "1 sentence"}, {"area": "Bonds", "text": "..."}, {"area": "Currencies", "text": "..."}, {"area": "Commodities", "text": "..."}, {"area": "Crypto", "text": "..."}],
+ "for_you": [{"market": one of ${JSON.stringify(marketIds.length ? marketIds : ["general"])}, "text": "1-3 sentences on what today's world news means for how this reader trades this market, written for their strategy"}],
+ "watch": ["2-4 short items with times: what could move markets next"]}
+Pick the 4-6 most important stories, world events first. effects should only list markets the data shows moving or that the story clearly concerns; use dir "mixed" when unclear. Cite stories only by ref numbers that exist.`
       });
       if (ai && ai.headline) {
-        out = { headline: ai.headline, bigPicture: ai.big_picture, markets: (ai.markets || []).map((m) => ({ ...snap.find((s) => s.key === m.key), text: m.text, refs: (m.refs || []).filter((n) => refs[n - 1]) })).filter((m) => m.key), watch: ai.watch || [], forYou: ai.for_you || "", source: "ai" };
+        out = {
+          headline: ai.headline, summary: ai.summary || "",
+          stories: (ai.stories || []).filter((s) => refs[s.ref - 1]).slice(0, 6).map((s) => ({ ref: s.ref, headline: s.headline || refs[s.ref - 1].title, why: s.why || "", effects: (s.effects || []).slice(0, 4) })),
+          across: (ai.across || []).slice(0, 5), forYou: (ai.for_you || []).slice(0, 7), watch: (ai.watch || []).slice(0, 4), source: "ai"
+        };
       }
     } catch (e) {
       out = null;
       aiStatus = "error: " + String(e.message || e).slice(0, 160);
     }
   }
-  if (!out) out = rules(snap, stories, refs, res, events, nextUp, lens, level);
-  return { ...out, refs, lens, level, aiStatus, updated: now };
+  if (!out) out = rules2(prof, stories, refs, rows, pick, events, nextUp, res);
+  return { ...out, refs, profile: prof.map((x) => x.m), level, detail, aiStatus, updated: now };
 }
-function rules(snap, stories, refs, res, events, nextUp, lens, level) {
-  const dir = (p) => p > 0.05 ? "up" : p < -0.05 ? "down" : "flat";
-  const biggest = [...snap].filter((s) => s.pct != null && s.key !== "VIX" && s.key !== "10Y").sort((a, b) => Math.abs(b.pct) - Math.abs(a.pct))[0];
-  const topStory = stories[0];
-  const used = /* @__PURE__ */ new Set();
-  const marketsOut = snap.map((s) => {
-    const themes = THEMES_FOR[s.key] || [];
-    let ix = -1;
-    for (const th of themes) {
-      ix = stories.findIndex((h, i) => h.theme === th && !used.has(i));
-      if (ix >= 0) break;
-    }
-    if (ix < 0) for (const th of themes.slice(0, 2)) {
-      ix = stories.findIndex((h) => h.theme === th);
-      if (ix >= 0) break;
-    }
-    if (ix >= 0) used.add(ix);
-    const verb = /futures$/.test(s.name) ? "are" : "is";
-    let text = s.pct == null ? "" : `${s.name} ${verb} ${dir(s.pct)}${dir(s.pct) === "flat" ? "" : " " + Math.abs(s.pct).toFixed(2) + "%"} today.`;
-    if (s.key === "NQ" && res.mv && res.mv.lines[1]) text += " " + res.mv.lines[1];
-    if (ix >= 0) text += ` The main story touching it: \u201C${stories[ix].title}\u201D [${ix + 1}].`;
-    else text += " No single headline stands out as the cause.";
-    if (s.notes && s.notes[1] && (lens === "ict" || lens === "pa")) text += " " + s.notes[1];
-    return { ...s, text, refs: ix >= 0 ? [ix + 1] : [] };
+function rules2(prof, stories, refs, rows, pick, events, nextUp, res) {
+  const word = (p, up, down) => p == null ? "" : p > 0.05 ? up : p < -0.05 ? down : "little changed";
+  const fmtP = (p) => p == null ? "" : ` (${p > 0 ? "+" : ""}${p.toFixed(2)}%)`;
+  const spx = pick("^GSPC") || pick("ES=F"), tnx = pick("^TNX"), dxy = pick("DX-Y.NYB"), oil = pick("CL=F"), gold = pick("GC=F"), btc = pick("BTC-USD"), eu = pick("^STOXX50E"), jp = pick("^N225");
+  const top = stories[0];
+  const headline = top ? top.title : spx ? `US stocks ${word(spx.pct, "rise", "fall")}${fmtP(spx.pct)}` : "Markets at a glance";
+  const sum = [];
+  if (spx) sum.push(`US stocks are ${word(spx.pct, "higher", "lower")}${fmtP(spx.pct)}${eu ? `, Europe is ${word(eu.pct, "up", "down")}` : ""}${jp ? ` and Japan is ${word(jp.pct, "up", "down")}` : ""}.`);
+  if (tnx && dxy) sum.push(`Bond yields are ${word(tnx.change, "rising", "falling")} and the dollar is ${word(dxy.pct, "stronger", "weaker")}.`);
+  if (top) sum.push(`The biggest story right now: “${top.title}” (${top.source}).`);
+  const storiesOut = stories.slice(0, 5).map((h, i) => ({ ref: i + 1, headline: h.title, why: h.why || "", effects: h.reaction ? [{ market: h.reaction.label, dir: h.reaction.change > 0 ? "up" : h.reaction.change < 0 ? "down" : "mixed" }] : [] }));
+  const across = [];
+  if (spx) across.push({ area: "Stocks", text: `S&P 500 ${word(spx.pct, "up", "down")}${fmtP(spx.pct)}.${res.mv && res.mv.lines[3] ? " " + res.mv.lines[3] : ""}` });
+  if (tnx) across.push({ area: "Bonds", text: `The 10-year yield is ${tnx.price.toFixed(2)}%, ${word(tnx.change, "up", "down")} today. Higher yields tend to weigh on stocks, especially tech.` });
+  if (dxy) across.push({ area: "Currencies", text: `The dollar index is ${word(dxy.pct, "up", "down")}${fmtP(dxy.pct)}.` });
+  if (oil || gold) across.push({ area: "Commodities", text: [oil ? `Oil ${word(oil.pct, "up", "down")}${fmtP(oil.pct)}` : "", gold ? `gold ${word(gold.pct, "up", "down")}${fmtP(gold.pct)}` : ""].filter(Boolean).join(", ") + "." });
+  if (btc) across.push({ area: "Crypto", text: `Bitcoin ${word(btc.pct, "up", "down")}${fmtP(btc.pct)}.` });
+  const forYou = prof.filter((x) => x.m !== "learning").map((x) => {
+    const ix = stories.findIndex((h) => relevantFor(h, x.m));
+    const tip = x.strats.map((s) => STRAT_TIP[s]).find(Boolean) || "";
+    const seenEv = /* @__PURE__ */ new Set();
+    const ev = events.filter((e) => e.time > Date.now() && (x.m === "forex" || e.country === "USD")).filter((e) => !seenEv.has(e.name) && seenEv.add(e.name));
+    let text = ix >= 0 ? `The story most likely to matter for your ${MARKET_NAMES[x.m]}: “${stories[ix].title}” [${ix + 1}].` : `No single story stands out for ${MARKET_NAMES[x.m]} right now.`;
+    if (ev.length && ["futures", "forex", "options", "stocks"].includes(x.m)) text += ` Still ahead today: ${ev.slice(0, 2).map((e) => `${e.name} at ${fmtT2(e.time)}`).join(" and ")}.`;
+    if (tip) text += " " + tip;
+    return { market: x.m, text };
   });
-  const headline = biggest ? `${biggest.name} ${biggest.pct >= 0 ? "rises" : "falls"} ${Math.abs(biggest.pct).toFixed(1)}%${topStory && topStory.themeLabel ? `, ${topStory.themeLabel.toLowerCase()} in focus` : ""}` : "Markets at a glance";
-  const bp = [];
-  if (res.mv && res.mv.lines[0]) bp.push(res.mv.lines[0]);
-  if (res.fut && res.fut.macro.length) bp.push(res.fut.macro[0]);
-  if (topStory) bp.push(`The most important story right now: \u201C${topStory.title}\u201D (${topStory.source}).`);
+  if (prof.some((x) => x.m === "learning")) forYou.push({ market: "learning", text: top ? `A good one to follow today: “${top.title}”. Watch how stocks, the dollar and gold react to it over the next few hours.` : "Watch how stocks, the dollar and gold react to today’s headlines; that is the fastest way to learn what moves markets." });
   const watch = nextUp.map((e) => `${e.name} (${e.country}), ${new Date(e.time).toLocaleString("en-US", { timeZone: "America/New_York", weekday: "short", hour: "numeric", minute: "2-digit" })}`);
-  const nyam = res.rc && res.rc.sessions.find((s) => s.id === "nyam" && s.status !== "upcoming");
-  const lensLine = {
-    ict: nyam ? nyam.text : "Watch which side of the overnight range gets run first once New York opens.",
-    pa: "Watch whether price holds above or below yesterday\u2019s high and low; breaks that fail often reverse.",
-    ind: biggest ? `${biggest.name} has the strongest move today; momentum is ${Math.abs(biggest.pct) > 1 ? "stretched" : "steady"}.` : "",
-    news: events.length ? `Today\u2019s releases: ${events.map((e) => `${e.name} at ${fmtT2(e.time)}`).join(", ")}.` : "No big scheduled releases left today; headlines are the wildcard.",
-    general: "Big moves usually come with news; when there isn\u2019t any, price tends to drift between yesterday\u2019s high and low."
-  }[lens];
-  return { headline, bigPicture: bp.join(" "), markets: marketsOut, watch, forYou: lensLine, source: "rules" };
+  return { headline, summary: sum.join(" "), stories: storiesOut, across, forYou, watch, source: "rules" };
 }
 
 // api/explain.js
 async function build12(q) {
   const title = String(q.title || "").slice(0, 300), summary = String(q.summary || "").slice(0, 600), source = String(q.source || "").slice(0, 80);
-  const lens = LENS[q.lens] ? q.lens : "general", level = q.level === "beginner" ? "beginner" : "pro";
-  const assets = String(q.assets || "").slice(0, 120), reaction2 = String(q.reaction || "").slice(0, 80);
+  const prof = parseProfile(q.p);
+  const level = q.lvl === "beginner" ? "beginner" : "pro";
+  const detail = ["quick", "deep"].includes(q.d) ? q.d : "balanced";
+  const reaction2 = String(q.reaction || "").slice(0, 80);
   if (!title) throw new Error("No headline given");
   const tag = tagHeadline({ title, summary });
+  let aiErr = null;
   if (hasAI()) {
     try {
       const ai = await askClaude({
         maxTokens: 900,
-        system: VOICE + "\n" + LENS[lens] + (level === "beginner" ? "\nThe reader is newer to trading." : "\nThe reader is experienced; keep it tight."),
+        system: VOICE2 + "\n" + profileText(prof, level, detail),
         user: `Headline: "${title}" (${source}).${summary ? `
 Summary: ${summary}` : ""}${reaction2 ? `
 Price since it broke: ${reaction2}` : ""}
-The reader trades: ${assets || "US index futures"}.
-Return ONLY JSON: {"what": "1-2 sentences, what happened in plain English", "why": "1-2 sentences, why markets care", "reaction": "1 sentence on how price has reacted, using only the number given, or say it's too early / not measurable", "for_you": "1-2 sentences on what it means for the instruments this reader trades"}`
+Return ONLY JSON: {"what": "1-2 sentences: what happened, in plain English", "why": "1-2 sentences: why markets care", "reaction": "1 sentence: which markets it affects and how they reacted, using only the number given; if no number is given, say which markets to watch", "for_you": "1-2 sentences: what it means for how this reader trades, naming their market; if it barely matters for them, say so plainly"}`
       });
       if (ai && ai.what) return { ...ai, source: "ai" };
     } catch (e) {
-      var aiErr = String(e.message || e).slice(0, 160);
+      aiErr = String(e.message || e).slice(0, 160);
     }
   }
+  const names = { futures: "stocks and index futures", forex: "currencies", crypto: "crypto", memes: "memecoins", options: "options", stocks: "stocks" };
   return {
     what: title + ".",
     why: tag.why || "It may not move the big markets much on its own.",
-    reaction: reaction2 ? `Since the story broke: ${reaction2}.` : "Too early or not measurable yet.",
-    for_you: tag.markets && tag.markets.length ? `It mainly touches ${tag.markets.map((m) => ({ futures: "index futures", forex: "currencies", crypto: "crypto", memes: "memecoins", options: "options" })[m] || m).join(", ")}.` : "",
+    reaction: reaction2 ? `Since the story broke: ${reaction2}.` : "Too early to measure a reaction.",
+    for_you: tag.markets && tag.markets.length ? `It mainly touches ${[...new Set(tag.markets.map((m) => names[m] || m))].join(", ")}.` : "",
     source: "rules",
-    aiStatus: hasAI() ? "error: " + (typeof aiErr !== "undefined" ? aiErr : "unknown") : "no key"
+    aiStatus: hasAI() ? "error: " + (aiErr || "unknown") : "no key"
   };
 }
 
@@ -1326,7 +1445,8 @@ var ROUTES = {
   wire: [(q) => build8(String(q.section || "all")), 120],
   movers: [() => build9(), 120],
   recap: [(q) => build10(String(q.sym || "NQ").toUpperCase()), 180],
-  desk: [(q) => build11(String(q.lens || "general"), q.level === "beginner" ? "beginner" : "pro"), hasAI() ? 900 : 180],
+  desk: [(q) => build11(q), hasAI() ? 900 : 180],
+  world: [() => build13(), 120],
   explain: [(q) => build12(q), 86400]
 };
 async function handler(req, res) {
