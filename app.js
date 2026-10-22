@@ -286,7 +286,7 @@ function guideHTML() {
     <ol>
       <li><b>Read Today’s briefing</b>The 3 stories that matter most for you, what they’ll likely do to your market, and what to watch next.</li>
       <li><b>Check your prices</b>Your markets and a live chart sit right next to the briefing.</li>
-      <li><b>See what’s likely next</b>Upcoming events, and what usually happens if they surprise up or down.</li>
+      <li><b>See what’s going to happen next</b>The most likely path for your markets, and a game plan for the strategies you use.</li>
       <li><b>Go deeper in your tab</b>Tabs with a blue dot are your markets. Each opens with its own briefing. Stuck on a word? Try the <a href="#glossary">Glossary</a>.</li>
     </ol></section>`;
 }
@@ -308,9 +308,26 @@ function briefingHTML(d, { empty = 'No major stories for this market right now.'
       ${b.since ? `<div class="brow"><span class="bl">Already moved</span><div>${reactTxt(b.since)}</div></div>` : ''}
     </div></li>`; }).join('') + `<li class="bnote">“Likely” is the usual reaction to news like this, not a promise. Check “Already moved” to see what price actually did.</li>`;
 }
+const FIT_CLASS = { 'Lines up well': 'up', 'Big day for this': 'acc', 'Use caution': 'warn', 'Poor fit today': 'down' };
+function nextHTML(d) {
+  const all = [...(d.next || []), ...(d.outlook || []).filter(o => o.kind !== 'Base case')].slice(0, 6);
+  return outlookHTML({ outlook: all });
+}
+function playbookHTML(d) {
+  const list = d.playbook || [];
+  if (!list.length) return '<p class="empty">Pick your strategies in your setup to get a game plan here.</p>';
+  const multi = new Set(list.map(p => p.market)).size > 1;
+  return `<div class="plays">${list.map(p => `<article class="play">
+      <div class="play-top"><div><h3>${esc(p.name[0].toUpperCase() + p.name.slice(1))}</h3>${multi ? `<small>${esc(marketLabel(p.market))}</small>` : ''}</div><span class="pill ${FIT_CLASS[p.fit] || ''}">${esc(p.fit)}</span></div>
+      <p class="play-why">${esc(p.fitWhy)}</p>
+      <ol>${p.steps.map(x => `<li>${esc(x)}</li>`).join('')}</ol>
+    </article>`).join('')}</div><p class="disclaim">How traders using each strategy usually approach news like today’s. It’s education, not financial advice. Your own rules come first.</p>`;
+}
 function marketBriefing(id, focus, label) {
-  return { html: `<section class="mbrief"><div class="sec-row"><h2 class="sec">Briefing for ${esc(label)}</h2><a href="#news">All news</a></div><ol class="bfeed" id="${id}"></ol></section>`,
-    load: () => fill(id, 'the briefing', api('desk?' + profileQuery() + '&focus=' + focus, 5 * 60e3), d => briefingHTML(d)) };
+  return { html: `<section class="mbrief"><div class="sec-row"><h2 class="sec">Briefing for ${esc(label)}</h2><a href="#news">All news</a></div><ol class="bfeed" id="${id}"></ol></section>
+    <section class="mbrief"><div class="sec-row"><h2 class="sec">What’s going to happen next</h2><a href="#calendar">Full calendar</a></div><div id="${id}Next"></div></section>
+    <section class="mbrief"><div class="sec-row"><h2 class="sec">How to trade this with your strategy</h2><button class="linkbtn" type="button" data-edit>Change strategies</button></div><div id="${id}Play"></div></section>`,
+    load: () => { const p = api('desk?' + profileQuery() + '&focus=' + focus, 5 * 60e3); fill(id, 'the briefing', p, d => briefingHTML(d)); fill(id + 'Next', 'what’s next', p, nextHTML); fill(id + 'Play', 'your game plan', p, playbookHTML); main.querySelectorAll('[data-edit]').forEach(b => b.onclick = editSetup); } };
 }
 function pricesHTML(D) {
   const views = myAssets().map(a => assetView(a, D)).filter(Boolean).slice(0, 8);
@@ -397,7 +414,8 @@ PAGES.today = () => {
         <section class="rail-chart"><div class="chart-h"><h2 class="sec">Live chart</h2></div><div class="chips tight" id="todayChartPick"></div><div id="todayChart" class="tvbox"></div></section>
       </aside>
     </div>
-    <section class="block"><div class="sec-row"><h2 class="sec">What’s likely next</h2><a href="#calendar">Full calendar</a></div><div id="outlook"></div></section>
+    <section class="block"><div class="sec-row"><h2 class="sec">What’s going to happen next</h2><a href="#calendar">Full calendar</a></div><div id="outlook"></div></section>
+    <section class="block"><div class="sec-row"><h2 class="sec">How to trade today’s news with your strategy</h2><button class="linkbtn" type="button" data-edit>Change strategies</button></div><div id="todayPlay"></div></section>
     <section class="block"><div class="sec-row"><h2 class="sec">More news by topic</h2><a href="#news">All news</a></div><div class="topics" id="topics"></div></section>
     <section class="block"><div class="sec-row"><h2 class="sec">World markets</h2><a href="#markets">All markets</a></div><div id="worldMini"></div></section>`)) {
     chartPicker('todayChart', 'todayChartPick', todayChartOptions());
@@ -406,7 +424,9 @@ PAGES.today = () => {
   const deskP = api('desk?' + profileQuery(), 5 * 60e3);
   const wireP = api('wire?section=all', 60e3);
   fill('bfeed', 'today’s briefing', deskP, d => briefingHTML(d));
-  fill('outlook', 'what’s likely next', deskP, outlookHTML);
+  fill('outlook', 'what’s next', deskP, nextHTML);
+  fill('todayPlay', 'your game plan', deskP, playbookHTML);
+  main.querySelectorAll('[data-edit]').forEach(b => b.onclick = editSetup);
   fill('myPrices', 'your prices', personalData(), pricesHTML).then(() => {
     const e = $('#briefEdit'); if (e) e.onclick = editSetup; const al = $('#briefAlerts'); if (al) al.onclick = openAlerts;
   });
@@ -520,7 +540,8 @@ function marketNews(id, section, n = 8) { fill(id, 'news', api('wire?section=' +
 // ---------- Stocks & futures ----------
 PAGES.futures = () => {
   const lv = levelTrader();
-  const fb = marketBriefing('futBrief', 'futures', 'stocks and futures');
+  const mkF = myMarkets();
+  const fb = marketBriefing('futBrief', !mkF.includes('futures') && mkF.includes('stocks') ? 'stocks' : 'futures', 'stocks and futures');
   if (layout(`<h1 class="page-h">Stocks and futures</h1>
     <p class="page-intro" id="futIntro"></p>
     ${fb.html}

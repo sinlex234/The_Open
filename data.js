@@ -1689,6 +1689,135 @@ function briefingFor(stories, prof, upcoming, focus) {
   }
   return out;
 }
+// ---------- what's going to happen next + strategy playbook ----------
+var MKT_LABEL = { stocks: "stocks", futures: "index futures", forex: "currencies", options: "options", crypto: "crypto", memes: "memecoins" };
+function marketState(m, pick, briefing, outlook) {
+  const spx = pick("ES=F") || pick("^GSPC"), nq = pick("NQ=F") || pick("^IXIC"), vix = pick("^VIX"), dxy = pick("DX-Y.NYB"), btc = pick("BTC-USD"), sol = pick("SOL-USD"), tnx = pick("^TNX");
+  const key = { stocks: spx, futures: nq || spx, options: spx, forex: dxy, crypto: btc, memes: sol || btc }[m];
+  const keyName = { stocks: "the S&P 500", futures: nq ? "Nasdaq futures" : "S&P futures", options: "the S&P 500", forex: "the dollar index", crypto: "Bitcoin", memes: sol ? "Solana" : "Bitcoin" }[m];
+  const tp = key && key.pct != null ? key.pct : null;
+  const trend = tp == null ? "flat" : tp > 0.4 * (m === "crypto" || m === "memes" ? 3 : m === "forex" ? 0.4 : 1) ? "up" : tp < -0.4 * (m === "crypto" || m === "memes" ? 3 : m === "forex" ? 0.4 : 1) ? "down" : "flat";
+  let up = 0, down = 0;
+  briefing.forEach((b) => (b.effects || []).forEach((e) => {
+    if (e.market !== m) return;
+    let d = e.dir === "up" ? 1 : e.dir === "down" ? -1 : 0;
+    if (m === "forex" && /\/USD$/.test(e.label)) d = -d;
+    if (d > 0) up++; if (d < 0) down++;
+  }));
+  const bias = up > down ? "up" : down > up ? "down" : "mixed";
+  const ev = (outlook || []).find((o) => o.time && o.time > Date.now() && o.time - Date.now() < 30 * 36e5 && (o.markets || []).includes(m)) || null;
+  const evSoon = ev && ev.time - Date.now() < 3 * 36e5;
+  const vixLvl = vix ? vix.price : null;
+  const volWord = m === "crypto" || m === "memes" ? (key && Math.abs(key.pct || 0) > 4 ? "high" : key && Math.abs(key.pct || 0) > 1.5 ? "normal" : "low") : vixLvl == null ? "normal" : vixLvl > 25 ? "high" : vixLvl < 15 ? "low" : "normal";
+  return { m, key, keyName, tp, trend, bias, ev, evSoon, vix, vixLvl, volWord, tnx, dxy, btc, top: briefing.find((b) => (b.effects || []).some((e) => e.market === m)) || briefing[0] || null };
+}
+var dirWord = (d) => d === "up" ? "higher" : d === "down" ? "lower" : "sideways";
+function nextFor(st) {
+  const name = MKT_LABEL[st.m];
+  const pctTxt = st.tp != null ? ` (${st.tp > 0 ? "+" : ""}${st.tp.toFixed(2)}% today)` : "";
+  const agree = st.bias !== "mixed" && st.bias === st.trend;
+  const conflict = st.bias !== "mixed" && st.trend !== "flat" && st.bias !== st.trend;
+  let likely;
+  if (st.ev && st.evSoon) likely = `${st.ev.title} lands soon (${st.ev.when}). Until then, ${name} will most likely drift and wait. After it, the surprise against the forecast decides the direction.`;
+  else if (agree) likely = `Most likely ${dirWord(st.trend)}. ${st.keyName[0].toUpperCase() + st.keyName.slice(1)} is already moving ${st.trend}${pctTxt}, and today’s news points the same way. When price and news agree, moves tend to continue.`;
+  else if (conflict) likely = `Most likely choppy. ${st.keyName[0].toUpperCase() + st.keyName.slice(1)} is moving ${st.trend}${pctTxt}, but today’s news leans ${st.bias}. When the two disagree, expect back-and-forth until one side wins.`;
+  else if (st.bias !== "mixed") likely = `A lean ${st.bias === "up" ? "higher" : "lower"}. Price is flat${pctTxt}, but today’s news leans ${st.bias}. If the market starts to agree, a move ${st.bias === "up" ? "up" : "down"} is the more likely break.`;
+  else if (st.trend !== "flat") likely = `Most likely more of the same. ${st.keyName[0].toUpperCase() + st.keyName.slice(1)} is moving ${st.trend}${pctTxt} without a strong news push either way, so the existing trend is the best guide.`;
+  else likely = `Most likely quiet. No strong trend and no strong news push. Expect ${name} to stay in a range until something new happens.`;
+  if (st.ev && !st.evSoon) likely += ` The next big test is ${st.ev.title} (${st.ev.when}).`;
+  if (st.volWord === "high") likely += st.m === "crypto" || st.m === "memes" ? " Swings are already large today, so expect them to stay large." : ` Fear is elevated (VIX ${st.vixLvl.toFixed(1)}), so swings will be bigger than usual.`;
+  const upCase = { stocks: "A good surprise (cooler inflation, strong earnings, a trade deal or ceasefire) would likely push stocks higher.", futures: "A good surprise (cooler inflation, dovish Fed talk, strong big-tech news) would likely send index futures higher.", options: "Calm news would likely push the VIX down and shrink option prices.", forex: "Strong US data or tough Fed talk would likely lift the dollar, pushing EUR/USD and GBP/USD lower and USD/JPY higher.", crypto: "Rate-cut hopes, fund inflows or friendly regulation would likely lift Bitcoin, with smaller coins moving more.", memes: "If Bitcoin and Solana push higher, memecoins usually rally two or three times as hard." }[st.m];
+  const downCase = { stocks: "A bad surprise (hot inflation, new tariffs, conflict headlines) would likely push stocks lower, tech the most.", futures: "A bad surprise (hot inflation, hawkish Fed talk, tariff or war headlines) would likely send index futures lower.", options: "A shock would likely spike the VIX, making options pricier and moves bigger.", forex: "Weak US data or rate-cut talk would likely weaken the dollar, lifting EUR/USD and GBP/USD.", crypto: "Rate fears, fund outflows or hacks and regulatory action would likely push crypto lower, smaller coins hardest.", memes: "If Bitcoin slips or attention fades, memecoins usually fall fastest, newest coins first." }[st.m];
+  return { title: `${name[0].toUpperCase() + name.slice(1)}: next 24 hours`, kind: "Base case", when: "Next 24 hours", time: null, likely, if_up: `If it breaks higher: ${upCase}`, if_down: `If it breaks lower: ${downCase}`, markets: [st.m] };
+}
+var PLAY = {
+  ict: (st) => [
+    st.ev ? `Mark the obvious highs and lows from the Asia and London sessions. ${st.ev.title} (${st.ev.when}) is when they are most likely to get run.` : "Mark the obvious highs and lows from the Asia and London sessions. With no big release ahead, the New York open is the main window for a run on them.",
+    st.bias !== "mixed" ? `News leans ${st.bias}. A common ICT read: expect a run of the ${st.bias === "up" ? "lows" : "highs"} first, then a move ${st.bias}.` : "News has no clear lean, so let the first liquidity run show the direction instead of guessing.",
+    st.evSoon ? "Don’t enter in the minutes around the release. Wait for the spike to show displacement, then look for your entry on the return." : "Wait for displacement after a run before looking for an entry. No run, no setup.",
+    "If both sides get run, step aside. That is a sign the day has no clear direction."
+  ],
+  pa: (st) => [
+    "Mark yesterday’s high and low and today’s opening range. Those are the levels that matter.",
+    st.bias !== "mixed" ? `News leans ${st.bias}, so breaks ${st.bias === "up" ? "above resistance" : "below support"} are more likely to hold. Breaks the other way are more likely to fail.` : "With no clear news lean, treat the first break of a level with suspicion and wait for a close beyond it.",
+    st.ev ? `Expect false breaks around ${st.ev.title} (${st.ev.when}). Let the first move settle before trusting a breakout.` : "Quiet calendars favour clean ranges. Fading the edges of the range tends to work better than chasing breaks.",
+  ],
+  sd: (st) => [
+    "Mark the nearest fresh zones above and below price, where it left quickly last time.",
+    st.bias !== "mixed" ? `News leans ${st.bias}, so ${st.bias === "up" ? "demand zones below" : "supply zones above"} are the ones more likely to hold.` : "No clear news lean, so wait for a strong reaction off a zone before acting.",
+    st.ev ? `News spikes around ${st.ev.title} often stab into zones. The reaction after the spike matters more than the touch.` : "Zones tested for the second or third time are weaker. Favour fresh ones."
+  ],
+  orderflow: (st) => [
+    st.ev ? `Expect a volume surge at ${st.ev.title} (${st.ev.when}). Watch who absorbs the first wave of orders.` : "With no big release, volume will cluster at the open and the close. Read the tape there.",
+    st.bias !== "mixed" ? `News leans ${st.bias}. Aggressive ${st.bias === "up" ? "buying" : "selling"} that keeps getting absorbed would be an early sign the news is already priced in.` : "Look for one side running out of steam rather than guessing direction.",
+  ],
+  ind: (st) => [
+    `The bigger trend in ${st.keyName} is ${st.trend === "flat" ? "flat" : st.trend}. Favour signals in that direction.`,
+    st.ev ? `Signals in the 15 minutes after ${st.ev.title} are unreliable because indicators lag fast moves.` : "A quiet calendar is when indicator signals work best, because moves are steadier.",
+    st.volWord === "high" ? "Volatility is high, so overbought and oversold readings can stay stretched for longer than usual." : "Normal volatility, so standard settings should behave as expected."
+  ],
+  ta: (st) => PLAY.pa(st), charts: (st) => PLAY.pa(st),
+  news: (st) => [
+    st.ev ? `Your main event: ${st.ev.title}, ${st.ev.when}. ${st.ev.likely || ""}`.trim() : "No major release is scheduled soon. Breaking headlines are your only catalyst today, so be selective.",
+    st.ev ? `Plan both ways before it hits. ${st.ev.if_up || ""} ${st.ev.if_down || ""}`.trim() : "Breaking headlines often get walked back. The second move is usually more reliable than the first.",
+    "Spreads widen and slippage rises right at the release. Size down or wait a minute or two."
+  ],
+  trend: (st) => [
+    st.trend !== "flat" ? `${st.keyName[0].toUpperCase() + st.keyName.slice(1)} is trending ${st.trend}. ${st.bias === st.trend ? "Today’s news agrees, which supports staying with it." : st.bias === "mixed" ? "News isn’t pushing against it." : "But today’s news leans the other way, so trail stops tighter."}` : "No clear trend today. Trend-following usually struggles in flat markets, so patience is the edge.",
+    st.ev ? `${st.ev.title} (${st.ev.when}) could start or end a trend. A strong close after it is a better signal than the first spike.` : "Without a big release, existing trends tend to continue into the close."
+  ],
+  momentum: (st) => PLAY.trend(st),
+  fundamentals: (st) => [
+    st.top ? `The main driver right now: “${st.top.headline}”.` : "No single fundamental story is dominating today.",
+    "Ask one question: does this change what central banks will do? If yes, the move can last days or weeks. If not, it usually fades.",
+    st.ev ? `${st.ev.title} (${st.ev.when}) is the next data point that can change the rate outlook.` : "No big data due soon, so speeches by central bankers are the main risk."
+  ],
+  carry: (st) => ["Carry trades work best in calm markets. " + (st.volWord === "high" ? "Volatility is high today, which is when carry trades get unwound." : "Volatility is normal, which suits carry."), st.ev ? `Watch ${st.ev.title}: anything that changes rate gaps between countries changes the carry.` : "Watch central-bank speakers for hints that rate gaps are about to change."],
+  value: (st) => ["Daily headlines rarely change a value case. The question is whether today’s news changes earnings or interest rates for years, not days.", st.bias === "down" ? "Negative news days are when good companies sometimes get cheaper, which is the setup value investors wait for." : "Up days rarely create value opportunities. Patience matters more than activity."],
+  growth: (st) => [`Growth stocks are the most sensitive to bond yields. The 10-year yield is ${st.tnx ? st.tnx.price.toFixed(2) + "%" : "worth watching"}${st.tnx && st.tnx.change ? `, ${st.tnx.change > 0 ? "up" : "down"} today` : ""}.`, st.bias === "up" ? "Today’s news leans supportive for growth names." : st.bias === "down" ? "Today’s news leans against growth names. Expect them to underperform if it holds." : "No clear push for growth names today."],
+  dividends: (st) => [`Higher bond yields make dividend stocks less attractive by comparison. The 10-year yield is ${st.tnx ? st.tnx.price.toFixed(2) + "%" : "the number to watch"}.`, "Dividend investing is a long game. A single news day rarely matters unless it threatens a company’s payout."],
+  index: (st) => ["For index investors, today’s news is mostly noise. The long-term drivers are earnings, interest rates and the economy.", st.volWord === "high" ? "Volatile days test discipline. Sticking to your regular schedule usually beats reacting." : "Calm markets are a good time to check your plan, not to change it."],
+  earnings: (st) => [st.ev && st.ev.kind === "Earnings" ? `Next big report: ${st.ev.title}, ${st.ev.when}.` : "Check the Earnings tab for the next big reports.", "Options usually price in a big move before results. A result that only matches expectations can still drop the stock.", "What the company says about the next quarter usually moves the price more than the last quarter’s numbers."],
+  buy: (st) => [st.ev ? `Options get pricier ahead of ${st.ev.title} and lose value right after it. Buying just before a big event means paying top price.` : "No big event soon, so option prices should be calmer. That favours buyers.", `VIX ${st.vixLvl != null ? st.vixLvl.toFixed(1) : "n/a"}: ${st.vixLvl > 25 ? "options are expensive, so you need a bigger move to profit." : st.vixLvl < 15 ? "options are cheap, which favours buying." : "option prices are normal."}`],
+  sell: (st) => [`VIX ${st.vixLvl != null ? st.vixLvl.toFixed(1) : "n/a"}: ${st.vixLvl > 25 ? "premium is rich, but moves are big. Wider strikes or smaller size." : st.vixLvl < 15 ? "premium is thin. Selling pays less for the same risk." : "premium is normal."}`, st.ev ? `${st.ev.title} (${st.ev.when}) is the risk event. Selling premium through it means accepting a possible big move.` : "Quiet calendar, which is when premium selling tends to work best."],
+  spreads: (st) => ["Expected moves are bigger on news days. Widths that worked last week may be too tight today.", st.bias !== "mixed" ? `News leans ${st.bias}, which favours ${st.bias === "up" ? "bullish" : "bearish"} spreads if price confirms.` : "No clear lean, so neutral structures fit better than directional ones."],
+  zero: (st) => [st.ev ? `${st.ev.title} (${st.ev.when}) can swing same-day options from zero to many times their price, or the reverse, within minutes.` : "No big release, so same-day moves will come from the open and the last hour.", "Same-day options lose value fastest in the afternoon. Late entries need a fast move to pay off."],
+  hedge: (st) => [st.vixLvl != null && st.vixLvl < 16 ? "Protection is cheap right now, which is when hedging costs the least." : "Protection is pricier right now, because fear is already elevated.", st.ev ? `If you want protection through ${st.ev.title}, it usually costs more the closer it gets.` : "No big event soon, so there is no rush."],
+  hold: (st) => ["For long-term holders, daily crypto news is mostly noise. The big drivers are interest rates, money flowing into crypto funds and regulation.", st.bias === "down" ? "Negative news days are when long-term holders often add slowly, rather than all at once." : "Strong days rarely need action from a long-term holder."],
+  swing: (st) => [`Over the next few days, the lean is ${st.bias === "mixed" ? "unclear" : st.bias}, and price is ${st.trend === "flat" ? "flat" : "trending " + st.trend}.`, st.ev ? `${st.ev.title} (${st.ev.when}) is the event that could flip the swing. Consider your position size going into it.` : "No big event ahead, so the trend is the main guide."],
+  perps: (st) => [st.ev ? `Leverage gets punished around ${st.ev.title}. Liquidations hit both sides when price spikes.` : "News days liquidate crowded positions. Check whether everyone is leaning one way.", st.volWord === "high" ? "Swings are large today. Lower leverage gives your stop room to work." : "Swings are normal, but leverage still turns small moves into big losses.", "Know where you’d be liquidated before you enter."],
+  narratives: (st) => [st.bias === "up" ? "Upbeat mood: money tends to rotate from Bitcoin into higher-risk sectors (AI coins, memecoins) next." : st.bias === "down" ? "Risk-off mood: money tends to rotate back into Bitcoin and stablecoins first." : "No clear mood, so rotations will be short-lived.", "The sector that holds up best on a red day is often the next leader."],
+  onchain: () => ["Watch whether big holders move coins onto exchanges after today’s news. That often comes before selling.", "Stablecoin inflows to exchanges are a sign buyers are getting ready."],
+  defi: () => ["Rate and regulation news change the appeal of on-chain yield.", "Check that the yield you see makes sense. Very high yields usually mean very high risk."],
+  launches: (st) => [st.bias === "down" || st.trend === "down" ? "In a weak market, new launches lose buyers fastest. Most fail within hours." : "In a strong market, launches get more attention, but most still go to zero.", "Check liquidity, whether it is locked, and who holds the supply before anything else."],
+  trending: (st) => [`Trending coins depend on the wider mood. ${st.keyName[0].toUpperCase() + st.keyName.slice(1)} is ${st.trend === "flat" ? "flat" : st.trend} today.`, "When Bitcoin wobbles, attention dries up quickly and trending coins drop first.", "Decide your exit before you enter. Memecoin trends end without warning."],
+  kols: (st) => [st.bias === "up" ? "Influencer calls work best in an upbeat market like this, but late followers still get caught." : "In a nervous market, influencer calls fade faster than usual.", "Check how much a coin has already moved before the call. If it has run, the easy part is gone."],
+  wallets: () => ["Smart wallets often reduce risk before big macro events. Watch whether the ones you follow are selling.", "Copying with a delay means worse prices. Size smaller than they do."],
+  unsure: (st) => ["Use today to watch rather than trade. Pick one market and see how it reacts to the briefing’s top story.", st.ev ? `Watch ${st.ev.title} (${st.ev.when}) and see how price reacts in the first 15 minutes. That teaches more than any article.` : "Notice how price behaves at the New York open. It is the busiest time of day."]
+};
+function fitFor(strat, st) {
+  const fast = ["ict", "news", "orderflow", "zero", "perps", "scalp", "trending", "launches", "kols"];
+  const slow = ["value", "growth", "dividends", "index", "hold", "carry"];
+  if (slow.includes(strat)) return { word: "Low impact", why: "Today’s news matters little for a long-term approach." };
+  if (st.evSoon && fast.includes(strat)) return { word: "Big day for this", why: "A major release is close. This is the kind of day this strategy is built for, and also when it is riskiest." };
+  if (st.volWord === "high") return { word: "Use caution", why: "Volatility is high, so moves are bigger and faster than usual." };
+  if (st.bias !== "mixed" && st.bias === st.trend && ["trend", "momentum", "pa", "swing", "ind", "ta", "charts", "narratives"].includes(strat)) return { word: "Lines up well", why: "Price and news point the same way, which suits this strategy." };
+  if (st.trend === "flat" && st.bias === "mixed" && ["trend", "momentum"].includes(strat)) return { word: "Poor fit today", why: "No trend and no news push. Trend strategies struggle here." };
+  return { word: "Normal day", why: "Nothing unusual. Stick to your rules." };
+}
+function playbookFor(prof, states) {
+  const out = [];
+  prof.forEach((x) => {
+    const st = states[x.m];
+    if (!st) return;
+    const strats = x.strats.length ? x.strats.filter((s2) => PLAY[s2]).slice(0, 3) : ["unsure"];
+    strats.forEach((s2) => {
+      const fit = fitFor(s2, st);
+      out.push({ market: x.m, strategy: s2, name: STRAT_NAMES[s2] || s2, fit: fit.word, fitWhy: fit.why, steps: PLAY[s2](st).filter(Boolean) });
+    });
+  });
+  return out;
+}
 function relevantFor(h, m) {
   const secs = SECTION_OF_MARKET[m] || [];
   return h.markets && h.markets.some((x) => secs.includes(x));
@@ -1763,6 +1892,10 @@ Pick the 4-6 most important stories, world events first. effects should only lis
   const allStories = (res.news && res.news.items || []).filter((h) => h.time && now - h.time < 18 * 36e5);
   out.briefing = briefingFor(allStories, prof, upcoming, focus);
   if (focus) out.outlook = out.outlook.filter((o) => (o.markets || []).includes(focus)).slice(0, 3);
+  const states = {};
+  prof.filter((x) => x.m !== "learning").forEach((x) => { states[x.m] = marketState(x.m, pick, out.briefing, outlook); });
+  out.next = (focus ? [focus] : Object.keys(states)).map((m) => nextFor(states[m] || marketState(m, pick, out.briefing, outlook)));
+  out.playbook = playbookFor(prof, states);
   if (!out.glance) {
     const top = stories.find((h) => h.why) || stories[0], o = outlook[0];
     out.glance = {
