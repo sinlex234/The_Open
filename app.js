@@ -230,7 +230,7 @@ function chartPicker(boxId, pickId, options, noteId) {
 function mountTicker() {
   const el = document.getElementById('tickerTape'); if (!el) return;
   const mine = myAssets().filter(a => a.tv).map(a => ({ proName: a.tv, title: a.id }));
-  const base = [{ proName: 'OANDA:NAS100USD', title: 'US100' }, { proName: 'OANDA:SPX500USD', title: 'US500' }, { proName: 'TVC:DXY', title: 'Dollar' }, { proName: 'OANDA:XAUUSD', title: 'Gold' }, { proName: 'BINANCE:BTCUSDT', title: 'BTC' }, { proName: 'TVC:US10Y', title: '10Y' }];
+  const base = [{ proName: 'OANDA:NAS100USD', title: 'US100' }, { proName: 'OANDA:SPX500USD', title: 'US500' }, { proName: 'FX:EURUSD', title: 'EUR/USD' }, { proName: 'OANDA:XAUUSD', title: 'Gold' }, { proName: 'BINANCE:BTCUSDT', title: 'BTC' }, { proName: 'BINANCE:ETHUSDT', title: 'ETH' }];
   const seen = new Set(); const symbols = [...mine, ...base].filter(x => !seen.has(x.proName) && seen.add(x.proName)).slice(0, 12);
   tvWidget(el, 'ticker-tape', { symbols, showSymbolLogo: true, isTransparent: true, displayMode: 'adaptive', colorTheme: tvTheme(), locale: 'en' }, 46);
 }
