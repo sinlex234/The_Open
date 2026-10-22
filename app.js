@@ -179,7 +179,8 @@ const rankStories = items => [...items].sort((a, b) => relevance(b) - relevance(
 // note: 'all' shows every relevant note, a number caps how many notes one list shows, 0 shows none
 function storyList(items, opts = {}) {
   let left = opts.notes === 'all' ? Infinity : opts.notes ?? 3;
-  return items.map(i => { const st = forYouStrength(i); const show = st >= 1 && left > 0; if (show) left--; return storyItem(i, { ...opts, fy: show, mark: st >= (opts.markAt || 1) }); }).join('');
+  const seenWhy = new Set();
+  return items.map(i => { const st = forYouStrength(i); const show = st >= 1 && left > 0; if (show) left--; const dup = i.why && seenWhy.has(i.why); if (i.why) seenWhy.add(i.why); return storyItem(dup ? { ...i, why: null } : i, { ...opts, fy: show, mark: st >= (opts.markAt || 1) }); }).join('');
 }
 function storyItem(i, { why = true, explain = false, fy: showFy = true, mark = null } = {}) {
   const fy = showFy ? forYouHeadline(i) : null;

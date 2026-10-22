@@ -922,7 +922,7 @@ var JUNK = [
 ];
 function cleanTitle(t) {
   return t.replace(/^(?:Global Market|Crypto Market News|Bitcoin News|Ethereum News|XRP News|On the Chain|Market Wrap|Markets?|Breaking|Exclusive|Update|Explainer|Analysis|Opinion|Stock Market Today|Forex)\s*[:|\-–]\s*/i, "")
-    .replace(/^[A-Z][\w&' ]{1,25}\.\.\s*/, "").replace(/\.{2,}(?!\.)/g, ". ").replace(/\s+/g, " ").trim();
+    .replace(/^[A-Z][\w&' ]{1,25}\.\.\s*/, "").replace(/\s+\|\s+[^|]{2,30}$/, "").replace(/\.{2,}(?!\.)/g, ". ").replace(/\s+/g, " ").trim();
 }
 function isJunk(i) {
   const t = i.title || "";
@@ -1538,7 +1538,8 @@ function rules2(prof, stories, refs, rows, pick, events, nextUp, res) {
   if (spx) sum.push(`US stocks are ${word(spx.pct, "higher", "lower")}${fmtP(spx.pct)}${eu ? `, Europe is ${word(eu.pct, "up", "down")}` : ""}${jp ? ` and Japan is ${word(jp.pct, "up", "down")}` : ""}.`);
   if (tnx && dxy) sum.push(`Bond yields are ${word(tnx.change, "rising", "falling")} and the dollar is ${word(dxy.pct, "stronger", "weaker")}.`);
   if (top) sum.push(`The biggest story right now: “${top.title}” (${top.source}).`);
-  const storiesOut = stories.slice(0, 5).map((h, i) => ({ ref: i + 1, headline: h.title, why: h.why || "", effects: [], since: h.reaction || null }));
+  const seenWhy = new Set();
+  const storiesOut = stories.slice(0, 5).map((h, i) => ({ ref: i + 1, headline: h.title, why: h.why && !seenWhy.has(h.why) && seenWhy.add(h.why) ? h.why : "", effects: [], since: h.reaction || null }));
   const across = [];
   if (spx) across.push({ area: "Stocks", text: `S&P 500 ${word(spx.pct, "up", "down")}${fmtP(spx.pct)}.${res.mv && res.mv.lines[3] ? " " + res.mv.lines[3] : ""}` });
   if (tnx) across.push({ area: "Bonds", text: `The 10-year yield is ${tnx.price.toFixed(2)}%, ${word(tnx.change, "up", "down")} today. Higher yields tend to weigh on stocks, especially tech.` });
@@ -1634,7 +1635,7 @@ async function build14(q = {}) {
   tokens.forEach((t) => {
     const sym = String(t.symbol || "").toUpperCase();
     if (!sym || tokenNews[sym]) return;
-    const parts = [sym.length >= 3 ? "\\b\\$?" + sym.replace(/[^A-Z0-9]/g, "") + "\\b" : null, t.name && t.name.length >= 4 ? "\\b" + t.name.replace(/[^\w ]/g, "").trim() + "\\b" : null].filter(Boolean);
+    const parts = [sym.length >= 3 ? "\\b\\$?" + sym.replace(/[^A-Z0-9]/g, "") + "\\b" : null, t.name && t.name.length >= 4 && /^[\x20-\x7e]+$/.test(t.name) ? "\\b" + t.name.replace(/[^\w ]/g, "").trim() + "\\b" : null].filter(Boolean);
     if (!parts.length) return;
     const re = new RegExp(parts.join("|"), "i");
     const hits = items.filter((i) => re.test(i.title)).slice(0, 3).map((i) => ({ title: i.title, link: i.link, source: i.source, time: i.time }));
