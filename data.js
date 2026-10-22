@@ -1768,7 +1768,7 @@ var PLAY = {
   ],
   momentum: (st) => PLAY.trend(st),
   fundamentals: (st) => [
-    st.top ? `The main driver right now: “${st.top.headline}”.` : "No single fundamental story is dominating today.",
+    st.top ? `The main driver right now: “${st.top.headline.replace(/[.!?\s]+$/, "")}.”` : "No single fundamental story is dominating today.",
     "Ask one question: does this change what central banks will do? If yes, the move can last days or weeks. If not, it usually fades.",
     st.ev ? `${st.ev.title} (${st.ev.when}) is the next data point that can change the rate outlook.` : "No big data due soon, so speeches by central bankers are the main risk."
   ],
