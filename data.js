@@ -1212,7 +1212,7 @@ async function build11(lens = "general", level = "pro") {
     coming_up: nextUp.map((e) => ({ when: new Date(e.time).toLocaleString("en-US", { timeZone: "America/New_York", weekday: "short", hour: "numeric", minute: "2-digit" }), name: e.name, country: e.country })),
     stories: refs.map((r) => ({ ref: r.i, title: r.title, source: r.source, minutes_ago: Math.round((now - r.time) / 6e4), price_since: r.reaction ? `${r.reaction.label} ${r.reaction.change > 0 ? "+" : ""}${r.reaction.change} ${r.reaction.unit}` : null }))
   };
-  let out = null;
+  let out = null, aiStatus = hasAI() ? "ok" : "no key";
   if (hasAI()) {
     try {
       const ai = await askClaude({
@@ -1228,10 +1228,11 @@ Return ONLY JSON: {"headline": "under 80 chars, what is moving and why", "big_pi
       }
     } catch (e) {
       out = null;
+      aiStatus = "error: " + String(e.message || e).slice(0, 160);
     }
   }
   if (!out) out = rules(snap, stories, refs, res, events, nextUp, lens, level);
-  return { ...out, refs, lens, level, updated: now };
+  return { ...out, refs, lens, level, aiStatus, updated: now };
 }
 function rules(snap, stories, refs, res, events, nextUp, lens, level) {
   const dir = (p) => p > 0.05 ? "up" : p < -0.05 ? "down" : "flat";
@@ -1295,6 +1296,7 @@ Return ONLY JSON: {"what": "1-2 sentences, what happened in plain English", "why
       });
       if (ai && ai.what) return { ...ai, source: "ai" };
     } catch (e) {
+      var aiErr = String(e.message || e).slice(0, 160);
     }
   }
   return {
@@ -1302,7 +1304,8 @@ Return ONLY JSON: {"what": "1-2 sentences, what happened in plain English", "why
     why: tag.why || "It may not move the big markets much on its own.",
     reaction: reaction2 ? `Since the story broke: ${reaction2}.` : "Too early or not measurable yet.",
     for_you: tag.markets && tag.markets.length ? `It mainly touches ${tag.markets.map((m) => ({ futures: "index futures", forex: "currencies", crypto: "crypto", memes: "memecoins", options: "options" })[m] || m).join(", ")}.` : "",
-    source: "rules"
+    source: "rules",
+    aiStatus: hasAI() ? "error: " + (typeof aiErr !== "undefined" ? aiErr : "unknown") : "no key"
   };
 }
 
