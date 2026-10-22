@@ -1451,14 +1451,140 @@ function moodLine(pick) {
   if (tnx && Math.abs(tnx.change) > 0.05) return `Bond yields are moving (${tnx.change > 0 ? "up" : "down"}), and that is setting the tone.`;
   return "The mood is calm. Markets are waiting for the next big piece of news.";
 }
+// ---------- briefing: likely effect, what to watch, how price reacted ----------
+var POS_RE = /\b(rall(y|ies|ied)|surg(e|es|ed)|soar(s|ed)?|jump(s|ed)?|climb(s|ed)?|gain(s|ed)?|ris(e|es|ing)|rose|record high|beat(s)?|tops? (estimates|forecasts)|upgrade[sd]?|deal|agreement|ceasefire|truce|eas(e|es|ing)|cool(s|ing|er|ed)?|rate cuts?|cuts? rates|stimulus|inflows?|approv(e|es|ed|al)|rebound(s|ed)?|recover(s|ed|y)?|strong demand)\b/i;
+var NEG_RE = /\b(fall(s|ing)?|fell|drop(s|ped)?|slump(s|ed)?|plung(e|es|ed)|tumbl(e|es|ed)|sink(s)?|sank|slid(e|es)?|sell-?off|miss(es|ed)?|warn(s|ed|ing)?|downgrade[sd]?|tariffs?|sanctions?|attack(s|ed)?|strikes? on|war\b|escalat\w*|hike[sd]?|hotter|sticky|outflows?|crash(es|ed)?|recession|layoffs?|default|probe|ban(s|ned)?|delay(s|ed)?|retreat(s|ed)?|slip(s|ped)?|weak(er|ens|ening)?|curbs?|seize[sd]?|fraud|hack(ed)?|exploit)\b/i;
+var FLIP_RE = /hopes? (fade|dim|wane)|less likely|pushe?s? back|unlikely to cut|no rush to cut/i;
+function riskTone(t) {
+  const p = t.search(POS_RE), n = t.search(NEG_RE);
+  let d = p < 0 && n < 0 ? 0 : p < 0 ? -1 : n < 0 ? 1 : p < n ? 1 : -1;
+  if (FLIP_RE.test(t)) d = -1;
+  return d;
+}
+function hawkTone(t) {
+  if (FLIP_RE.test(t)) return 1;
+  if (/\b(hike[sd]?|hot(ter)?|sticky|strong(er)? (jobs|payrolls|hiring)|higher for longer|tighten\w*|hawkish|unexpectedly rises|accelerat\w*)\b/i.test(t)) return 1;
+  if (/\b(rate cuts?|cuts? rates|cool(s|ing|er|ed)?|eas(e|es|ing)|weak(er)? (jobs|payrolls|hiring)|slow(s|ing|ed)?|dovish|soft(er|ens)?|layoffs?|jobless claims rise)\b/i.test(t)) return -1;
+  return 0;
+}
+var CCY_WORDS = { USD: /\b(dollar|greenback|usd)\b/i, EUR: /\b(euro|ecb|lagarde)\b/i, JPY: /\b(yen|boj|bank of japan)\b/i, GBP: /\b(pound|sterling|bank of england|boe)\b/i, CHF: /\b(franc|snb)\b/i, AUD: /\b(aussie|australian dollar|rba)\b/i, CAD: /\b(loonie|canadian dollar|bank of canada)\b/i, CNY: /\b(yuan|renminbi|pboc)\b/i };
+var CCY_UP = /\b(strengthens?|gains?|rises?|jumps?|rall(y|ies)|firms?|climbs?|surges?|hike[sd]?|hawkish)\b/i;
+var CCY_DOWN = /\b(weakens?|falls?|slips?|slides?|drops?|slumps?|tumbles?|cuts?|dovish|declines?|struggles?)\b/i;
+function ccyTone(t, theme) {
+  const out = {};
+  Object.entries(CCY_WORDS).forEach(([c, re]) => {
+    if (!re.test(t)) return;
+    const up = CCY_UP.test(t), dn = CCY_DOWN.test(t);
+    if (up && !dn) out[c] = 1; else if (dn && !up) out[c] = -1;
+  });
+  if (out.USD == null && ["rates", "inflation", "jobs"].includes(theme) && /\b(fed|fomc|powell|u\.?s\.?|us|american|treasury|cpi|payrolls?|jobless|wall street)\b/i.test(t)) {
+    const h = hawkTone(t); if (h) out.USD = h;
+  }
+  return out;
+}
+var ASSET_LABEL = (id) => /^[A-Z]{6}$/.test(id) ? id.slice(0, 3) + "/" + id.slice(3) : id === "index" ? "Index funds" : id;
+var WHY_DIR = {
+  ratesUp: { risk: "Higher rates for longer usually weigh on stocks, tech the most.", crypto: "Rate worries tend to pull money out of crypto first.", fx: "Higher US rates usually lift the dollar." },
+  ratesDown: { risk: "Lower rates make stocks, especially tech, more attractive.", crypto: "Rate-cut hopes tend to pull money into crypto.", fx: "Rate-cut talk usually weakens the dollar." },
+  oilUp: { risk: "Pricier oil feeds inflation worries, which weighs on stocks." },
+  oilDown: { risk: "Cheaper oil eases inflation worries, which helps stocks." },
+  good: { risk: "Good news for risk appetite, so buyers usually step in.", crypto: "Upbeat news for crypto. Smaller coins usually move more than Bitcoin." },
+  bad: { risk: "Bad news for risk appetite, so sellers usually step in first.", crypto: "Negative crypto news. Smaller coins usually fall harder than Bitcoin." }
+};
+function effectsFor(h, prof) {
+  const t = h.title, theme = h.theme;
+  const out = [];
+  const tone = riskTone(t), hawk = hawkTone(t), ccy = ccyTone(t, theme);
+  const oil = theme === "energy" ? (/\b(oil|crude|brent|opec)\b/i.test(t) ? riskTone(t.replace(/opec\+?/i, "")) : 0) : 0;
+  prof.forEach((x) => {
+    const m = x.m;
+    if (m === "learning") return;
+    const mine = relevantFor(h, m) || (h.markets || []).includes(m) || (m === "stocks" && (h.markets || []).includes("futures"));
+    if (!mine) return;
+    const labels = x.assets.length && !["memes"].includes(m) ? x.assets.filter((a) => !(/^M[A-Z]{1,3}$/.test(a) && x.assets.includes(a.slice(1)))).slice(0, 2).map(ASSET_LABEL).join(", ") : { stocks: "Stocks", futures: "Index futures", options: "Stocks", crypto: "Crypto", memes: "Memecoins", forex: "Dollar" }[m];
+    if (m === "forex") {
+      const pairs = x.assets.filter((a) => /^[A-Z]{6}$/.test(a));
+      const list = pairs.length ? pairs : ["EURUSD"];
+      list.slice(0, 2).forEach((p) => {
+        const b = p.slice(0, 3), q = p.slice(3);
+        const d = (ccy[b] || 0) - (ccy[q] || 0);
+        const dir = d > 0 ? "up" : d < 0 ? "down" : "mixed";
+        const reason = ccy.USD && (b === "USD" || q === "USD") ? (ccy.USD > 0 ? WHY_DIR.ratesUp.fx : WHY_DIR.ratesDown.fx) : dir === "mixed" ? "No clear push on this pair yet. Watch the first reaction." : `The story points to a ${d > 0 ? "stronger " + b : "stronger " + q}.`;
+        out.push({ market: m, label: ASSET_LABEL(p), dir, reason });
+      });
+      return;
+    }
+    let d = 0, reason = "";
+    const crypto = m === "crypto" || m === "memes";
+    const foreignCB = theme === "rates" && /\b(ecb|lagarde|boj|bank of japan|boe|bank of england|snb|rba|bank of canada|pboc)\b/i.test(t) && !/\b(fed|fomc|powell)\b/i.test(t);
+    if (foreignCB) {
+      if (/\b(boj|bank of japan)\b/i.test(t) && hawk > 0) { d = -1; reason = "A stronger yen can force traders to unwind bets funded in yen, which has hit stocks and crypto before."; }
+      else { d = 0; reason = "Mostly a currency story. Your market usually feels it only if the move is big."; }
+    }
+    else if (["rates", "inflation", "jobs"].includes(theme) && hawk) { d = -hawk; reason = (hawk > 0 ? WHY_DIR.ratesUp : WHY_DIR.ratesDown)[crypto ? "crypto" : "risk"]; }
+    else if (theme === "energy" && oil) { d = -oil; reason = (oil > 0 ? WHY_DIR.oilUp : WHY_DIR.oilDown).risk; }
+    else if (tone) { d = tone; reason = (tone > 0 ? WHY_DIR.good : WHY_DIR.bad)[crypto && ["crypto", "memes"].includes(theme) ? "crypto" : "risk"]; }
+    if (m === "memes" && !["memes", "crypto"].includes(theme) && d) reason += " Memecoins usually move more than the rest of crypto.";
+    out.push({ market: m, label: labels, dir: d > 0 ? "up" : d < 0 ? "down" : "mixed", reason: reason || "Direction unclear. Watch the first reaction." });
+  });
+  return out;
+}
+var WATCH_THEME = {
+  rates: /fomc|fed|powell|ecb|boe|boj|rate|monetary|cpi|pce/i, inflation: /cpi|ppi|pce|inflation/i, jobs: /non-?farm|payroll|employment|claims|jobless/i,
+  growth: /gdp|retail|pmi|ism|sentiment/i, energy: /crude|oil|inventor/i, dollar: /cpi|fomc|rate|non-?farm/i
+};
+var WATCH_DEFAULT = {
+  rates: "Whether bond yields keep moving the same way over the next session.",
+  inflation: "The next inflation number. One reading rarely settles the debate.",
+  jobs: "The next jobs data and how Fed officials react to it.",
+  growth: "Whether the next round of data confirms the trend.",
+  earnings: "The next-day reaction. What the company says about the coming months often matters more than the results.",
+  ai: "Whether other chip and AI stocks follow. The big names move the Nasdaq.",
+  trade: "An official confirmation or walk-back. Early trade headlines often get revised.",
+  world: "Whether it escalates. If the next update is calm, early drops are often bought back.",
+  gov: "Whether it turns into real policy or money. Talk alone usually fades.",
+  energy: "Whether oil holds the move into the US session.",
+  gold: "Whether the dollar and yields keep moving the other way.",
+  dollar: "The next US data release. It decides whether the dollar move sticks.",
+  crypto: "Whether Bitcoin holds the move for the next few hours. Weekend and overnight moves often reverse.",
+  memes: "Whether volume stays high. When attention fades, memecoins fall fast.",
+  options: "The VIX. A jump means bigger swings are coming."
+};
+function watchFor(h, upcoming) {
+  const re = WATCH_THEME[h.theme];
+  const ev = re ? upcoming.find((e) => re.test(e.name) || re.test(e.title || "")) : null;
+  if (ev) return `${ev.country === "USD" ? "US " : ""}${ev.name}, ${whenTxt(ev.time)}. That release can confirm or undo this move.`;
+  return WATCH_DEFAULT[h.theme] || "How prices behave in the next session. A move that holds usually matters more than the first spike.";
+}
+function briefingFor(stories, prof, upcoming, focus) {
+  const mk = prof.map((x) => x.m);
+  const rel = (h) => mk.some((m) => relevantFor(h, m) || (h.markets || []).includes(m));
+  let pool = stories.filter((h) => h.theme);
+  if (focus) pool = pool.filter((h) => relevantFor(h, focus) || (h.markets || []).includes(focus));
+  const DIRECT = { memes: ["memes", "crypto"], crypto: ["crypto", "memes"], forex: ["dollar", "rates", "gold", "inflation", "jobs"], futures: ["earnings", "ai", "rates", "inflation", "jobs"], stocks: ["earnings", "ai", "rates", "growth"], options: ["options", "earnings", "rates"] };
+  const direct = (h) => (focus ? [focus] : mk).some((m) => (DIRECT[m] || []).includes(h.theme));
+  const clear = (h) => effectsFor(h, prof).some((e) => e.dir !== "mixed");
+  const ranked = pool.map((h) => ({ h, s: (h.score || 0) + (rel(h) ? 30 : 0) + (direct(h) ? 15 : 0) + (clear(h) ? 10 : 0) + (h.reaction && Math.abs(h.reaction.change) > 0 ? 5 : 0) })).sort((a, b) => b.s - a.s);
+  const out = [], themes = {};
+  for (const { h } of ranked) {
+    if (out.length >= 3) break;
+    if ((themes[h.theme] || 0) >= 2) continue;
+    themes[h.theme] = (themes[h.theme] || 0) + 1;
+    out.push({ headline: h.title, link: h.link, source: h.source, time: h.time, topic: h.themeLabel, why: h.why || "", effects: effectsFor(h, prof).slice(0, 3), watch: watchFor(h, upcoming), since: h.reaction || null });
+  }
+  return out;
+}
 function relevantFor(h, m) {
   const secs = SECTION_OF_MARKET[m] || [];
   return h.markets && h.markets.some((x) => secs.includes(x));
 }
 async function build11(q = {}) {
-  const prof = parseProfile(q.p);
+  let prof = parseProfile(q.p);
   const level = q.lvl === "beginner" ? "beginner" : "pro";
   const detail = ["quick", "deep"].includes(q.d) ? q.d : "balanced";
+  const focus = ALL_M.includes(String(q.focus || "")) ? String(q.focus) : null;
+  if (focus) prof = prof.filter((x) => x.m === focus).concat(prof.some((x) => x.m === focus) ? [] : [{ m: focus, strats: [], assets: [], hold: [] }]);
+  if (!prof.length) prof = [{ m: "futures", strats: [], assets: [], hold: [] }, { m: "forex", strats: [], assets: [], hold: [] }, { m: "crypto", strats: [], assets: [], hold: [] }];
   const { res } = await settle({ world: build13(), news: build8("all"), cal: build(), mv: build9(), earn: build5() });
   const now = Date.now(), today = ny(now).date;
   const rows = res.world ? res.world.groups.flatMap((g) => g.rows.map((r) => ({ ...r, group: g.name, gid: g.id }))) : [];
@@ -1518,6 +1644,10 @@ Pick the 4-6 most important stories, world events first. effects should only lis
   }
   if (!out) out = rules2(prof, stories, refs, rows, pick, events, nextUp, res);
   if (!out.outlook) out.outlook = outlook;
+  const upcoming = (res.cal && res.cal.events || []).filter((e) => e.time > now && e.impact !== "Low" && (e.country === "USD" || e.impact === "High"));
+  const allStories = (res.news && res.news.items || []).filter((h) => h.time && now - h.time < 18 * 36e5);
+  out.briefing = briefingFor(allStories, prof, upcoming, focus);
+  if (focus) out.outlook = out.outlook.filter((o) => (o.markets || []).includes(focus)).slice(0, 3);
   if (!out.glance) {
     const top = stories.find((h) => h.why) || stories[0], o = outlook[0];
     out.glance = {

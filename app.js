@@ -281,14 +281,46 @@ function leadHTML(d) {
 function guideHTML() {
   if (store.get('guideDone', false)) return '';
   return `<section class="guide" id="guide"><button class="x" id="guideX" aria-label="Hide this guide">×</button>
-    <h2>New here? Start with these four things</h2>
-    <p>The Open One tells you what’s happening in the world, what it means for markets, and what’s likely to happen next.</p>
+    <h2>How to use The Open One</h2>
+    <p>Everything is built around one question: what’s happening in the world, and what will it likely do to the market you trade?</p>
     <ol>
-      <li><b>Read “Today at a glance”</b>Three lines: what happened, what it means, and what’s likely next.</li>
-      <li><b>Check “What’s likely next”</b>The scheduled events ahead, with what usually happens if they surprise up or down.</li>
-      <li><b>Open your market’s tab</b>Tabs with a blue dot match your setup. Each one has prices, a live chart and the news for that market.</li>
-      <li><b>Stuck on a word?</b>Every term is explained in plain English in the <a href="#glossary">Glossary</a>.</li>
+      <li><b>Read Today’s briefing</b>The 3 stories that matter most for you, what they’ll likely do to your market, and what to watch next.</li>
+      <li><b>Check your prices</b>Your markets and a live chart sit right next to the briefing.</li>
+      <li><b>See what’s likely next</b>Upcoming events, and what usually happens if they surprise up or down.</li>
+      <li><b>Go deeper in your tab</b>Tabs with a blue dot are your markets. Each opens with its own briefing. Stuck on a word? Try the <a href="#glossary">Glossary</a>.</li>
     </ol></section>`;
+}
+const DIR_TXT = { up: '↑ Likely up', down: '↓ Likely down', mixed: '↕ Unclear' };
+function briefingHTML(d, { empty = 'No major stories for this market right now.' } = {}) {
+  const list = d.briefing || [];
+  if (!list.length) return `<li class="empty">${esc(empty)}</li>`;
+  const showWhy = isBeginner() || depth() === 'deep';
+  const seenWhy = new Set();
+  const group = effs => { const g = []; (effs || []).forEach(e => { const k = e.dir + '|' + e.reason; const f = g.find(x => x.k === k); if (f) f.label += ' · ' + e.label; else g.push({ ...e, k }); }); return g; };
+  return list.map((b, i) => { const dupWhy = b.why && seenWhy.has(b.why); if (b.why) seenWhy.add(b.why); b = { ...b, why: dupWhy ? '' : b.why, effects: group(b.effects) }; return `<li class="bc">
+    <span class="bn">${String(i + 1).padStart(2, '0')}</span>
+    <div class="bb">
+      <a class="bh" href="${esc(b.link)}" target="_blank" rel="noopener">${esc(b.headline)}</a>
+      <p class="bm">${esc(b.source || '')}${b.time ? ' · ' + ago(b.time) : ''}${b.topic ? ' · ' + esc(b.topic) : ''}</p>
+      ${showWhy && b.why ? `<p class="bwhy">${esc(b.why)}</p>` : ''}
+      <div class="brow"><span class="bl">Likely effect</span><div>${b.effects && b.effects.length ? b.effects.map(e => `<div class="beff"><span class="pill ${e.dir === 'up' ? 'up' : e.dir === 'down' ? 'down' : ''}"><b>${esc(e.label)}</b> ${DIR_TXT[e.dir] || ''}</span><span class="br">${esc(e.reason)}</span></div>`).join('') : '<span class="br">Little direct effect on your markets.</span>'}</div></div>
+      <div class="brow"><span class="bl">Watch next</span><div><span class="br">${esc(b.watch)}</span></div></div>
+      ${b.since ? `<div class="brow"><span class="bl">Already moved</span><div>${reactTxt(b.since)}</div></div>` : ''}
+    </div></li>`; }).join('') + `<li class="bnote">“Likely” is the usual reaction to news like this, not a promise. Check “Already moved” to see what price actually did.</li>`;
+}
+function marketBriefing(id, focus, label) {
+  return { html: `<section class="mbrief"><div class="sec-row"><h2 class="sec">Briefing for ${esc(label)}</h2><a href="#news">All news</a></div><ol class="bfeed" id="${id}"></ol></section>`,
+    load: () => fill(id, 'the briefing', api('desk?' + profileQuery() + '&focus=' + focus, 5 * 60e3), d => briefingHTML(d)) };
+}
+function pricesHTML(D) {
+  const views = myAssets().map(a => assetView(a, D)).filter(Boolean).slice(0, 8);
+  const today = nyParts().date;
+  const evs = (D.cal ? D.cal.events : []).filter(e => nyParts(e.time).date === today && e.time > Date.now() && forYouEvent(e));
+  const tip = isProp() && newsRestricted() && evs.some(e => e.impact === 'High') ? 'Your prop firm restricts trading around big news, and there is big news today.' : '';
+  return `<h2 class="sec">Your markets</h2>
+    ${views.length ? `<table class="mytable">${views.map(v => `<tr><td>${esc(shortName(v.a))}${v.sectorName ? `<small>${esc(v.sectorName)} sector</small>` : v.meme ? `<small>Top promoted token</small>` : ''}</td><td>${v.meme ? (v.top[0] ? esc(v.top[0].symbol) : '—') : v.price != null ? (v.money ? '$' : '') + (v.unit === '%' ? num(v.price, 2) + '%' : num(v.price, v.dp)) : ''}</td><td>${v.meme ? (v.top[0] ? chg(v.top[0].ch24) : '') : chg(v.pct)}</td></tr>`).join('')}</table>` : '<p class="empty">Add the assets you trade in your setup to see them here.</p>'}
+    ${tip ? `<p class="tipline">${esc(tip)}</p>` : ''}
+    <div class="brief-actions"><button type="button" id="briefEdit">Edit my setup</button><button type="button" id="briefAlerts">Alerts</button></div>`;
 }
 function glanceHTML(d) {
   const g = d.glance; if (!g) return '';
@@ -353,46 +385,35 @@ function worldHTML(d, { rowsPer = 99, sparks = true } = {}) {
   return `<div class="wm">${d.groups.map(g => `<div class="wm-g"><h3>${esc(g.name)}</h3><table>${g.rows.slice(0, rowsPer).map(r => `<tr class="${mine.has(r.sym) ? 'mine' : ''}"><td class="n">${esc(r.label)}</td><td class="p">${priceOf(r)}</td><td class="c">${chg(r.pct)}</td>${sparks ? `<td class="s">${spark(r.spark)}</td>` : ''}</tr>`).join('')}</table></div>`).join('')}</div>`;
 }
 PAGES.today = () => {
+  const ws = windowStatus();
   if (layout(`
     ${guideHTML()}
-    <p class="eyebrow">Today at a glance</p>
-    <div class="glance" id="glance"><div>${skel(2)}</div></div>
+    <h1 class="page-h">${esc(greeting())}</h1>
+    <p class="page-intro" id="todayIntro">${isLearning() ? 'Here’s how today’s news connects to the markets you’re learning about.' : ws.text ? esc(ws.text) : 'Here’s what matters for your markets today.'}</p>
     <div class="front">
-      <article class="lead" id="lead" aria-live="polite"></article>
+      <section class="briefing"><div class="sec-row"><h2 class="sec">Today’s briefing</h2><a href="#news">All news</a></div><ol class="bfeed" id="bfeed">${'<li>' + skel(3) + '</li>'}</ol></section>
       <aside class="rail">
-        <section class="brief" id="brief"></section>
-        <section><h2 class="sec">Today’s calendar</h2><div id="railCal"></div><a class="more" href="#calendar">Full economic calendar</a></section>
+        <section id="myPrices"></section>
+        <section class="rail-chart"><div class="chart-h"><h2 class="sec">Live chart</h2></div><div class="chips tight" id="todayChartPick"></div><div id="todayChart" class="tvbox"></div></section>
       </aside>
     </div>
     <section class="block"><div class="sec-row"><h2 class="sec">What’s likely next</h2><a href="#calendar">Full calendar</a></div><div id="outlook"></div></section>
-    ${chartBlock('todayChart')}
-    <section class="block"><div class="sec-row"><h2 class="sec">Top stories</h2><a href="#news">All news</a></div><div class="grid2" id="top"></div></section>
-    <section class="block"><div class="topics" id="topics"></div></section>
+    <section class="block"><div class="sec-row"><h2 class="sec">More news by topic</h2><a href="#news">All news</a></div><div class="topics" id="topics"></div></section>
     <section class="block"><div class="sec-row"><h2 class="sec">World markets</h2><a href="#markets">All markets</a></div><div id="worldMini"></div></section>`)) {
     chartPicker('todayChart', 'todayChartPick', todayChartOptions());
     const gx = $('#guideX'); if (gx) gx.onclick = () => { store.set('guideDone', true); const g = $('#guide'); if (g) g.remove(); };
   }
   const deskP = api('desk?' + profileQuery(), 5 * 60e3);
-  const D = personalData();
   const wireP = api('wire?section=all', 60e3);
-  fill('lead', 'the front page', deskP, leadHTML);
-  fill('glance', 'today at a glance', deskP, glanceHTML);
+  fill('bfeed', 'today’s briefing', deskP, d => briefingHTML(d));
   fill('outlook', 'what’s likely next', deskP, outlookHTML);
-  fill('brief', 'your briefing', Promise.all([deskP.catch(() => null), D]), ([desk, d]) => briefHTML(desk, d)).then(() => {
+  fill('myPrices', 'your prices', personalData(), pricesHTML).then(() => {
     const e = $('#briefEdit'); if (e) e.onclick = editSetup; const al = $('#briefAlerts'); if (al) al.onclick = openAlerts;
   });
-  fill('railCal', 'the calendar', api('calendar', 10 * 60e3), d => {
-    const n = nyParts();
-    const ev = d.events.filter(e => nyParts(e.time).date === n.date && (e.country === 'USD' || e.impact === 'High') && e.impact !== 'Low');
-    return ev.length ? ev.map(e => eventRow(e, true, false)).join('') : '<p class="empty">Nothing important is scheduled today.</p>';
+  fill('topics', 'news sections', Promise.all([wireP, deskP.catch(() => null)]), ([d, desk]) => {
+    const used = new Set(desk ? (desk.briefing || []).map(b => b.link) : []);
+    return topicsHTML(d.items.filter(i => !used.has(i.link)));
   });
-  fill('top', 'top stories', Promise.all([wireP, deskP.catch(() => null)]), ([d, desk]) => {
-    const inLead = new Set(desk ? (desk.stories || []).map(s => (desk.refs[s.ref - 1] || {}).link).filter(Boolean) : []);
-    const top = rankStories(d.items.filter(i => i.time && Date.now() - i.time < 24 * 36e5 && i.impact !== 'low' && !inLead.has(i.link))).slice(0, 10);
-    const half = Math.ceil(top.length / 2);
-    return `<ul class="slist">${storyList(top.slice(0, half), { notes: 2 })}</ul><ul class="slist">${storyList(top.slice(half), { notes: 2 })}</ul>`;
-  });
-  fill('topics', 'news sections', wireP, d => topicsHTML(d.items));
   fill('worldMini', 'world markets', api('world', 120e3), d => worldHTML({ groups: d.groups.filter(g => g.id !== 'fut' && g.id !== 'vol') }, { rowsPer: 3, sparks: false }));
 };
 
@@ -499,8 +520,10 @@ function marketNews(id, section, n = 8) { fill(id, 'news', api('wire?section=' +
 // ---------- Stocks & futures ----------
 PAGES.futures = () => {
   const lv = levelTrader();
+  const fb = marketBriefing('futBrief', 'futures', 'stocks and futures');
   if (layout(`<h1 class="page-h">Stocks and futures</h1>
     <p class="page-intro" id="futIntro"></p>
+    ${fb.html}
     <div id="futQuotes"></div>
     ${chartBlock('futChart')}
     ${lv ? '<section class="block"><h2 class="sec">Key levels</h2><div id="futLevels"></div></section>' : ''}
@@ -513,6 +536,7 @@ PAGES.futures = () => {
     const mine = myAssets().filter(a => a.tv && !a.ccy && a.chain === undefined && !/^(BTC|ETH|SOL|XRP|BNB|DOGE|alts)$/.test(a.id));
     chartPicker('futChart', 'futChartPick', [...mine.map(a => ({ id: shortName(a), tv: a.tv })), { id: 'S&P 500', tv: 'OANDA:SPX500USD' }, { id: 'Nasdaq 100', tv: 'OANDA:NAS100USD' }, { id: 'Dow', tv: 'OANDA:US30USD' }, { id: 'Russell 2000', tv: 'OANDA:US2000USD' }]);
   }
+  fb.load();
   if (intraday() || lv) recapSection('futRecap', 'futRecapPick', ['NQ', 'ES']);
   const d = api('markets?section=futures');
   fill('futIntro', 'summary', d, x => esc(x.macro.join(' ') || 'Here’s how US stocks and index futures are trading.'));
@@ -529,8 +553,10 @@ PAGES.futures = () => {
 // ---------- Forex ----------
 PAGES.forex = () => {
   const lv = levelTrader();
+  const fb = marketBriefing('fxBrief', 'forex', 'forex');
   if (layout(`<h1 class="page-h">Forex</h1>
     <p class="page-intro" id="fxIntro"></p>
+    ${fb.html}
     <div class="grid2"><section><h2 class="sec">Strongest to weakest today</h2><div id="fxStrength"></div></section><section><h2 class="sec">Pairs</h2><div class="qgrid" id="fxQuotes"></div></section></div>
     ${chartBlock('fxChart')}
     ${lv ? '<section class="block"><h2 class="sec">Key levels</h2><div id="fxLevels"></div></section>' : ''}
@@ -542,6 +568,7 @@ PAGES.forex = () => {
     const mine = myAssets().filter(a => a.ccy);
     chartPicker('fxChart', 'fxChartPick', [...mine.map(a => ({ id: a.short, tv: a.tv })), { id: 'EUR/USD', tv: 'FX:EURUSD' }, { id: 'GBP/USD', tv: 'FX:GBPUSD' }, { id: 'USD/JPY', tv: 'FX:USDJPY' }, { id: 'Gold', tv: 'OANDA:XAUUSD' }]);
   }
+  fb.load();
   if (intraday() || lv) recapSection('fxRecap', 'fxRecapPick', ['EURUSD', 'GBPUSD', 'USDJPY', 'GOLD']);
   const d = api('markets?section=forex');
   fill('fxIntro', 'summary', d, x => esc((x.strength && x.strength.length > 1 ? `The ${x.strength[0].ccy} is the strongest currency today and the ${x.strength[x.strength.length - 1].ccy} the weakest. ` : '') + x.macro.join(' ')));
@@ -557,8 +584,10 @@ PAGES.forex = () => {
 
 // ---------- Crypto ----------
 PAGES.crypto = () => {
+  const fb = marketBriefing('cBrief', 'crypto', 'crypto');
   if (layout(`<h1 class="page-h">Crypto</h1>
     <div class="front"><div><div class="page-intro" id="cIntro"></div></div><aside><h2 class="sec">Crypto mood</h2><div id="cMood"></div></aside></div>
+    ${fb.html}
     ${chartBlock('cChart')}
     ${levelTrader() ? '<section class="block"><h2 class="sec">Bitcoin levels</h2><div id="cBtc"></div></section>' : ''}
     ${recapBlock('cRecap')}
@@ -570,6 +599,7 @@ PAGES.crypto = () => {
     const mine = myAssets().filter(a => /^(BTC|ETH|SOL|XRP|BNB|DOGE|alts)$/.test(a.id));
     chartPicker('cChart', 'cChartPick', [...mine.map(a => ({ id: a.label, tv: a.tv })), { id: 'Bitcoin', tv: 'BINANCE:BTCUSDT' }, { id: 'Ethereum', tv: 'BINANCE:ETHUSDT' }, { id: 'Solana', tv: 'BINANCE:SOLUSDT' }]);
   }
+  fb.load();
   if (intraday() || levelTrader()) recapSection('cRecap', 'cRecapPick', ['BTC']);
   const d = api('crypto');
   fill('cIntro', 'summary', d, x => x.lines.map(l => esc(l)).join(' ') + (x.summary ? ` All crypto together is worth ${big(x.summary.mcap)}.` : ''));
@@ -598,20 +628,19 @@ function tokenCard(t, news, mine) {
   </article>`;
 }
 PAGES.memes = () => {
+  const fb = marketBriefing('mBrief', 'memes', 'memecoins');
   layout(`<h1 class="page-h">Memecoins</h1>
     <p class="page-intro">What each coin is about, the news moving memecoins, and what it means for the market you trade. Most new tokens go to zero, so read the warnings on each card.</p>
     <div class="mood" id="mMood"></div>
-    <div class="grid2">
-      <section><h2 class="sec">News moving memecoins</h2><ul class="drivers" id="mDrivers"></ul></section>
-      <section><h2 class="sec">What it means for you</h2><ul class="fyl" id="mFor"></ul><p class="small faint" id="mIntro" style="margin-top:14px"></p></section>
-    </div>
+    ${fb.html}
+    <section class="block card"><h2 class="sec">What it means for you</h2><ul class="fyl" id="mFor"></ul><p class="small faint" id="mIntro" style="margin-top:14px"></p></section>
     <section class="block"><div class="sec-row"><h2 class="sec">The established names</h2></div><div class="mgrid" id="mMajors"></div></section>
     <section class="block"><div class="sec-row"><h2 class="sec">Getting the most attention right now</h2></div><p class="small faint" style="margin:-6px 0 14px">“Promoted” tokens are ones someone paid to put in front of buyers on DexScreener. That’s attention, not quality.</p><div class="mgrid" id="mHot"></div></section>`);
   const chains = myAssets().map(a => a.chain).filter(Boolean);
   const d = api('memes');
   const md = api('memedesk?' + profileQuery(), 3 * 60e3);
   fill('mMood', 'the memecoin mood', md, x => `<span class="gauge ${esc(x.mood.word)}">${esc(x.mood.word)}</span><div><p>${esc(x.mood.text)}</p>${x.summary ? `<p>${esc(x.summary)}</p>` : ''}</div>`);
-  fill('mDrivers', 'news', md, x => x.drivers.length ? x.drivers.map(n => `<li><a href="${esc(n.link)}" target="_blank" rel="noopener">${esc(n.title)}</a><div class="meta"><span>${esc(n.theme || '')}</span><span>${esc(n.source)}</span><span>${ago(n.time)}</span></div>${n.effect ? `<p class="eff-line">${esc(n.effect)}</p>` : ''}</li>`).join('') : '<li class="empty">No fresh stories right now.</li>');
+  fb.load();
   fill('mFor', 'your notes', md, x => x.forYou.length ? x.forYou.map(f => `<li><b>${esc(marketLabel(f.market))}</b>${esc(f.text)}</li>`).join('') : '<li class="empty">Add your markets in setup to see what memecoin news means for them.</li>');
   fill('mIntro', 'summary', d, x => esc(x.lines.join(' ')));
   const both = Promise.all([d, md.catch(() => ({ tokenNews: {} }))]);
@@ -621,14 +650,17 @@ PAGES.memes = () => {
 
 // ---------- Options ----------
 PAGES.options = () => {
+  const fb = marketBriefing('oBrief', 'options', 'options');
   layout(`<h1 class="page-h">Options</h1>
     <p class="page-intro" id="oIntro"></p>
+    ${fb.html}
     <section><h2 class="sec">How far the market is expected to move today</h2><div id="oEM"></div></section>
     <div class="grid2 block">
       <section><h2 class="sec">Fear gauges</h2><div class="qgrid" id="oVol"></div></section>
       <section><h2 class="sec">Expiration dates</h2><div id="oOpex"></div></section>
     </div>
     ${newsBlock('oNews', 'Stories moving options')}`);
+  fb.load();
   const d = api('markets?section=options');
   fill('oIntro', 'summary', d, x => esc([...(x.structure || []), ...x.macro].join(' ')));
   fill('oEM', 'expected move', d, x => x.expectedMove.length ? `<div class="em">${x.expectedMove.map(e => `<div class="em-c"><h3 class="sec" style="border:none;padding:0;margin:0">${esc(e.name)}</h3><p class="rng">± ${num(e.move, 0)} points</p><p class="muted">About ${(e.move / e.price * 100).toFixed(2)}% either way: ${num(e.price - e.move, 0)} to ${num(e.price + e.move, 0)}.</p></div>`).join('')}</div><p class="muted small">Roughly two days in three stay inside this range. Days that break well past it are unusual, and that’s often when trends start.</p>` : '<p class="empty">Not available.</p>');

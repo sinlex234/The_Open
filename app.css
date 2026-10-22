@@ -490,10 +490,39 @@ body.locked .mast,body.locked .strip,body.locked main,body.locked .foot{visibili
 .foot p{max-width:90ch;margin:0 0 6px}
 .foot a{color:var(--ink-2)}
 
+
+/* ---------- briefing ---------- */
+.bfeed{list-style:none;margin:0;padding:0;display:grid;gap:12px}
+.bc{display:grid;grid-template-columns:40px minmax(0,1fr);gap:4px;padding:20px 22px 18px 16px;border:1px solid var(--rule);border-radius:var(--r);background:var(--panel)}
+.bn{font:500 13px var(--mono);color:var(--ink-3);padding-top:3px}
+.bh{display:block;font:600 18px/1.35 var(--sans);letter-spacing:-.02em;text-decoration:none}
+.bh:hover{color:var(--acc-2)}
+.bm{margin:6px 0 0;font-size:12.5px;color:var(--ink-3)}
+.bwhy{margin:10px 0 0;font-size:14px;line-height:1.6;color:var(--ink-2)}
+.brow{display:grid;grid-template-columns:112px minmax(0,1fr);gap:12px;margin-top:14px;padding-top:12px;border-top:1px solid var(--rule)}
+.bl{font:500 11px/1.8 var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+.beff{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 10px}
+.beff+.beff{margin-top:8px}
+.beff .pill{white-space:normal;line-height:1.3}
+.front>*{min-width:0}
+.beff .pill b{font-weight:600}
+.br{font-size:14px;line-height:1.55;color:var(--ink-2)}
+.bnote{font-size:12px;color:var(--ink-3);padding:2px 4px}
+.mbrief{margin:0 0 36px}
+.rail-chart .chips{margin-bottom:10px}
+.rail .tvbox.chartbox{height:440px}
+.tipline{margin:12px 0 0;font-size:13px;color:var(--warn)}
+.card{background:var(--panel);border:1px solid var(--rule);border-radius:var(--r);padding:20px}
+@media (max-width:640px){
+  .bc{grid-template-columns:1fr;padding:16px}
+  .bn{display:none}
+  .brow{grid-template-columns:1fr;gap:4px}
+}
+
 /* ---------- responsive ---------- */
 @media (max-width:1100px){.exchanges{display:none}.guide ol{grid-template-columns:1fr 1fr}}
 @media (max-width:980px){
-  .front{grid-template-columns:1fr}
+  .front{grid-template-columns:minmax(0,1fr)}
   .rail{position:static}
   .topics{grid-template-columns:1fr 1fr}
   .grid2,.grid3{grid-template-columns:1fr}
