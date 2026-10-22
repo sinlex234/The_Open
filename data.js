@@ -840,7 +840,7 @@ function score(h) {
   if (/\b(fed|powell|cpi|payrolls|jobs report|fomc|tariff)\b/i.test(h.title)) s += 1;
   s += Math.min(3, (h.count - 1) * 0.8);
   const ageH = h.time ? (Date.now() - h.time) / 36e5 : 12;
-  s -= Math.min(3, ageH / 6);
+  s -= Math.min(2.5, ageH / 8);
   return s;
 }
 var norm = (t) => t.toLowerCase().replace(/[’']/g, "").replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter((w) => w.length > 3 && !STOP.has(w));
@@ -884,7 +884,7 @@ async function build8(section = "all") {
   }).map((h) => ({ ...h, score: score(h) }));
   if (section !== "all") items = items.filter((i) => i.markets.includes(section) || i.score > 3.5);
   items.forEach((h) => {
-    h.impact = h.score >= 4.5 ? "high" : h.score >= 2.5 ? "medium" : "low";
+    h.impact = h.score >= 3.8 ? "high" : h.score >= 2.2 ? "medium" : "low";
     h.breaking = h.impact === "high" && h.time && Date.now() - h.time < 45 * 6e4;
     h.id = (h.time || 0).toString(36) + "-" + norm(h.title).slice(0, 4).join("-");
   });
@@ -938,7 +938,7 @@ async function quote2(sym) {
   return { price, prev, pct: price != null && prev ? (price - prev) / prev * 100 : null, spark: c.bars.map((b) => b.c).filter((_, i, a) => a.length < 60 || i % Math.ceil(a.length / 60) === 0) };
 }
 async function build9() {
-  const jobs = { nq: yahooChart("NQ=F", { interval: "5m", range: "1d" }), news: build8("futures") };
+  const jobs = { nq: yahooChart("NQ=F", { interval: "5m", range: "5d" }), spy: yahooChart("SPY", { interval: "5m", range: "5d" }), news: build8("futures") };
   GIANTS.forEach(([s]) => {
     jobs["g:" + s] = quote2(s);
   });
@@ -946,8 +946,37 @@ async function build9() {
     jobs["s:" + s] = quote2(s);
   });
   const { res, errors } = await settle(jobs);
-  const nqPrice = res.nq ? res.nq.meta.regularMarketPrice ?? res.nq.bars.slice(-1)[0].c : null;
-  const nqPrev = res.nq ? res.nq.meta.chartPreviousClose ?? res.nq.meta.previousClose : null;
+  let nqPrice = null, nqPrev = null, window = null;
+  if (res.nq && res.spy) {
+    const reg = res.spy.bars.filter((b) => {
+      const n = ny(b.t);
+      return n.mins >= 570 && n.mins < 960;
+    });
+    const days = [...new Set(reg.map((b) => ny(b.t).date))];
+    if (days.length >= 2) {
+      const lastDay = days[days.length - 1], prevDay = days[days.length - 2];
+      const prevLast = reg.filter((b) => ny(b.t).date === prevDay).slice(-1)[0];
+      const curLast = reg.filter((b) => ny(b.t).date === lastDay).slice(-1)[0];
+      const at = (t) => {
+        let best = null;
+        for (const b of res.nq.bars) {
+          if (b.t <= t) best = b;
+          else break;
+        }
+        return best;
+      };
+      const a0 = at(prevLast.t), a1 = at(curLast.t);
+      if (a0 && a1) {
+        nqPrev = a0.c;
+        nqPrice = a1.c;
+        window = { from: prevLast.t + 5 * 6e4, to: curLast.t + 5 * 6e4, day: lastDay };
+      }
+    }
+  }
+  if (nqPrice == null && res.nq) {
+    nqPrice = res.nq.meta.regularMarketPrice ?? res.nq.bars.slice(-1)[0].c;
+    nqPrev = res.nq.meta.chartPreviousClose ?? res.nq.meta.previousClose;
+  }
   const news = res.news ? res.news.items : [];
   const giants = GIANTS.map(([sym, name, w, re]) => {
     const q = res["g:" + sym];
@@ -965,7 +994,7 @@ async function build9() {
   const lines = [];
   if (giants.length && nqChange != null) {
     const top = giants[0];
-    lines.push(`NQ is ${nqChange >= 0 ? "up" : "down"} ${Math.abs(nqChange).toFixed(0)} points today. The ${giants.length} biggest Nasdaq stocks account for about ${giantsTotal >= 0 ? "+" : ""}${giantsTotal.toFixed(0)} of those points.`);
+    lines.push(`During ${window ? window.day === ny(Date.now()).date ? "today\u2019s" : "the last" : "today\u2019s"} stock-market session NQ ${window && window.to < Date.now() - 10 * 6e4 ? "moved" : "is"} ${nqChange >= 0 ? "up" : "down"} ${Math.abs(nqChange).toFixed(0)} point${Math.abs(nqChange).toFixed(0) === "1" ? "" : "s"}. Between them, the ${giants.length} biggest Nasdaq stocks ${giantsTotal >= 0 ? "added" : "took off"} about ${Math.abs(giantsTotal).toFixed(0)} points.`);
     lines.push(`${top.name} is the biggest single driver, ${top.nqPts >= 0 ? "adding" : "taking off"} roughly ${Math.abs(top.nqPts).toFixed(0)} points (${top.pct >= 0 ? "+" : ""}${top.pct}%).`);
     const share = Math.abs(nqChange) > 1 ? giantsTotal / nqChange : null;
     if (share != null) lines.push(share > 0.7 ? "This move is mostly about a handful of giant stocks, not the whole market." : share < 0.3 ? "The move is broad: it\u2019s coming from across the market, not just the giants." : "Both the giants and the rest of the market are contributing.");
@@ -981,7 +1010,7 @@ async function build9() {
       else if (g - d > 0.5) lines.push("Money is moving into growth and tech: a confident mood.");
     }
   }
-  return { nq: nqPrice ? { price: nqPrice, change: nqChange } : null, giants, sectors, lines, giantsTotal: +giantsTotal.toFixed(1), errors, updated: Date.now() };
+  return { nq: nqPrice ? { price: nqPrice, change: nqChange, window } : null, giants, sectors, lines, giantsTotal: +giantsTotal.toFixed(1), errors, updated: Date.now() };
 }
 
 // api/recap.js
