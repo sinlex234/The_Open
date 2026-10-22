@@ -18,7 +18,7 @@ const store = {
 };
 function applyTheme() { const t = store.get('theme', null); if (t) document.documentElement.dataset.theme = t; else delete document.documentElement.dataset.theme; }
 applyTheme();
-$('#themeBtn').onclick = () => { store.set('theme', document.documentElement.dataset.theme === 'light' ? 'dark' : 'light'); applyTheme(); if (started) route(); };
+$('#themeBtn').onclick = () => { store.set('theme', document.documentElement.dataset.theme === 'light' ? 'dark' : 'light'); applyTheme(); if (started) { mountStrip(true); route(); } };
 
 // ---------- time ----------
 const nyParts = (t = Date.now()) => {
@@ -93,17 +93,21 @@ function tick() {
   $('#exchanges').innerHTML = EXCH.map(x => { const s = exchState(x); return `<li class="${s.open ? 'open' : ''}" title="${esc(s.tip)}">${esc(x.name)}</li>`; }).join('');
 }
 
-// ---------- market strip (our own prices, styled with the site) ----------
-const STRIP = ['^GSPC', '^IXIC', '^DJI', '^STOXX50E', '^N225', '^TNX', 'DX-Y.NYB', 'CL=F', 'GC=F', 'BTC-USD'];
-const STRIP_NAMES = { '^GSPC': 'S&P 500', '^IXIC': 'Nasdaq', '^DJI': 'Dow', '^STOXX50E': 'Europe', '^N225': 'Nikkei', '^TNX': '10Y yield', 'DX-Y.NYB': 'Dollar', 'CL=F': 'Oil', 'GC=F': 'Gold', 'BTC-USD': 'Bitcoin', 'NQ=F': 'NQ', 'ES=F': 'ES', 'EURUSD=X': 'EUR/USD', 'USDJPY=X': 'USD/JPY', 'GBPUSD=X': 'GBP/USD', 'ETH-USD': 'Ether', 'SOL-USD': 'Solana', 'SI=F': 'Silver', 'NG=F': 'Gas', '^RUT': 'Russell' };
-function mountStrip() {
-  api('world', 120e3).then(d => {
-    const rows = d.groups.flatMap(g => g.rows);
-    const mine = [...new Set(myAssets().map(a => a.ysym).filter(Boolean))];
-    const order = [...mine, ...STRIP.filter(s => !mine.includes(s))];
-    const items = order.map(s => rows.find(r => r.sym === s)).filter(Boolean).slice(0, 13);
-    $('#strip').innerHTML = `<div class="strip-in wrap">${items.map(r => `<span class="sq${mine.includes(r.sym) ? ' mine' : ''}" title="${esc(r.label)}"><span class="l">${esc(STRIP_NAMES[r.sym] || r.label)}</span><span class="p">${priceOf(r)}</span>${chg(r.pct)}</span>`).join('')}</div>`;
-  }).catch(() => {});
+// ---------- live ticker (TradingView, prices move in real time) ----------
+const TAPE = [
+  ['OANDA:SPX500USD', 'S&P 500'], ['OANDA:NAS100USD', 'Nasdaq 100'], ['OANDA:US30USD', 'Dow'], ['OANDA:DE30EUR', 'DAX'], ['OANDA:JP225USD', 'Nikkei'],
+  ['FX:EURUSD', 'EUR/USD'], ['FX:USDJPY', 'USD/JPY'], ['FX:GBPUSD', 'GBP/USD'], ['OANDA:XAUUSD', 'Gold'], ['OANDA:WTICOUSD', 'Oil'],
+  ['BINANCE:BTCUSDT', 'Bitcoin'], ['BINANCE:ETHUSDT', 'Ether'], ['BINANCE:SOLUSDT', 'Solana'],
+];
+let tapeKey = '';
+function mountStrip(force = false) {
+  const mine = myAssets().filter(a => a.tv).map(a => [a.tv, a.short || a.label]);
+  const seen = new Set();
+  const syms = [...mine, ...TAPE].filter(([s]) => !seen.has(s) && seen.add(s)).slice(0, 16);
+  const key = tvTheme() + syms.map(x => x[0]).join(',');
+  if (!force && key === tapeKey && $('#strip').children.length) return;
+  tapeKey = key;
+  tvWidget('strip', 'ticker-tape', { symbols: syms.map(([proName, title]) => ({ proName, title })), showSymbolLogo: false, isTransparent: true, displayMode: 'adaptive', colorTheme: tvTheme(), locale: 'en' }, 46);
 }
 
 // ---------- TradingView live charts and heatmaps ----------
@@ -123,7 +127,7 @@ function tvChart(el, symbol) {
   if (!el) return;
   el.classList.add('chartbox');
   const dark = tvTheme() === 'dark';
-  tvWidget(el, 'advanced-chart', { autosize: true, symbol, interval: intraday() ? '15' : 'D', timezone: 'America/New_York', theme: tvTheme(), style: '1', locale: 'en', allow_symbol_change: true, hide_volume: true, save_image: false, calendar: false, support_host: 'https://www.tradingview.com', backgroundColor: dark ? 'rgba(23,42,47,1)' : 'rgba(255,255,255,1)', gridColor: dark ? 'rgba(48,76,83,0.35)' : 'rgba(16,32,31,0.06)' }, 500);
+  tvWidget(el, 'advanced-chart', { autosize: true, symbol, interval: intraday() ? '15' : 'D', timezone: 'America/New_York', theme: tvTheme(), style: '1', locale: 'en', allow_symbol_change: true, hide_volume: true, save_image: false, calendar: false, support_host: 'https://www.tradingview.com', backgroundColor: dark ? 'rgba(18,18,21,1)' : 'rgba(255,255,255,1)', gridColor: dark ? 'rgba(42,42,49,0.45)' : 'rgba(9,9,11,0.06)' }, 500);
 }
 function chartPicker(boxId, pickId, options) {
   const pick = document.getElementById(pickId); if (!pick) return;
@@ -261,18 +265,49 @@ function layout(html) { if (refreshing && main.dataset.page === shownPage && mai
 
 // ---------- Today: the front page ----------
 function leadHTML(d) {
-  const effects = s => s.effects && s.effects.length ? `<p class="effects"><span class="lbl">Moving</span>${s.effects.map(e => `<span class="eff ${esc(e.dir)}">${esc(e.market)} ${e.dir === 'up' ? '↑' : e.dir === 'down' ? '↓' : '↕'}</span>`).join('')}</p>` : '';
+  const effects = s => s.effects && s.effects.length ? `<p class="effects"><span class="lbl">Likely to move</span>${s.effects.map(e => `<span class="eff ${esc(e.dir)}">${esc(e.market)} ${e.dir === 'up' ? '↑' : e.dir === 'down' ? '↓' : '↕'}</span>`).join('')}</p>` : '';
   const used = [...new Set([...(d.stories || []).map(s => s.ref), ...((d.summary || '') + JSON.stringify(d.forYou || [])).match(/\[(\d+)\]/g)?.map(x => +x.slice(1, -1)) || []])].filter(n => d.refs[n - 1]).sort((a, b) => a - b);
-  return `<p class="kicker"><span class="live" aria-hidden="true"></span>What’s happening, updated ${fmtTime(d.updated)}${d.source === 'ai' ? ', written by AI from live prices and news' : ''}</p>
+  return `<p class="kicker"><span class="live" aria-hidden="true"></span>The main story · Updated ${fmtTime(d.updated)}${d.source === 'ai' ? ' · Written by AI from live prices and news' : ''}</p>
     <h1 class="lead-h">${esc(d.headline)}</h1>
     <p class="lead-sum">${withRefs(d.summary || '', d.refs)}</p>
     <ol class="stories">${(d.stories || []).map(s => { const r = d.refs[s.ref - 1] || {}; return `<li>
       <h3><a href="${esc(r.link)}" target="_blank" rel="noopener">${esc(s.headline)}</a></h3>
       ${s.why ? `<p>${esc(s.why)}</p>` : ''}${effects(s)}
       <p class="src">${esc(r.source || '')}${r.time ? ', ' + ago(r.time) : ''}${s.since ? ' ' + reactTxt(s.since) : ''}</p></li>`; }).join('')}</ol>
-    ${(d.across || []).length ? `<dl class="across">${d.across.map(a => `<dt>${esc(a.area)}</dt><dd>${withRefs(a.text, d.refs)}</dd>`).join('')}</dl>` : ''}
-    ${(d.watch || []).length ? `<div class="watch"><h3>What could move markets next</h3><ul>${d.watch.map(w => `<li>${esc(w)}</li>`).join('')}</ul></div>` : ''}
+    ${(d.across || []).length ? `<dl class="across">${d.across.map(a => `<div><dt>${esc(a.area)}</dt><dd>${withRefs(a.text, d.refs)}</dd></div>`).join('')}</dl>` : ''}
     ${used.length ? `<details class="sources"><summary>Sources (${used.length})</summary><ol>${used.map(n => { const r = d.refs[n - 1]; return `<li value="${n}"><a href="${esc(r.link)}" target="_blank" rel="noopener">${esc(r.title)}</a> <span class="faint">${esc(r.source)}, ${ago(r.time)}</span></li>`; }).join('')}</ol></details>` : ''}`;
+}
+function guideHTML() {
+  if (store.get('guideDone', false)) return '';
+  return `<section class="guide" id="guide"><button class="x" id="guideX" aria-label="Hide this guide">×</button>
+    <h2>New here? Start with these four things</h2>
+    <p>The Open One tells you what’s happening in the world, what it means for markets, and what’s likely to happen next.</p>
+    <ol>
+      <li><b>Read “Today at a glance”</b>Three lines: what happened, what it means, and what’s likely next.</li>
+      <li><b>Check “What’s likely next”</b>The scheduled events ahead, with what usually happens if they surprise up or down.</li>
+      <li><b>Open your market’s tab</b>Tabs with a blue dot match your setup. Each one has prices, a live chart and the news for that market.</li>
+      <li><b>Stuck on a word?</b>Every term is explained in plain English in the <a href="#glossary">Glossary</a>.</li>
+    </ol></section>`;
+}
+function glanceHTML(d) {
+  const g = d.glance; if (!g) return '';
+  return `<div><h2><i></i>What happened</h2><p>${esc(g.happened)}</p></div><div><h2><i></i>What it means</h2><p>${esc(g.means)}</p></div><div><h2><i></i>What’s likely next</h2><p>${esc(g.next)}</p></div>`;
+}
+const cap = t => t ? t[0].toUpperCase() + t.slice(1) : t;
+function outlookHTML(d) {
+  const mk = myMarkets();
+  const list = (d.outlook || []).slice(0, 6);
+  if (!list.length) return '<p class="empty">Nothing scheduled.</p>';
+  return `<div class="outlook">${list.map(o => { const mine = (o.markets || []).some(m => mk.includes(m)); return `<article class="ol${mine ? ' mine' : ''}">
+      <div class="ol-top"><span>${esc(o.when || '')}</span>${mine ? '<span class="pill acc">Your markets</span>' : o.kind ? `<span class="pill">${esc(o.kind)}</span>` : ''}</div>
+      <h3>${esc(o.title)}</h3>
+      <p>${esc(o.likely)}</p>
+      <div class="sc">${o.if_up ? `<div class="a"><b>${esc((o.if_up.split(':')[0] || '').trim())}</b>${esc(cap(o.if_up.split(':').slice(1).join(':').trim() || o.if_up))}</div>` : ''}${o.if_down ? `<div class="b"><b>${esc((o.if_down.split(':')[0] || '').trim())}</b>${esc(cap(o.if_down.split(':').slice(1).join(':').trim() || o.if_down))}</div>` : ''}</div>
+    </article>`; }).join('')}</div><p class="disclaim">These are the usual reactions, not promises. Markets often move before the news and can reverse after it.</p>`;
+}
+function todayChartOptions() {
+  const mine = myAssets().filter(a => a.tv).map(a => ({ id: shortName(a), tv: a.tv }));
+  return [...mine, { id: 'S&P 500', tv: 'OANDA:SPX500USD' }, { id: 'Nasdaq 100', tv: 'OANDA:NAS100USD' }, { id: 'EUR/USD', tv: 'FX:EURUSD' }, { id: 'Gold', tv: 'OANDA:XAUUSD' }, { id: 'Bitcoin', tv: 'BINANCE:BTCUSDT' }];
 }
 function briefHTML(desk, D) {
   const ws = windowStatus();
@@ -318,6 +353,9 @@ function worldHTML(d, { rowsPer = 99, sparks = true } = {}) {
 }
 PAGES.today = () => {
   if (layout(`
+    ${guideHTML()}
+    <p class="eyebrow">Today at a glance</p>
+    <div class="glance" id="glance"><div>${skel(2)}</div></div>
     <div class="front">
       <article class="lead" id="lead" aria-live="polite"></article>
       <aside class="rail">
@@ -325,13 +363,20 @@ PAGES.today = () => {
         <section><h2 class="sec">Today’s calendar</h2><div id="railCal"></div><a class="more" href="#calendar">Full economic calendar</a></section>
       </aside>
     </div>
+    <section class="block"><div class="sec-row"><h2 class="sec">What’s likely next</h2><a href="#calendar">Full calendar</a></div><div id="outlook"></div></section>
+    ${chartBlock('todayChart')}
     <section class="block"><div class="sec-row"><h2 class="sec">Top stories</h2><a href="#news">All news</a></div><div class="grid2" id="top"></div></section>
     <section class="block"><div class="topics" id="topics"></div></section>
-    <section class="block"><div class="sec-row"><h2 class="sec">World markets</h2><a href="#markets">All markets</a></div><div id="worldMini"></div></section>`)) {}
+    <section class="block"><div class="sec-row"><h2 class="sec">World markets</h2><a href="#markets">All markets</a></div><div id="worldMini"></div></section>`)) {
+    chartPicker('todayChart', 'todayChartPick', todayChartOptions());
+    const gx = $('#guideX'); if (gx) gx.onclick = () => { store.set('guideDone', true); const g = $('#guide'); if (g) g.remove(); };
+  }
   const deskP = api('desk?' + profileQuery(), 5 * 60e3);
   const D = personalData();
   const wireP = api('wire?section=all', 60e3);
   fill('lead', 'the front page', deskP, leadHTML);
+  fill('glance', 'today at a glance', deskP, glanceHTML);
+  fill('outlook', 'what’s likely next', deskP, outlookHTML);
   fill('brief', 'your briefing', Promise.all([deskP.catch(() => null), D]), ([desk, d]) => briefHTML(desk, d)).then(() => {
     const e = $('#briefEdit'); if (e) e.onclick = editSetup; const al = $('#briefAlerts'); if (al) al.onclick = openAlerts;
   });
@@ -535,23 +580,42 @@ PAGES.crypto = () => {
 };
 
 // ---------- Memecoins ----------
+const LINK_NAMES = { twitter: 'X', telegram: 'Telegram', website: 'Website', discord: 'Discord' };
+function tokenCard(t, news, mine) {
+  const about = t.about || t.desc;
+  const icon = t.icon || t.image;
+  const links = (t.links || []).filter(l => /^https?:/.test(l.url)).map(l => `<a href="${esc(l.url)}" target="_blank" rel="noopener nofollow">${esc(LINK_NAMES[l.type] || l.label || 'Link')}</a>`).join('');
+  return `<article class="tok${mine ? ' mine' : ''}">
+    <div class="nm">${icon ? `<img class="coin" src="${esc(icon)}" alt="" loading="lazy">` : `<span class="ph">${esc((t.symbol || '?').slice(0, 3))}</span>`}
+      <div>${t.url ? `<a href="${esc(t.url)}" target="_blank" rel="noopener">${esc(t.name)}</a>` : `<b>${esc(t.name)}</b>`}<small>${esc(t.symbol)}${t.chain ? ' · ' + esc(t.chain) : ''}</small></div>
+      <div class="r"><span class="pr">${usd(t.price)}</span>${chg(t.ch24)}</div></div>
+    <p class="about${about ? '' : ' none'}">${about ? esc(about) : 'No description published. With no stated purpose, the price runs purely on attention.'}</p>
+    <div class="stats"><span>Value<b>${big(t.mcap)}</b></span>${t.liq != null ? `<span>Liquidity<b>${big(t.liq)}</b></span><span>Volume<b>${big(t.vol24)}</b></span>` : `<span>7 days<b>${t.ch7 != null ? (t.ch7 > 0 ? '+' : '') + t.ch7.toFixed(1) + '%' : '—'}</b></span>`}</div>
+    ${t.notes && t.notes.length ? `<div class="flags">${t.notes.map(n => `<span class="flag ${n.tone}">${esc(n.text)}</span>`).join('')}</div>` : ''}
+    ${news && news.length ? `<ul class="tnews">${news.slice(0, 2).map(n => `<li><a href="${esc(n.link)}" target="_blank" rel="noopener">${esc(n.title)}</a><small>${esc(n.source)}, ${ago(n.time)}</small></li>`).join('')}</ul>` : ''}
+    ${links ? `<div class="links">${links}</div>` : ''}
+  </article>`;
+}
 PAGES.memes = () => {
   layout(`<h1 class="page-h">Memecoins</h1>
-    <p class="page-intro" id="mIntro"></p>
-    <p class="callout">Most new tokens go to zero. Liquidity decides whether you can actually sell, and “promoted” means someone paid to put the token in front of buyers.</p>
-    <div class="grid2 block">
-      <section><h2 class="sec">Getting the most attention</h2><div id="mHot"></div></section>
-      <section><h2 class="sec">The established names</h2><div id="mMajors"></div></section>
+    <p class="page-intro">What each coin is about, the news moving memecoins, and what it means for the market you trade. Most new tokens go to zero, so read the warnings on each card.</p>
+    <div class="mood" id="mMood"></div>
+    <div class="grid2">
+      <section><h2 class="sec">News moving memecoins</h2><ul class="drivers" id="mDrivers"></ul></section>
+      <section><h2 class="sec">What it means for you</h2><ul class="fyl" id="mFor"></ul><p class="small faint" id="mIntro" style="margin-top:14px"></p></section>
     </div>
-    ${newsBlock('mNews', 'Memecoin and crypto stories')}`);
+    <section class="block"><div class="sec-row"><h2 class="sec">The established names</h2></div><div class="mgrid" id="mMajors"></div></section>
+    <section class="block"><div class="sec-row"><h2 class="sec">Getting the most attention right now</h2></div><p class="small faint" style="margin:-6px 0 14px">“Promoted” tokens are ones someone paid to put in front of buyers on DexScreener. That’s attention, not quality.</p><div class="mgrid" id="mHot"></div></section>`);
   const chains = myAssets().map(a => a.chain).filter(Boolean);
   const d = api('memes');
-  fill('mIntro', 'summary', d, x => esc(x.lines.join(' ')) || 'Here’s where the attention is.');
-  fill('mHot', 'tokens', d, x => { const hot = [...x.hot.filter(t => chains.includes(t.chain)), ...x.hot.filter(t => !chains.includes(t.chain))]; return hot.length ? hot.map(t => `<div class="tok"><div class="nm">${t.icon ? `<img class="coin" src="${esc(t.icon)}" alt="" loading="lazy">` : ''}<a href="${esc(t.url)}" target="_blank" rel="noopener">${esc(t.name)}</a><span class="faint small">${esc(t.symbol)} on ${esc(t.chain)}</span>${chg(t.ch24)}</div>
-      <div class="stats"><span>Price ${usd(t.price)}</span><span>Value ${big(t.mcap)}</span><span>Liquidity ${big(t.liq)}</span><span>Traded today ${big(t.vol24)}</span></div>
-      ${t.notes.length ? `<div class="flags">${t.notes.map(n => `<span class="flag ${n.tone}">${esc(n.text)}</span>`).join('')}</div>` : ''}</div>`).join('') : '<p class="empty">Nothing to show right now.</p>'; });
-  fill('mMajors', 'memecoins', d, x => `<table class="t"><thead><tr><th>Coin</th><th>Price</th><th>24h</th><th class="hide-sm">7 days</th></tr></thead><tbody>${x.majors.map(c => `<tr><td>${c.image ? `<img class="coin" src="${esc(c.image)}" alt="" loading="lazy">` : ''}${esc(c.symbol)}<small>${esc(c.name)}, ${big(c.mcap)}</small></td><td>${usd(c.price)}</td><td>${chg(c.ch24)}</td><td class="hide-sm">${chg(c.ch7)}</td></tr>`).join('')}</tbody></table>`);
-  marketNews('mNews', 'memes');
+  const md = api('memedesk?' + profileQuery(), 3 * 60e3);
+  fill('mMood', 'the memecoin mood', md, x => `<span class="gauge ${esc(x.mood.word)}">${esc(x.mood.word)}</span><div><p>${esc(x.mood.text)}</p>${x.summary ? `<p>${esc(x.summary)}</p>` : ''}</div>`);
+  fill('mDrivers', 'news', md, x => x.drivers.length ? x.drivers.map(n => `<li><a href="${esc(n.link)}" target="_blank" rel="noopener">${esc(n.title)}</a><div class="meta"><span>${esc(n.theme || '')}</span><span>${esc(n.source)}</span><span>${ago(n.time)}</span></div>${n.effect ? `<p class="eff-line">${esc(n.effect)}</p>` : ''}</li>`).join('') : '<li class="empty">No fresh stories right now.</li>');
+  fill('mFor', 'your notes', md, x => x.forYou.length ? x.forYou.map(f => `<li><b>${esc(marketLabel(f.market))}</b>${esc(f.text)}</li>`).join('') : '<li class="empty">Add your markets in setup to see what memecoin news means for them.</li>');
+  fill('mIntro', 'summary', d, x => esc(x.lines.join(' ')));
+  const both = Promise.all([d, md.catch(() => ({ tokenNews: {} }))]);
+  fill('mMajors', 'memecoins', both, ([x, m]) => x.majors.map(c => tokenCard(c, m.tokenNews[c.symbol], false)).join('') || '<p class="empty">Not available.</p>');
+  fill('mHot', 'tokens', both, ([x, m]) => { const hot = [...x.hot.filter(t => chains.includes(t.chain)), ...x.hot.filter(t => !chains.includes(t.chain))]; return hot.length ? hot.map(t => tokenCard(t, m.tokenNews[String(t.symbol).toUpperCase()], chains.includes(t.chain))).join('') : '<p class="empty">Nothing to show right now.</p>'; });
 };
 
 // ---------- Options ----------
@@ -612,7 +676,7 @@ PAGES.glossary = () => {
   const total = cats.reduce((n, c) => n + GLOSSARY[c].length, 0);
   let q = '', cat = '';
   layout(`<h1 class="page-h">Market terms, explained</h1>
-    <p class="page-intro">${total} words and phrases you’ll see in market news, from the basics to options, crypto and ICT, each explained in plain English.</p>
+    <p class="page-intro">${total} words and phrases you’ll see in market news, from the basics to options, crypto and trading strategies, each explained in plain English.</p>
     <input class="search" id="glQ" type="search" placeholder="Search terms, for example “yield” or “liquidity”" aria-label="Search the glossary">
     <div class="chips" role="group" aria-label="Category"><button class="chip" data-c="" aria-pressed="true">All</button>${cats.map(c => `<button class="chip" data-c="${esc(c)}" aria-pressed="false">${esc(c)}</button>`).join('')}</div>
     <div id="glList"></div>`);

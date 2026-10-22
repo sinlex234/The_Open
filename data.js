@@ -73,7 +73,15 @@ function addDays(dateStr, n) {
   d.setUTCDate(d.getUTCDate() + n);
   return d.toISOString().slice(0, 10);
 }
-var decode = (s) => s.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1").replace(/<[^>]+>/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#0?39;|&apos;|&#x27;/g, "'").replace(/&#8217;|&rsquo;/g, "\u2019").replace(/&#8216;|&lsquo;/g, "\u2018").replace(/&#8220;|&ldquo;/g, "\u201C").replace(/&#8221;|&rdquo;/g, "\u201D").replace(/&#8211;|&ndash;/g, "\u2013").replace(/&#8212;|&mdash;/g, "\u2014").replace(/&nbsp;|&#160;/g, " ").replace(/&#(\d+);/g, (_, n) => String.fromCharCode(+n)).replace(/\s+/g, " ").trim();
+var NAMED = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", rsquo: "’", lsquo: "‘", rdquo: "”", ldquo: "“", ndash: "–", mdash: "—", hellip: "…", eacute: "é", euro: "€", pound: "£" };
+var decode = (s) => {
+  let t = s.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1").replace(/<[^>]+>/g, " ");
+  for (let i = 0; i < 3; i++) t = t.replace(/&amp;/g, "&");
+  t = t.replace(/&#x([0-9a-f]+);/gi, (_, h) => { try { return String.fromCodePoint(parseInt(h, 16)); } catch { return ""; } })
+    .replace(/&#(\d+);/g, (_, n) => { try { return String.fromCodePoint(+n); } catch { return ""; } })
+    .replace(/&([a-z]+);/gi, (m, n) => NAMED[n.toLowerCase()] ?? m);
+  return t.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+};
 function parseRSS(xml, source) {
   const items = [];
   const blocks = xml.match(/<item[\s>][\s\S]*?<\/item>/g) || xml.match(/<entry[\s>][\s\S]*?<\/entry>/g) || [];
@@ -208,7 +216,7 @@ var EVENTS = [
   { re: /^core cpi|^cpi/i, name: "Inflation report (CPI)", what: "How fast everyday prices rose last month.", why: "Hotter than expected means rate cuts look further away, which usually hits stocks (especially tech) and lifts the dollar. Cooler is the opposite.", note: FAKEOUT },
   { re: /core pce|pce price/i, name: "The Fed\u2019s favorite inflation gauge (PCE)", what: "Another read on price rises, the one the Fed watches most.", why: "Usually less of a surprise than CPI because much of it can be worked out in advance, but a miss still moves rates and tech.", note: QUIET_BEFORE },
   { re: /^core ppi|^ppi/i, name: "Wholesale prices (PPI)", what: "Price changes for businesses before they reach shoppers.", why: "An early hint about where consumer inflation is heading.", note: FAKEOUT },
-  { re: /non-farm employment change|non-farm payrolls/i, exclude: /adp/i, name: "Jobs report (NFP)", what: "How many jobs the US added last month.", why: "One of the biggest movers of the month. Strong jobs can mean higher rates for longer; weak jobs can spark worry about the economy. Either way, expect fast swings.", note: "The 8:30 spike often runs one direction, grabs the orders sitting past the morning\u2019s high or low, then turns. The cleaner move tends to show up after 9:30." },
+  { re: /non-farm employment change|non-farm payrolls/i, exclude: /adp/i, name: "Jobs report (NFP)", what: "How many jobs the US added last month.", why: "One of the biggest movers of the month. Strong jobs can mean higher rates for longer. Weak jobs can spark worry about the economy. Either way, expect fast swings.", note: "The 8:30 spike often runs one direction, grabs the orders sitting past the morning\u2019s high or low, then turns. The cleaner move tends to show up after 9:30." },
   { re: /adp non-farm/i, name: "Private jobs (ADP)", what: "A private estimate of job growth, out two days before the main jobs report.", why: "A preview, not the main event. Moves are usually smaller.", note: "" },
   { re: /unemployment rate/i, name: "Unemployment rate", what: "Share of people looking for work who can\u2019t find it.", why: "Released with the jobs report. A jump can shift the mood quickly toward rate cuts.", note: "" },
   { re: /average hourly earnings/i, name: "Wage growth", what: "How fast paychecks are growing.", why: "Fast wage growth can keep inflation sticky.", note: "" },
@@ -220,17 +228,17 @@ var EVENTS = [
   { re: /fed chair .* speaks|powell speaks/i, name: "Fed Chair speaking", what: "The head of the Fed speaks in public.", why: "Any hint about future rate moves can swing stocks, bonds and the dollar at once.", note: "Moves on speeches are often sharp and short. Watch whether price holds after the first reaction." },
   { re: /fomc member .* speaks|fed .* speaks/i, name: "Fed official speaking", what: "A Fed official gives a speech or interview.", why: "Usually small, unless they say something new about rates.", note: "" },
   { re: /core retail sales|retail sales/i, name: "Retail sales", what: "How much people spent in stores and online.", why: "Shows whether shoppers are still spending. A big miss can move stocks and the dollar.", note: FAKEOUT },
-  { re: /gdp/i, name: "Economic growth (GDP)", what: "How fast the economy grew.", why: "The first estimate moves most; later revisions rarely do.", note: "" },
+  { re: /gdp/i, name: "Economic growth (GDP)", what: "How fast the economy grew.", why: "The first estimate moves most. Later revisions rarely do.", note: "" },
   { re: /ism manufacturing pmi/i, name: "Factory survey (ISM)", what: "Purchasing managers rate how factories are doing.", why: "Above 50 means growing, below 50 shrinking. Comes out at 10:00.", note: "Out at 10:00, when the morning move often pauses. A surprise can push price back through the morning\u2019s range." },
   { re: /ism services pmi/i, name: "Services survey (ISM)", what: "How the services side of the economy is doing.", why: "Services are most of the US economy, and the prices part of this survey is watched for inflation.", note: "" },
-  { re: /flash .*pmi/i, name: "Early business survey (Flash PMI)", what: "A first look at business activity this month.", why: "Usually a modest mover in the US; bigger for Europe and the UK.", note: "" },
+  { re: /flash .*pmi/i, name: "Early business survey (Flash PMI)", what: "A first look at business activity this month.", why: "Usually a modest mover in the US. Bigger for Europe and the UK.", note: "" },
   { re: /consumer sentiment|consumer confidence/i, name: "Consumer mood", what: "A survey of how people feel about money and the economy.", why: "The inflation-expectations part gets the most attention.", note: "" },
-  { re: /crude oil inventories/i, name: "Oil stockpiles", what: "How much crude the US has in storage.", why: "Moves oil prices at 10:30 Wednesday; rarely moves stock indexes.", note: "" },
+  { re: /crude oil inventories/i, name: "Oil stockpiles", what: "How much crude the US has in storage.", why: "Moves oil prices at 10:30 Wednesday. Rarely moves stock indexes.", note: "" },
   { re: /durable goods/i, name: "Big-ticket orders", what: "Orders for long-lasting goods like machinery.", why: "Usually a small mover.", note: "" },
-  { re: /empire state|philly fed/i, name: "Regional factory survey", what: "A snapshot of factories in one part of the country.", why: "Usually small; sometimes an early hint for the national numbers.", note: "" },
+  { re: /empire state|philly fed/i, name: "Regional factory survey", what: "A snapshot of factories in one part of the country.", why: "Usually small. Sometimes an early hint for the national numbers.", note: "" },
   { re: /home sales|housing starts|building permits/i, name: "Housing data", what: "Home building and sales.", why: "Rarely moves index futures on its own.", note: "" },
   { re: /bond auction/i, name: "Government bond sale", what: "The Treasury sells bonds to investors.", why: "Weak demand pushes yields up, which can weigh on tech stocks around 1:00 PM.", note: "" },
-  { re: /main refinancing rate|ecb press conference|monetary policy statement/i, cur: "EUR", name: "European Central Bank decision", what: "The ECB sets rates for the eurozone.", why: "Moves the euro the most; can spill over into the dollar.", note: "" },
+  { re: /main refinancing rate|ecb press conference|monetary policy statement/i, cur: "EUR", name: "European Central Bank decision", what: "The ECB sets rates for the eurozone.", why: "Moves the euro the most. Can spill over into the dollar.", note: "" },
   { re: /official bank rate|boe|mpc/i, cur: "GBP", name: "Bank of England decision", what: "The UK\u2019s central bank sets rates.", why: "Moves the pound.", note: "" },
   { re: /boj|policy rate/i, cur: "JPY", name: "Bank of Japan decision", what: "Japan\u2019s central bank sets rates.", why: "Big for the yen, and sometimes for global markets when it surprises.", note: "" },
   { re: /bank holiday/i, name: "Bank holiday", what: "Banks are closed in this country.", why: "Thin trading. Moves can be slow, or jumpy with nobody around.", note: "" }
@@ -242,27 +250,29 @@ function explainEvent(ev) {
   return { name: ev.title, what: "", why: imp === "High" ? "Marked as a big one. Expect a fast reaction when it comes out." : imp === "Medium" ? "Can nudge prices, usually not for long." : "Rarely moves anything.", note: "" };
 }
 var THEMES = [
-  { id: "rates", label: "Interest rates", re: /\bfed\b|fomc|powell|warsh|hassett|rate cut|rate hike|interest rate|central bank|treasury yield|bond yield|\byields?\b|ecb|bank of england|\bboj\b|lagarde/i, line: "Rates touch everything. The dollar, bonds and tech stocks usually react first.", markets: ["futures", "forex", "options", "crypto"] },
-  { id: "inflation", label: "Inflation", re: /inflation|\bcpi\b|\bppi\b|\bpce\b|consumer prices|price pressures/i, line: "Hot inflation pushes rate cuts further out, which tends to weigh on stocks.", markets: ["futures", "forex", "options"] },
-  { id: "jobs", label: "Jobs", re: /jobs report|payroll|unemployment|jobless|labor market|hiring|layoffs/i, line: "Jobs numbers shift what the Fed does next.", markets: ["futures", "forex"] },
-  { id: "earnings", label: "Earnings", re: /earnings|quarterly results|revenue|guidance|profit|\beps\b|beats estimates|misses estimates|results/i, line: "Big tech results can move the whole Nasdaq, not just the stock.", markets: ["futures", "options"] },
-  { id: "ai", label: "AI & chips", re: /\bai\b|artificial intelligence|nvidia|semiconductor|chipmaker|\bchips?\b|openai|data center/i, line: "AI and chip stocks are a big chunk of the Nasdaq. When they move, NQ moves.", markets: ["futures", "options"] },
-  { id: "trade", label: "Trade & tariffs", re: /tariff|trade war|trade deal|export control|sanction/i, line: "Trade headlines hit fast and often get walked back. First moves can be overdone.", markets: ["futures", "forex", "crypto"] },
-  { id: "world", label: "World events", re: /\bwar\b|missile|attack|strike on|iran|israel|russia|ukraine|taiwan|north korea|ceasefire|conflict/i, line: "Scary headlines usually knock prices down quickly. Unless things escalate, buyers often step back in.", markets: ["futures", "forex", "crypto"] },
-  { id: "energy", label: "Oil & energy", re: /\boil\b|crude|opec|natural gas|gasoline|brent/i, line: "Oil spikes feed inflation worries and hit stocks.", markets: ["futures", "forex"] },
-  { id: "gov", label: "Washington", re: /shutdown|debt ceiling|congress|white house|treasury secretary|senate|trump|election/i, line: "Policy news can shake markets, but often fades unless real money is at stake.", markets: ["futures", "forex", "crypto"] },
-  { id: "dollar", label: "Currencies", re: /dollar|\beuro\b|\byen\b|sterling|\bpound\b|currency|forex|\bfx\b|yuan/i, line: "A stronger dollar usually means weaker gold, weaker euro and pound, and sometimes softer stocks.", markets: ["forex"] },
-  { id: "gold", label: "Gold", re: /\bgold\b|bullion|precious metal|silver/i, line: "Gold tends to rise when people get nervous or when rates are expected to fall.", markets: ["forex", "futures"] },
-  { id: "memes", label: "Memecoins", re: /memecoin|meme coin|dogecoin|\bdoge\b|shiba|\bbonk\b|\bpepe\b|pump\.fun|\bwif\b|solana meme|rug ?pull/i, line: "Memecoins move on hype and attention. Liquidity can vanish fast.", markets: ["memes", "crypto"] },
-  { id: "crypto", label: "Crypto", re: /bitcoin|\bbtc\b|crypto|ether|ethereum|solana|stablecoin|\betf\b|coinbase|binance|\bxrp\b|blockchain|token/i, line: "Crypto trades 24/7 and often reacts to the same rate news as tech stocks, just bigger.", markets: ["crypto", "memes"] },
-  { id: "options", label: "Volatility", re: /volatility|\bvix\b|options|hedg|0dte|expiration|opex/i, line: "Options activity can pin prices near big strike levels, especially on expiration days.", markets: ["options", "futures"] }
+  { id: "memes", label: "Memecoins", re: /memecoin|meme coin|meme token|dogecoin|\bdoge\b|shiba inu|\bbonk\b|\bpepe\b|pump\.fun|\bwif\b|dogwifhat|fartcoin|rug ?pull/i, line: "Memecoins run on hype and attention, and buyers can disappear fast.", markets: ["memes", "crypto"] },
+  { id: "crypto", label: "Crypto", re: /bitcoin|\bbtc\b|\bcrypto(currency|currencies)?\b|\bether(eum)?\b|\bsolana\b|stablecoin|coinbase|binance|\bxrp\b|blockchain|\btokens?\b|defi\b/i, line: "Crypto trades around the clock and reacts to interest-rate news the way tech stocks do, only bigger.", markets: ["crypto", "memes"] },
+  { id: "gold", label: "Gold", re: /\bgold\b|bullion|precious metals?|\bsilver\b/i, line: "Gold tends to rise when people get nervous or expect lower interest rates.", markets: ["forex", "futures"] },
+  { id: "rates", label: "Interest rates", re: /\bfed\b|fomc|powell|mortgage rates?|rate cuts?|rate hikes?|interest rates?|central bank|treasury yields?|bond yields?|\byields?\b|\becb\b|bank of england|bank of japan|\bboj\b|lagarde/i, line: "Interest-rate news moves almost everything. The dollar, bonds and tech stocks usually react first.", markets: ["futures", "forex", "options", "crypto"] },
+  { id: "dollar", label: "Currencies", re: /\bdollar\b|\beuro\b|\byen\b|sterling|\bpound\b|\bcurrenc(y|ies)\b|\bforex\b|\bfx\b|\byuan\b|\brupiah\b|\brupee\b|\bfranc\b|\bpeso\b|\bwon\b/i, line: "Currency moves change what trade and foreign assets are worth. A stronger dollar usually weighs on gold and other currencies.", markets: ["forex"] },
+  { id: "energy", label: "Oil and energy", re: /\boil\b|crude|opec|natural gas|gasoline|\bbrent\b|\blng\b|fuel prices/i, line: "Higher oil feeds inflation worries, which tends to weigh on stocks.", markets: ["futures", "forex"] },
+  { id: "inflation", label: "Inflation", re: /inflation|\bcpi\b|\bppi\b|\bpce\b|consumer prices|price pressures/i, line: "Higher inflation means rate cuts take longer, which usually weighs on stocks.", markets: ["futures", "forex", "options"] },
+  { id: "jobs", label: "Jobs", re: /jobs report|payrolls?\b|unemployment|jobless|labor market|labour market|hiring|layoffs/i, line: "Job numbers shape what the Fed does next.", markets: ["futures", "forex"] },
+  { id: "earnings", label: "Earnings", re: /\bearnings\b|quarterly (results|profit|revenue|sales)|\bguidance\b|\brevenue\b|profit warning|\beps\b|beats? (estimates|expectations|forecasts)|miss(es|ed)? (estimates|expectations|forecasts)|\bq[1-4] (results|earnings|sales)/i, line: "Results from big companies can move their whole sector, and sometimes the index.", markets: ["futures", "options"] },
+  { id: "ai", label: "AI and chips", re: /\bai\b|artificial intelligence|nvidia|semiconductor|chipmakers?|\bchips?\b|openai|data centers?/i, line: "AI and chip stocks are a big part of the Nasdaq. When they move, the index moves.", markets: ["futures", "options"] },
+  { id: "trade", label: "Trade and tariffs", re: /tariffs?|trade war|trade deal|trade talks|export controls?|export curbs|sanctions?|\bcurbs\b/i, line: "Trade headlines hit fast and often get walked back, so first moves can be overdone.", markets: ["futures", "forex", "crypto"] },
+  { id: "world", label: "World events", re: /\bwar\b|missile|attacks?\b|strikes? on|\biran\b|israel|russia|ukraine|taiwan|north korea|ceasefire|conflict|houthi|middle east/i, line: "Conflict headlines usually knock prices down fast. If things don't escalate, buyers often return.", markets: ["futures", "forex", "crypto"] },
+  { id: "growth", label: "Economy", re: /\beconom(y|ies|ic growth)\b|\bgdp\b|recession|consumer spending|retail sales|factory (output|activity)|\bpmi\b/i, line: "Growth news shapes what investors expect for company profits and for interest rates.", markets: ["futures", "forex", "stocks"] },
+  { id: "gov", label: "Washington", re: /shutdown|debt ceiling|congress|white house|treasury secretary|senate|\btrump\b|election|midterms/i, line: "Policy news can shake markets, but it often fades unless real money is involved.", markets: ["futures", "forex", "crypto"] },
+  { id: "options", label: "Volatility", re: /volatility|\bvix\b|options market|0dte|options expir|\bopex\b/i, line: "Options activity can pin prices near popular strike levels, especially on expiration days.", markets: ["options", "futures"] }
 ];
 function tagHeadline(h) {
   const text = h.title + " " + (h.summary || "");
   const hits = THEMES.filter((t) => t.re.test(text));
   const primary = hits.find((t) => t.re.test(h.title)) || hits[0] || null;
   const markets = [...new Set(hits.flatMap((t) => t.markets))];
-  return { ...h, theme: primary ? primary.id : null, themeLabel: primary ? primary.label : null, why: primary ? primary.line : null, markets };
+  const inTitle = primary && primary.re.test(h.title);
+  return { ...h, theme: primary ? primary.id : null, themeLabel: primary ? primary.label : null, why: inTitle ? primary.line : null, markets };
 }
 var pct = (a, b) => (a - b) / b * 100;
 function levelNotes(L, name, fmt) {
@@ -527,6 +537,38 @@ function tokenNotes(p) {
   if (h24 < -40) notes.push({ tone: "warn", text: "Down hard today" });
   return notes;
 }
+function cleanDesc(d) {
+  d = String(d || "").replace(/https?:\/\/\S+/g, "").replace(/[\u{1F300}-\u{1FAFF}☀-➿]/gu, "").replace(/\s+/g, " ").trim();
+  if (d.length > 220) d = d.slice(0, 220).replace(/\s\S*$/, "") + "…";
+  return d;
+}
+var MEME_ABOUT = {
+  DOGE: "The original memecoin, started as a joke in 2013 with the Shiba Inu dog. It moves with Bitcoin and with anything Elon Musk says about it.",
+  SHIB: "A Dogecoin spin-off on Ethereum that grew its own ecosystem, including an exchange and a layer 2 network.",
+  PEPE: "Named after the Pepe the Frog meme. The biggest memecoin on Ethereum, with no team roadmap and no utility.",
+  BONK: "Solana’s dog coin, airdropped to the Solana community in late 2022. It tends to rise and fall with Solana itself.",
+  WIF: "dogwifhat: a Shiba Inu wearing a knitted hat. One of the defining Solana memecoins of 2024.",
+  TRUMP: "The official Trump memecoin, launched days before the January 2025 inauguration. It moves on Trump-related news and on token unlocks.",
+  FLOKI: "Named after Elon Musk’s dog. Positions itself as a meme brand with a game and other products.",
+  FARTCOIN: "A Solana memecoin born from an AI agent’s joke. Its whole story is that it is absurd, which is the point.",
+  PENGU: "The token of the Pudgy Penguins NFT brand, which also sells toys and runs social media accounts.",
+  SPX: "SPX6900: a parody of the S&P 500 that jokes about flipping the stock market.",
+  MOG: "An internet-culture coin on Ethereum built around the slang word “mog”, meaning to outshine someone.",
+  POPCAT: "A Solana coin based on the “pop cat” meme of a cat opening its mouth.",
+  BRETT: "The best-known memecoin on Base, named after a character from the Boy’s Club comic, Pepe’s friend.",
+  MEW: "“cat in a dogs world”: a Solana coin pitching cats against the many dog coins.",
+  PNUT: "Named after Peanut the squirrel, whose story went viral in late 2024.",
+  GOAT: "Goatseus Maximus: a coin promoted by an AI chatbot, which kicked off the AI-agent memecoin trend.",
+  TURBO: "An Ethereum coin whose idea and design were created with ChatGPT.",
+  NEIRO: "Named after the Shiba Inu adopted by the owner of the original Doge dog.",
+  BOME: "Book of Meme: a Solana coin that raised money in a presale and pitched itself as an archive of memes.",
+  MOODENG: "Named after Moo Deng, the viral baby pygmy hippo from a Thai zoo.",
+  CHILLGUY: "Based on the “just a chill guy” dog cartoon meme.",
+  GIGA: "Gigachad: built around the meme of an exaggeratedly confident, muscular man.",
+  BABYDOGE: "Baby Doge Coin: a BNB Chain Dogecoin offshoot that charges a fee on transfers.",
+  AI16Z: "A Solana token tied to an AI agent framework, part of the AI-agent coin trend.",
+  USELESS: "A Solana coin whose pitch is that it has no use at all."
+};
 async function build4() {
   const { res, errors } = await settle({
     boosts: getJSON(`${DS}/token-boosts/top/v1`),
@@ -565,10 +607,13 @@ async function build4() {
       mcap: p.marketCap || p.fdv || null,
       created: p.pairCreatedAt || null,
       boosts: b.totalAmount || null,
+      desc: cleanDesc(b.description || p.info && p.info.description || ""),
+      links: [...(b.links || []), ...(p.info && p.info.socials || []).map((x) => ({ type: x.type, url: x.url })), ...(p.info && p.info.websites || []).map((x) => ({ type: "website", url: x.url }))].filter((l) => l && l.url).slice(0, 4),
+      about: MEME_ABOUT[(p.baseToken.symbol || "").toUpperCase()] || null,
       notes: tokenNotes(p)
     };
   }).filter(Boolean).slice(0, 18);
-  const majors = (res.majors || []).map((c) => ({ name: c.name, symbol: c.symbol.toUpperCase(), image: c.image, price: c.current_price, mcap: c.market_cap, ch24: c.price_change_percentage_24h_in_currency ?? c.price_change_percentage_24h, ch7: c.price_change_percentage_7d_in_currency }));
+  const majors = (res.majors || []).map((c) => ({ name: c.name, symbol: c.symbol.toUpperCase(), image: c.image, price: c.current_price, mcap: c.market_cap, ch24: c.price_change_percentage_24h_in_currency ?? c.price_change_percentage_24h, ch7: c.price_change_percentage_7d_in_currency, about: MEME_ABOUT[c.symbol.toUpperCase()] || null }));
   const lines = [];
   if (majors.length) {
     const up = majors.filter((c) => c.ch24 > 0).length;
@@ -870,6 +915,22 @@ function similar(a, b) {
   });
   return i / Math.max(1, Math.min(A.size, B.size));
 }
+var JUNK = [
+  /\((?:NYSE|NASDAQ|NYSEARCA|NYSEAMERICAN|TSX|TSXV|OM|OB|LSE|ASX|SGX|BIT|ETR|EPA|HKG|SEHK|TSE|KOSE|NSE|BSE|SWX|CPSE|STO|HLSE|XTRA|SHSE|SZSE|BOVESPA|JSE)\s*:/i,
+  /\([A-Z]{1,5}\) Stock\b/, /\bstocks? to watch\b/i, /millionaire|should you buy|buy now\b|is it too late|top \d+ (stocks|cryptos?|coins)|best (stocks|cryptos?|coins) to|price prediction|prediction:/i,
+  /presale|\bico\b|airdrop guide|remittix/i, /announces approval of application|press release:/i, /\b(forum|summit|conference|webinar|podcast)\b.*\b20\d\d\b/i, /^watch:|^video:|^live:/i, /horoscope|recipe|weather forecast/i
+];
+function cleanTitle(t) {
+  return t.replace(/^(?:Global Market|Crypto Market News|Bitcoin News|Ethereum News|XRP News|On the Chain|Market Wrap|Markets?|Breaking|Exclusive|Update|Explainer|Analysis|Opinion|Stock Market Today|Forex)\s*[:|\-–]\s*/i, "")
+    .replace(/^[A-Z][\w&' ]{1,25}\.\.\s*/, "").replace(/\.{2,}(?!\.)/g, ". ").replace(/\s+/g, " ").trim();
+}
+function isJunk(i) {
+  const t = i.title || "";
+  if (t.length < 18) return true;
+  if (JUNK.some((re) => re.test(t))) return true;
+  if (/^['‘"“]/.test(t) && !i.theme) return true;
+  return false;
+}
 function sectionOf(h) {
   const t = h.title || "";
   if (h.theme === "crypto" || h.theme === "memes") return "crypto";
@@ -894,7 +955,7 @@ async function build8(section = "all") {
     return i;
   }));
   const cutoff = Date.now() - 2 * 864e5;
-  raw = raw.filter((i) => i.title && (!i.time || i.time > cutoff));
+  raw = raw.map((i) => ({ ...i, title: cleanTitle(i.title || "") })).filter((i) => i.title && (!i.time || i.time > cutoff) && !JUNK.some((re) => re.test(i.title)) && i.title.length >= 18);
   raw.sort((a, b) => (b.time || 0) - (a.time || 0));
   const clusters = [];
   for (const it of raw) {
@@ -911,7 +972,7 @@ async function build8(section = "all") {
   let items = clusters.map((c) => {
     const { words, ...rest } = c;
     return tagHeadline({ ...rest, time: c.first || c.time });
-  }).map((h) => ({ ...h, score: score(h) }));
+  }).filter((h) => !isJunk(h)).map((h) => ({ ...h, score: score(h) }));
   if (section !== "all") items = items.filter((i) => i.markets.includes(section) || i.score > 3.5);
   items.forEach((h) => {
     h.impact = h.score >= 3.8 ? "high" : h.score >= 2.2 ? "medium" : "low";
@@ -1272,39 +1333,124 @@ async function build13() {
 var fmtT2 = (t) => new Date(t).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" });
 var SECTION_OF_MARKET = { stocks: ["futures"], futures: ["futures"], forex: ["forex"], options: ["options", "futures"], crypto: ["crypto"], memes: ["memes", "crypto"], learning: [] };
 var STRAT_TIP = {
-  ict: "News-driven spikes often run the obvious highs or lows first and then reverse; the New York open and the minutes after big releases are when that tends to happen.",
+  ict: "News spikes often run the obvious highs or lows first, then reverse. That usually happens at the New York open or in the minutes after a big release.",
   pa: "Watch whether the moves today break and hold beyond yesterday’s high or low, or slip back inside.",
   sd: "News spikes into well-defined zones are where reactions tend to show up first.",
-  orderflow: "Expect volume to bunch up around the scheduled releases; that is when the real buying and selling shows.",
-  ind: "Fast news moves can stretch indicators quickly; signals right after a release are less reliable.",
-  news: "The scheduled releases below are your main events; surprises against the forecast drive the biggest moves.",
+  orderflow: "Expect volume to bunch up around scheduled releases. That is when the real buying and selling shows.",
+  ind: "Fast news moves stretch indicators quickly, so signals right after a release are less reliable.",
+  news: "The scheduled releases are your main events. Surprises against the forecast drive the biggest moves.",
   trend: "Trends tend to resume after news shocks fade unless the news genuinely changes the outlook.",
   fundamentals: "Central-bank comments and data surprises are what shift currency trends over days and weeks.",
-  carry: "Anything that changes interest-rate expectations changes the carry between currencies.",
+  carry: "Anything that changes rate expectations changes the interest gap between currencies.",
   value: "Day-to-day headlines matter less to you than earnings and the interest-rate outlook.",
-  growth: "Growth stocks are the most sensitive to bond yields; rising yields tend to weigh on them.",
+  growth: "Growth stocks are the most sensitive to bond yields. Rising yields tend to weigh on them.",
   momentum: "Strong sectors today are where momentum traders are crowding.",
-  earnings: "Check which big companies report this week; results can move whole sectors.",
+  earnings: "Check which big companies report this week. Results can move whole sectors.",
   dividends: "Higher bond yields make dividend stocks look less attractive by comparison.",
-  index: "For long-term index investors most daily headlines are noise; the big picture is rates, earnings and the economy.",
+  index: "For long-term index investors, most daily headlines are noise. The big picture is rates, earnings and the economy.",
   buy: "Big scheduled events make options pricier beforehand and cheaper right after.",
-  sell: "Fear rising (a higher VIX) makes premium richer but moves bigger; scheduled news is when that risk is highest.",
-  spreads: "Expected moves are larger on news days; spread widths that worked last week may be too tight today.",
-  zero: "Same-day options react hardest to releases and the last hour; news days can swing them fully either way.",
-  hedge: "Hedges are cheapest when things are calm; costs jump once fear rises.",
-  hold: "For holders, the big picture is interest rates, flows into crypto funds and regulation, not daily swings.",
+  sell: "When fear rises (a higher VIX), premium gets richer but moves get bigger. Scheduled news is when that risk is highest.",
+  spreads: "Expected moves are larger on news days. Spread widths that worked last week may be too tight today.",
+  zero: "Same-day options react hardest to releases and the last hour. On news days they can swing all the way either way.",
+  hedge: "Hedges are cheapest when things are calm. Costs jump once fear rises.",
+  hold: "For holders, the big picture is interest rates, money flowing into crypto funds and regulation, not daily swings.",
   swing: "Rate news and risk mood decide whether crypto swings continue over the next few days.",
-  perps: "Leverage gets punished on news spikes; funding and liquidations pile up when everyone leans one way.",
+  perps: "Leverage gets punished on news spikes. Liquidations pile up when everyone leans the same way.",
   narratives: "Money rotates fast between crypto sectors when the overall mood changes.",
   onchain: "Watch whether big holders move coins onto exchanges after major news.",
   defi: "Rate and regulation news change the appeal of on-chain yield.",
   launches: "When the wider crypto mood turns risk-off, new launches lose buyers fastest.",
-  trending: "Trending coins depend on the wider mood; when Bitcoin wobbles, attention dries up quickly.",
-  kols: "Calls work best in a risk-on mood; in a nervous market they fade faster.",
+  trending: "Trending coins depend on the wider mood. When Bitcoin wobbles, attention dries up quickly.",
+  kols: "Influencer calls work best in an upbeat market. In a nervous market they fade faster.",
   wallets: "Smart wallets often de-risk before big macro events.",
-  charts: "News days can blow through chart levels; give setups more room or wait for the dust to settle.",
-  unsure: "Use today to watch how markets react to the news below; it is the fastest way to learn what moves them."
+  charts: "News days can blow through chart levels. Give setups more room, or wait for things to settle.",
+  unsure: "Watch how markets react to today\u2019s news. It\u2019s the fastest way to learn what moves them."
 };
+var ALL_M = ["stocks", "futures", "forex", "options", "crypto", "memes"];
+var SCEN = [
+  { re: /\bCPI\b|consumer price|\bPCE\b|\bPPI\b|producer price/i, title: "Inflation report", markets: ALL_M,
+    up: ["Hotter than forecast", "Rate cuts look further away. Bond yields and the dollar would likely rise, while stocks, gold and crypto would likely dip."],
+    down: ["Cooler than forecast", "Hopes for rate cuts grow. Stocks, gold and crypto would likely rise, and the dollar would likely weaken."] },
+  { re: /non-?farm|payrolls|employment change/i, title: "Jobs report", markets: ALL_M,
+    up: ["More jobs than forecast", "A strong economy means fewer rate cuts. The dollar and yields would likely rise. Stocks could go either way."],
+    down: ["Fewer jobs than forecast", "The Fed gets more room to cut. The dollar would likely fall and gold would likely rise. A very weak number can scare stocks too."] },
+  { re: /unemployment claims|jobless claims/i, title: "Weekly jobless claims", markets: ["futures", "forex", "options"],
+    up: ["More claims than forecast", "A sign the job market is cooling. The dollar would likely dip and bonds would likely rally."],
+    down: ["Fewer claims than forecast", "The job market still looks firm. A small lift for the dollar."] },
+  { re: /FOMC|federal funds|fed chair|powell/i, title: "Fed decision or speech", markets: ALL_M,
+    up: ["Sounds tougher on inflation", "The dollar and yields would likely rise. Stocks and crypto would likely come under pressure."],
+    down: ["Hints at more rate cuts", "Stocks, gold and crypto would likely rise, and the dollar would likely fall."] },
+  { re: /central bank|\bECB\b|\bBOE\b|\bBOJ\b|\bRBA\b|\bBOC\b|\bSNB\b|\bRBNZ\b|main refinancing|official bank rate|policy rate|cash rate|overnight rate|monetary policy/i, title: "Central bank decision", markets: ["forex"], ccy: true,
+    up: ["Tougher than expected", "CCY would likely strengthen."],
+    down: ["Softer than expected", "CCY would likely weaken."] },
+  { re: /retail sales/i, title: "Retail sales", markets: ["stocks", "futures", "forex"],
+    up: ["Stronger spending", "Good for shops and consumer stocks, and a lift for the dollar. Slightly fewer rate-cut hopes."],
+    down: ["Weaker spending", "Worries about the consumer grow. The dollar would likely dip and bonds would likely rally."] },
+  { re: /\bGDP\b/i, title: "Economic growth (GDP)", markets: ["futures", "forex", "stocks"],
+    up: ["Faster growth", "CCY would likely strengthen. Stocks usually like it unless it fuels inflation fears."],
+    down: ["Slower growth", "CCY would likely weaken. Recession talk can weigh on stocks."] },
+  { re: /\bPMI\b|\bISM\b/i, title: "Business survey (PMI)", markets: ["futures", "forex"],
+    up: ["Stronger than forecast", "Businesses are doing better than thought. CCY would likely firm up."],
+    down: ["Weaker than forecast", "Businesses are struggling more than thought. CCY would likely soften."] }
+];
+var CCY_NAME = { USD: "The dollar", EUR: "The euro", GBP: "The pound", JPY: "The yen", AUD: "The Australian dollar", CAD: "The Canadian dollar", CHF: "The Swiss franc", NZD: "The New Zealand dollar", CNY: "The yuan" };
+var whenTxt = (t) => {
+  const d = ny(t).date, today = ny(Date.now()).date;
+  const tm = fmtT2(t);
+  return d === today ? `Today, ${tm} ET` : new Date(t).toLocaleString("en-US", { timeZone: "America/New_York", weekday: "short" }) + `, ${tm} ET`;
+};
+function buildOutlook(events, nextUp, earn, mood) {
+  const now = Date.now(), out = [], seen = new Set();
+  [...events.filter((e) => e.time > now), ...nextUp].forEach((e) => {
+    const sc = SCEN.find((x) => x.re.test(e.name)) || (e.impact === "High" ? { title: "Economic data", markets: e.country === "USD" ? ALL_M : ["forex"], up: ["Stronger than forecast", "CCY would likely strengthen."], down: ["Weaker than forecast", "CCY would likely weaken."] } : null);
+    if (!sc) return;
+    const key = sc.title + e.country;
+    if (seen.has(key) || out.length >= 4) return;
+    seen.add(key);
+    const cname = CCY_NAME[e.country] || e.country;
+    const fill = (t) => t.replace(/CCY/g, cname);
+    const prefix = /europe|euro|bank of|fed|fomc|ecb|boe|boj|japan|german|china|chinese|canad|austral|swiss|british|\buk\b|\bus\b/i.test(e.name) ? "" : e.country === "USD" ? "US " : e.country === "EUR" ? "Eurozone " : e.country === "GBP" ? "UK " : e.country === "JPY" ? "Japan " : e.country === "CNY" ? "China " : e.country === "CAD" ? "Canada " : e.country === "AUD" ? "Australia " : "";
+    out.push({
+      title: `${prefix}${e.name}`,
+      kind: sc.title,
+      when: whenTxt(e.time),
+      time: e.time,
+      likely: e.forecast ? `Forecast: ${e.forecast}${e.previous ? ` (last time: ${e.previous})` : ""}. If it lands close to that, markets have mostly priced it in and any move tends to fade. A surprise in either direction is what moves prices.` : `No forecast is published. Expect a quick move when it comes out, then watch whether it holds.`,
+      if_up: `${sc.up[0]}: ${fill(sc.up[1])}`,
+      if_down: `${sc.down[0]}: ${fill(sc.down[1])}`,
+      markets: sc.ccy && e.country !== "USD" ? ["forex"] : sc.markets
+    });
+  });
+  const heavy = (earn && earn.days || []).slice(0, 2).flatMap((d) => d.rows.filter((r) => r.heavy).map((r) => ({ ...r, date: d.date }))).slice(0, 2);
+  heavy.forEach((r) => {
+    if (out.length >= 5) return;
+    const nm = r.name.replace(/,? (Inc|Corp|Corporation|Incorporated|Co|Ltd|plc)\.?$/i, "");
+    const day = r.date === ny(now).date ? "Today" : new Date(r.date + "T12:00:00Z").toLocaleDateString("en-US", { weekday: "short", timeZone: "UTC" });
+    out.push({
+      title: `${nm} (${r.symbol}) earnings`, kind: "Earnings", when: `${day}, ${r.when === "after" ? "after the close" : r.when === "before" ? "before the open" : "time not set"}`, time: null,
+      likely: `${r.eps ? `Analysts expect earnings of ${r.eps} a share. ` : ""}What the company says about the next few months usually matters more than the last quarter.`,
+      if_up: `Beats and raises its outlook: the stock would likely jump, and it can lift the Nasdaq and its sector.`,
+      if_down: `Misses or cuts its outlook: the stock would likely drop and can drag its sector with it.`,
+      markets: ["stocks", "futures", "options"]
+    });
+  });
+  if (!out.length) out.push({
+    title: "No big scheduled news", kind: "Base case", when: "Next 24 hours", time: null,
+    likely: `Nothing major is on the calendar, so prices will most likely follow headlines and the trend already in place. ${mood}`,
+    if_up: "A surprise positive headline (a trade deal, a ceasefire, strong company news) would likely lift stocks and crypto.",
+    if_down: "A surprise negative headline (new tariffs, an attack, a profit warning) would likely push money into the dollar, bonds and gold.",
+    markets: ALL_M
+  });
+  return out;
+}
+function moodLine(pick) {
+  const spx = pick("^GSPC") || pick("ES=F"), vix = pick("^VIX"), tnx = pick("^TNX");
+  if (!spx) return "";
+  if (spx.pct > 0.3 && (!vix || vix.pct < 0)) return "The mood is upbeat: investors are taking on risk.";
+  if (spx.pct < -0.3 && (!vix || vix.pct > 0)) return "The mood is nervous: investors are pulling back from risk.";
+  if (tnx && Math.abs(tnx.change) > 0.05) return `Bond yields are moving (${tnx.change > 0 ? "up" : "down"}), and that is setting the tone.`;
+  return "The mood is calm. Markets are waiting for the next big piece of news.";
+}
 function relevantFor(h, m) {
   const secs = SECTION_OF_MARKET[m] || [];
   return h.markets && h.markets.some((x) => secs.includes(x));
@@ -1313,7 +1459,7 @@ async function build11(q = {}) {
   const prof = parseProfile(q.p);
   const level = q.lvl === "beginner" ? "beginner" : "pro";
   const detail = ["quick", "deep"].includes(q.d) ? q.d : "balanced";
-  const { res } = await settle({ world: build13(), news: build8("all"), cal: build(), mv: build9() });
+  const { res } = await settle({ world: build13(), news: build8("all"), cal: build(), mv: build9(), earn: build5() });
   const now = Date.now(), today = ny(now).date;
   const rows = res.world ? res.world.groups.flatMap((g) => g.rows.map((r) => ({ ...r, group: g.name, gid: g.id }))) : [];
   const pick = (sym) => rows.find((r) => r.sym === sym);
@@ -1332,6 +1478,10 @@ async function build11(q = {}) {
     coming_up: nextUp.map((e) => ({ when: new Date(e.time).toLocaleString("en-US", { timeZone: "America/New_York", weekday: "short", hour: "numeric", minute: "2-digit" }), name: e.name, country: e.country }))
   };
   const marketIds = prof.map((x) => x.m);
+  const mood = moodLine(pick);
+  const outlook = buildOutlook(events, nextUp, res.earn, mood);
+  facts.scheduled_next = outlook.map((o) => ({ title: o.title, when: o.when, forecast_note: o.likely }));
+  facts.mood = mood;
   let out = null, aiStatus = hasAI() ? "ok" : "no key";
   if (hasAI()) {
     try {
@@ -1347,14 +1497,18 @@ Return ONLY JSON:
  "stories": [{"ref": n, "headline": "short plain headline under 75 characters", "why": "1-2 sentences: why it matters for markets", "effects": [{"market": "short name such as Stocks, Tech stocks, Bonds, Dollar, Euro, Yen, Oil, Gold, Bitcoin, Memecoins", "dir": "up|down|mixed"}]}],
  "across": [{"area": "Stocks", "text": "1 sentence"}, {"area": "Bonds", "text": "..."}, {"area": "Currencies", "text": "..."}, {"area": "Commodities", "text": "..."}, {"area": "Crypto", "text": "..."}],
  "for_you": [{"market": one of ${JSON.stringify(marketIds.length ? marketIds : ["general"])}, "text": "1-3 sentences on what today's world news means for how this reader trades this market, written for their strategy"}],
- "watch": ["2-4 short items with times: what could move markets next"]}
+ "watch": ["2-4 short items with times: what could move markets next"],
+ "glance": {"happened": "1 sentence: the single most important thing that happened", "means": "1 sentence: what it means for markets in plain words", "next": "1 sentence: what is most likely to happen next and what would change that"},
+ "outlook": [{"title": "copy a title from scheduled_next, or a developing story", "likely": "1-2 sentences: the most likely outcome and the likely market reaction, framed as likely, not certain", "if_up": "1 sentence: if it surprises one way, which markets would likely move and which way", "if_down": "1 sentence: the other way"}]}
 Pick the 4-6 most important stories, world events first. effects should only list markets the data shows moving or that the story clearly concerns; use dir "mixed" when unclear. Cite stories only by ref numbers that exist.`
       });
       if (ai && ai.headline) {
         out = {
           headline: ai.headline, summary: ai.summary || "",
           stories: (ai.stories || []).filter((s) => refs[s.ref - 1]).slice(0, 6).map((s) => ({ ref: s.ref, headline: s.headline || refs[s.ref - 1].title, why: s.why || "", effects: (s.effects || []).slice(0, 4) })),
-          across: (ai.across || []).slice(0, 5), forYou: (ai.for_you || []).slice(0, 7), watch: (ai.watch || []).slice(0, 4), source: "ai"
+          across: (ai.across || []).slice(0, 5), forYou: (ai.for_you || []).slice(0, 7), watch: (ai.watch || []).slice(0, 4), source: "ai",
+          glance: ai.glance && ai.glance.happened ? ai.glance : null,
+          outlook: Array.isArray(ai.outlook) && ai.outlook.length ? ai.outlook.slice(0, 5).map((o) => { const base = outlook.find((x) => x.title === o.title) || {}; return { ...base, ...o, markets: base.markets || ALL_M, when: base.when || o.when || "" }; }) : null
         };
       }
     } catch (e) {
@@ -1363,6 +1517,15 @@ Pick the 4-6 most important stories, world events first. effects should only lis
     }
   }
   if (!out) out = rules2(prof, stories, refs, rows, pick, events, nextUp, res);
+  if (!out.outlook) out.outlook = outlook;
+  if (!out.glance) {
+    const top = stories.find((h) => h.why) || stories[0], o = outlook[0];
+    out.glance = {
+      happened: top ? top.title.replace(/[.\s]+$/, "") + "." : "A quiet day for world news so far.",
+      means: [top && top.why, mood].filter(Boolean).join(" ") || "No single story is driving markets right now.",
+      next: o ? (o.kind === "Base case" ? o.likely : `Next up: ${o.title}, ${o.when}. A result close to the forecast probably won\u2019t move much. A surprise is what moves prices.`) : ""
+    };
+  }
   return { ...out, refs, profile: prof.map((x) => x.m), level, detail, aiStatus, updated: now };
 }
 function rules2(prof, stories, refs, rows, pick, events, nextUp, res) {
@@ -1370,7 +1533,7 @@ function rules2(prof, stories, refs, rows, pick, events, nextUp, res) {
   const fmtP = (p) => p == null ? "" : ` (${p > 0 ? "+" : ""}${p.toFixed(2)}%)`;
   const spx = pick("^GSPC") || pick("ES=F"), tnx = pick("^TNX"), dxy = pick("DX-Y.NYB"), oil = pick("CL=F"), gold = pick("GC=F"), btc = pick("BTC-USD"), eu = pick("^STOXX50E"), jp = pick("^N225");
   const top = stories[0];
-  const headline = top ? top.title : spx ? `US stocks ${word(spx.pct, "rise", "fall")}${fmtP(spx.pct)}` : "Markets at a glance";
+  const headline = top ? top.title.replace(/[.\s]+$/, "") : spx ? `US stocks ${word(spx.pct, "rise", "fall")}${fmtP(spx.pct)}` : "Markets at a glance";
   const sum = [];
   if (spx) sum.push(`US stocks are ${word(spx.pct, "higher", "lower")}${fmtP(spx.pct)}${eu ? `, Europe is ${word(eu.pct, "up", "down")}` : ""}${jp ? ` and Japan is ${word(jp.pct, "up", "down")}` : ""}.`);
   if (tnx && dxy) sum.push(`Bond yields are ${word(tnx.change, "rising", "falling")} and the dollar is ${word(dxy.pct, "stronger", "weaker")}.`);
@@ -1392,7 +1555,7 @@ function rules2(prof, stories, refs, rows, pick, events, nextUp, res) {
     if (tip) text += " " + tip;
     return { market: x.m, text };
   });
-  if (prof.some((x) => x.m === "learning")) forYou.push({ market: "learning", text: top ? `A good one to follow today: “${top.title}”. Watch how stocks, the dollar and gold react to it over the next few hours.` : "Watch how stocks, the dollar and gold react to today’s headlines; that is the fastest way to learn what moves markets." });
+  if (prof.some((x) => x.m === "learning")) forYou.push({ market: "learning", text: top ? `A good one to follow today: “${top.title}”. Watch how stocks, the dollar and gold react to it over the next few hours.` : "Watch how stocks, the dollar and gold react to today’s headlines. That is the fastest way to learn what moves markets." });
   const watch = nextUp.map((e) => `${e.name} (${e.country}), ${new Date(e.time).toLocaleString("en-US", { timeZone: "America/New_York", weekday: "short", hour: "numeric", minute: "2-digit" })}`);
   return { headline, summary: sum.join(" "), stories: storiesOut, across, forYou, watch, source: "rules" };
 }
@@ -1433,6 +1596,85 @@ Return ONLY JSON: {"what": "1-2 sentences: what happened, in plain English", "wh
   };
 }
 
+// api/memedesk.js
+var MEME_EFFECT = {
+  memes: "Directly about memecoins. Expect fast moves in the coins it names, and a ripple across the rest.",
+  crypto: "When Bitcoin and Solana move, memecoins usually move two or three times as much in the same direction.",
+  rates: "Rate-cut hopes pull money into risky bets like memecoins. Rate fears drain them first.",
+  inflation: "Hot inflation means fewer rate cuts, which usually hurts memecoins. Cool inflation helps them.",
+  jobs: "Job numbers change rate-cut odds. Anything that makes cuts more likely tends to help memecoins.",
+  world: "Scary headlines make people sell their riskiest bets first, and memecoins are at the top of that list.",
+  trade: "Tariff shocks hit risky assets fast. Memecoins usually fall hardest, then bounce hardest if it's walked back.",
+  dollar: "A stronger dollar usually drains money from crypto. A weaker one helps.",
+  gov: "Crypto rules and political news can move the whole sector. Coins tied to politicians react the most.",
+  ai: "AI hype often spills into AI-themed coins.",
+  energy: "Oil only matters here if it changes the inflation and rate outlook.",
+  earnings: "Big tech results set the risk mood. A strong Nasdaq usually helps crypto.",
+  gold: "Gold rising on fear is usually bad for memecoins. Gold rising on rate-cut hopes is usually fine.",
+  options: "Big swings in stock-market fear tend to spill into crypto."
+};
+var MEME_FOR = {
+  stocks: "Memecoins don't move your stocks, but they are a live gauge of risk appetite. When they surge, speculative stocks often do too.",
+  futures: "Memecoins don't move index futures. Treat a memecoin crash as a sign that risk appetite is fading, which can show up in the Nasdaq later.",
+  forex: "Memecoins barely touch currencies. The shared driver is the dollar: a weaker dollar tends to help both risk currencies and crypto.",
+  options: "Crypto-linked stocks such as Coinbase and MicroStrategy can swing with crypto sentiment, which affects their option prices.",
+  crypto: "Memecoin frenzies often come late in a crypto rally. When they unwind, larger coins usually dip too.",
+  memes: null,
+  learning: "Memecoins are the riskiest corner of crypto. Watching them shows how quickly hype comes and goes."
+};
+async function build14(q = {}) {
+  const prof = parseProfile(q.p);
+  const { res } = await settle({ memes: build4(), wire: build8("memes"), world: build13() });
+  const m = res.memes || { hot: [], majors: [], lines: [] };
+  const items = (res.wire && res.wire.items || []).slice().sort((a, b) => b.time - a.time);
+  const rows = res.world ? res.world.groups.flatMap((g) => g.rows) : [];
+  const btc = rows.find((r) => r.sym === "BTC-USD"), sol = rows.find((r) => r.sym === "SOL-USD");
+  const tokens = [...m.majors.map((c) => ({ symbol: c.symbol, name: c.name })), ...m.hot.map((h) => ({ symbol: h.symbol, name: h.name }))];
+  const tokenNews = {};
+  tokens.forEach((t) => {
+    const sym = String(t.symbol || "").toUpperCase();
+    if (!sym || tokenNews[sym]) return;
+    const parts = [sym.length >= 3 ? "\\b\\$?" + sym.replace(/[^A-Z0-9]/g, "") + "\\b" : null, t.name && t.name.length >= 4 ? "\\b" + t.name.replace(/[^\w ]/g, "").trim() + "\\b" : null].filter(Boolean);
+    if (!parts.length) return;
+    const re = new RegExp(parts.join("|"), "i");
+    const hits = items.filter((i) => re.test(i.title)).slice(0, 3).map((i) => ({ title: i.title, link: i.link, source: i.source, time: i.time }));
+    if (hits.length) tokenNews[sym] = hits;
+  });
+  const avg = m.majors.length ? m.majors.reduce((s2, c) => s2 + (c.ch24 || 0), 0) / m.majors.length : null;
+  const moodWord = avg == null ? "unknown" : avg > 5 ? "hot" : avg > 1 ? "warm" : avg < -5 ? "cold" : avg < -1 ? "cool" : "flat";
+  const mood = {
+    word: moodWord, avg,
+    text: avg == null ? "Memecoin prices are unavailable right now." : `${avg > 0 ? "Up" : "Down"} ${Math.abs(avg).toFixed(1)}% on average across the biggest memecoins today${btc ? `, with Bitcoin ${btc.pct >= 0 ? "+" : ""}${btc.pct}%` : ""}${sol ? ` and Solana ${sol.pct >= 0 ? "+" : ""}${sol.pct}%` : ""}. ` + (avg > 5 ? "Risk appetite is strong. This is when new coins get the most attention, and also when late buyers get hurt." : avg < -5 ? "Risk appetite is weak. Thin, newer coins usually fall the most in this kind of market." : "No strong push either way. Moves are coin by coin.")
+  };
+  const drivers = items.filter((i) => i.theme && i.title.length > 25).slice(0, 30);
+  const seenTheme = {};
+  const picked = [];
+  drivers.forEach((i) => {
+    if (picked.length >= 6) return;
+    if ((seenTheme[i.theme] || 0) >= 2) return;
+    seenTheme[i.theme] = (seenTheme[i.theme] || 0) + 1;
+    picked.push({ title: i.title, link: i.link, source: i.source, time: i.time, theme: i.themeLabel, effect: MEME_EFFECT[i.theme] || "" });
+  });
+  let ai = null, aiStatus = hasAI() ? "ok" : "no key";
+  if (hasAI() && picked.length) {
+    try {
+      const r = await askClaude({
+        maxTokens: 1400,
+        system: VOICE2 + "\n" + profileText(prof, "pro", "balanced"),
+        user: `Data: ${JSON.stringify({ mood: mood.text, news: picked.map((p, i) => ({ ref: i + 1, title: p.title, topic: p.theme })), trending: m.hot.slice(0, 8).map((h) => ({ symbol: h.symbol, chain: h.chain, ch24: h.ch24, about: h.about || h.desc })) })}
+Return ONLY JSON: {"summary": "2 sentences: what is driving memecoins right now", "effects": [{"ref": n, "effect": "1 sentence: how this story is likely to affect memecoins"}], "for_you": [{"market": one of ${JSON.stringify(prof.map((x) => x.m).filter((x) => x !== "memes").concat(["memes"]))}, "text": "1-2 sentences: what today's memecoin and crypto news means for this market"}]}`
+      });
+      ai = r;
+    } catch (e) {
+      aiStatus = "error: " + String(e.message || e).slice(0, 160);
+    }
+  }
+  if (ai && Array.isArray(ai.effects)) ai.effects.forEach((e) => { if (picked[e.ref - 1] && e.effect) picked[e.ref - 1].effect = e.effect; });
+  let forYou = prof.filter((x) => MEME_FOR[x.m] !== undefined).map((x) => ({ market: x.m, text: x.m === "memes" ? (avg != null && avg < -3 ? "A risk-off day. Newer coins with thin liquidity are the most likely to keep falling. Size down or wait for the mood to turn." : avg != null && avg > 3 ? "A risk-on day. Attention is flowing to new and trending coins, but runs fade fast. Know where you'd get out before you get in." : "A mixed day. Coin-specific news matters more than the overall mood right now.") : MEME_FOR[x.m] })).filter((x) => x.text);
+  if (ai && Array.isArray(ai.for_you) && ai.for_you.length) forYou = ai.for_you.slice(0, 6);
+  return { mood, summary: ai && ai.summary || "", drivers: picked, tokenNews, forYou, aiStatus, source: ai ? "ai" : "rules", updated: Date.now() };
+}
+
 // api/_lib/router.js
 var ROUTES = {
   calendar: [() => build(), 900],
@@ -1447,6 +1689,7 @@ var ROUTES = {
   recap: [(q) => build10(String(q.sym || "NQ").toUpperCase()), 180],
   desk: [(q) => build11(q), hasAI() ? 900 : 180],
   world: [() => build13(), 120],
+  memedesk: [(q) => build14(q), hasAI() ? 600 : 180],
   explain: [(q) => build12(q), 86400]
 };
 async function handler(req, res) {
