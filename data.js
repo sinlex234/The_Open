@@ -1146,7 +1146,7 @@ async function askClaude({ system, user, maxTokens = 900 }) {
       method: "POST",
       signal: ctrl.signal,
       headers: { "x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-      body: JSON.stringify({ model: process.env.ANTHROPIC_MODEL || "claude-haiku-5-5", max_tokens: maxTokens, system, messages: [{ role: "user", content: user }] })
+      body: JSON.stringify({ model: process.env.ANTHROPIC_MODEL || "claude-haiku-5-5", max_tokens: maxTokens, thinking: { type: "disabled" }, system, messages: [{ role: "user", content: user }] })
     });
     const j = await r.json();
     if (!r.ok) throw new Error(j.error && j.error.message || "Claude API " + r.status);
