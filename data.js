@@ -569,6 +569,116 @@ var MEME_ABOUT = {
   AI16Z: "A Solana token tied to an AI agent framework, part of the AI-agent coin trend.",
   USELESS: "A Solana coin whose pitch is that it has no use at all."
 };
+// ---------- memecoin thesis (written from live data; AI rewrites it when available) ----------
+var MAJOR_TICKERS = { BTC: "Bitcoin", ETH: "Ethereum", SOL: "Solana", BNB: "BNB", XRP: "XRP", DOGE: "Dogecoin", ADA: "Cardano", TRX: "Tron", TON: "Toncoin", USDT: "Tether", USDC: "USD Coin", XMR: "Monero", LTC: "Litecoin", SHIB: "Shiba Inu", PEPE: "Pepe" };
+var NARR = [
+  [/\b(gta|game|gaming|play|arcade|minecraft|roblox|fortnite)\b|gta6/i, "Gaming hype", "It borrows attention from a big gaming moment or brand. These coins live and die with the buzz around that game, and they are not connected to the game’s maker."],
+  [/\b(ai|agent|gpt|bot|neural|robot|agi)\b|ai16z/i, "AI theme", "It rides the AI trend: coins named after AI agents or chatbots. Most have no working AI product. The name is the pitch."],
+  [/trump|maga|biden|kamala|elon|musk|kanye|drake|taylor|melania|barron|vance/i, "Public figure", "It is named after a well-known person. Unless that person says otherwise, assume it is unofficial. These coins jump on that person’s headlines and fade fast."],
+  [/\b(monero|bitcoin|ethereum|solana|xrp|cardano|litecoin)\b/i, "Spin-off of a big coin", "It is a joke spin-off of an established coin. It is not connected to that coin’s developers and does not share its technology."],
+  [/\b(inu|dog|doge\w*|shib|puppy|pup|wif|bonk|corgi|shiba|doggo)\b/i, "Dog coin", "Dog coins are the oldest memecoin category, following Dogecoin and Shiba Inu. New ones try to borrow that crowd."],
+  [/\b(cat|kitty|meow|gato|popcat|mew|kitten|neko)\b|cat$/i, "Cat coin", "Cat coins pitch themselves as the challenger to the dog coins. The theme comes in waves when a big cat coin is running."],
+  [/\b(pepe|frog|toad|brett)\b/i, "Frog / Pepe meme", "It belongs to the Pepe the Frog family of internet memes, one of the most traded memecoin themes."],
+  [/\b(penguin|pengu|hippo|moo ?deng|squirrel|pnut|goat|monkey|ape|bear|bull|fish|duck)\b/i, "Viral animal", "It is built around a viral animal or animal meme. These spike when the animal trends online, then usually fade."],
+  [/\b(titty|boob|butt|fart|poop|cum|sex|degen)\b/i, "Shock-humor meme", "Its whole pitch is crude humor meant to go viral. There is nothing behind it but attention."]
+];
+var NARR_SHORT = { "Gaming hype": "A gaming-hype coin", "AI theme": "An AI-themed coin", "Public figure": "A coin named after a public figure", "Spin-off of a big coin": "A joke spin-off of a big coin", "Dog coin": "A dog coin", "Cat coin": "A cat coin", "Frog / Pepe meme": "A Pepe-style frog coin", "Viral animal": "A viral-animal coin", "Shock-humor meme": "A shock-humor coin", "Pure attention play": "A pure attention play" };
+function narrativeOf(name, desc) {
+  const d = String(desc || "").replace(/\b(on|built on|launched on|native to)\s+(solana|ethereum|base|bsc|bnb chain|sui|tron)\b/gi, "");
+  const hit = NARR.find(([re]) => re.test(name)) || NARR.find(([re]) => re.test(d));
+  return hit ? { label: hit[1], text: hit[2] } : { label: "Pure attention play", text: "There is no clear theme beyond the name and the community around it. Its price depends entirely on how many people keep talking about it." };
+}
+var fpct = (v, dp = 0) => v == null || !isFinite(v) ? "n/a" : `${v > 0 ? "+" : ""}${v.toFixed(Math.abs(v) < 10 ? 1 : dp)}%`;
+var money2 = (v) => v == null ? "unknown" : v >= 1e9 ? "$" + (v / 1e9).toFixed(1) + "B" : v >= 1e6 ? "$" + (v / 1e6).toFixed(1) + "M" : v >= 1e3 ? "$" + Math.round(v / 1e3) + "K" : "$" + Math.round(v);
+function sizeTier(m) {
+  if (m == null) return "";
+  if (m < 1e5) return "a micro-cap (under $100K), which is lottery-ticket territory";
+  if (m < 1e6) return "tiny (under $1M), so a few buyers can double it and a few sellers can halve it";
+  if (m < 1e7) return "small (under $10M) for a memecoin";
+  if (m < 1e8) return "mid-sized for a memecoin";
+  return "large for a memecoin";
+}
+function thesisFor(t, p, mood) {
+  const sym = String(t.symbol || "").toUpperCase();
+  const narr = narrativeOf(t.name, t.desc);
+  const ageH = t.created ? (Date.now() - t.created) / 36e5 : null;
+  const age = ageH == null ? "" : ageH < 1 ? "less than an hour" : ageH < 48 ? `${Math.round(ageH)} hours` : `${Math.round(ageH / 24)} days`;
+  const ch1 = t.ch1, ch6 = p && p.priceChange && p.priceChange.h6, ch24 = t.ch24;
+  const buys = p && p.txns && p.txns.h24 ? p.txns.h24.buys : null, sells = p && p.txns && p.txns.h24 ? p.txns.h24.sells : null;
+  const liqPct = t.liq && t.mcap ? t.liq / t.mcap * 100 : null;
+  const turn = t.liq && t.vol24 ? t.vol24 / t.liq : null;
+  const copy = MAJOR_TICKERS[sym] && !new RegExp(MAJOR_TICKERS[sym], "i").test(t.name) ? MAJOR_TICKERS[sym] : null;
+  const socials = (t.links || []).map((l) => (l.type || "").toLowerCase());
+  const hasX = socials.some((x) => /twitter|^x$/.test(x)), hasTg = socials.includes("telegram"), hasWeb = socials.includes("website");
+
+  let stage, stageTxt;
+  if (ch24 != null && ch24 <= -80) { stage = "Collapsed"; stageTxt = `It has collapsed, ${fpct(ch24)} in 24 hours. A drop this size usually means the creator or early holders sold everything (often called a rug pull). Coins rarely recover from this.`; }
+  else if (ch24 != null && ch24 <= -40) { stage = "Falling hard"; stageTxt = `It is falling hard, ${fpct(ch24)} in 24 hours. Early buyers are taking profits or leaving, and new buyers are not stepping in.`; }
+  else if (ch24 != null && ch24 >= 100 && ch1 != null && ch1 < -5) { stage = "Cooling after a run"; stageTxt = `It ran ${fpct(ch24)} in 24 hours but is ${fpct(ch1)} in the last hour, a sign the first wave of buyers is cashing out.`; }
+  else if (ch24 != null && ch24 >= 100) { stage = "Pumping"; stageTxt = `It is in a strong run, ${fpct(ch24)} in 24 hours${ch1 != null ? ` and ${fpct(ch1)} in the last hour` : ""}. Runs like this attract late buyers, which is also when they tend to end.`; }
+  else if (ch24 != null && ch24 >= 15) { stage = "Climbing"; stageTxt = `It is climbing, ${fpct(ch24)} in 24 hours${ch6 != null ? ` (${fpct(ch6)} over 6 hours)` : ""}.`; }
+  else if (ch24 != null && ch24 <= -15) { stage = "Sliding"; stageTxt = `It is sliding, ${fpct(ch24)} in 24 hours${ch6 != null ? ` (${fpct(ch6)} over 6 hours)` : ""}.`; }
+  else { stage = "Flat"; stageTxt = `It is roughly flat, ${fpct(ch24)} in 24 hours. Attention has not picked a direction yet.`; }
+
+  const doing = [stageTxt];
+  if (t.mcap) doing.push(`At ${money2(t.mcap)} it is ${sizeTier(t.mcap)}.`);
+  if (liqPct != null) doing.push(liqPct < 5 ? `Only ${money2(t.liq)} sits in its trading pool (${liqPct.toFixed(1)}% of its value). Selling even a modest amount would push the price down sharply.` : liqPct > 20 ? `Its trading pool holds ${money2(t.liq)}, a healthy ${liqPct.toFixed(0)}% of its value, so you can buy and sell without moving the price too much.` : `Its trading pool holds ${money2(t.liq)} (${liqPct.toFixed(0)}% of its value). That is workable, but large orders will still move the price.`);
+  if (turn != null) doing.push(turn > 10 ? `It traded ${money2(t.vol24)} today, ${turn.toFixed(0)} times its pool. That is frenzy-level activity, often bots and fast flippers.` : turn > 2 ? `It traded ${money2(t.vol24)} today, which shows real attention.` : `Trading is quiet at ${money2(t.vol24)} today.`);
+  if (buys != null && sells != null && buys + sells > 50) doing.push(buys > sells * 1.3 ? `Buyers outnumber sellers (${buys.toLocaleString()} buys vs ${sells.toLocaleString()} sells today).` : sells > buys * 1.3 ? `Sellers outnumber buyers (${sells.toLocaleString()} sells vs ${buys.toLocaleString()} buys today).` : `Buys and sells are roughly even (${buys.toLocaleString()} vs ${sells.toLocaleString()}).`);
+
+  const what = [`${t.name} (${sym}) is a memecoin on ${t.chain ? t.chain[0].toUpperCase() + t.chain.slice(1) : "an unknown chain"}${age ? `, trading for ${age}` : ""}.`];
+  if (t.about) what.push(t.about);
+  else if (t.desc) what.push(`Its creators describe it as: “${t.desc}”`);
+  else what.push("Its creators have not published a description.");
+  if (copy) what.push(`Warning: it uses the ticker ${sym}, which belongs to ${copy}. It has nothing to do with ${copy}. Copycat tickers are a common way to catch careless buyers.`);
+
+  const bull = [], bear = [];
+  if (ch24 > 15 && stage !== "Cooling after a run") bull.push("Momentum is on its side right now, and memecoins often keep running while attention grows.");
+  if (turn > 2) bull.push("Heavy trading means people are watching it, and attention is the fuel for any memecoin.");
+  if (liqPct != null && liqPct > 15) bull.push("A deep pool for its size makes it easier for bigger buyers to get in.");
+  if (hasX || hasTg) bull.push(`It has ${[hasX && "an X account", hasTg && "a Telegram group", hasWeb && "a website"].filter(Boolean).join(", ")}, so there is a community that can keep promoting it.`);
+  if (t.boosts) bull.push("Someone is paying to promote it on DexScreener, which puts it in front of more buyers.");
+  if (mood && mood.word && ["hot", "warm"].includes(mood.word)) bull.push("The wider memecoin market is in a good mood today.");
+  if (!bull.length) bull.push("A new wave of attention, such as a viral post or a big account mentioning it, could revive it.");
+  if (ageH != null && ageH < 72) bear.push("It is only days old or less. Most tokens this new go to zero within weeks.");
+  if (liqPct != null && liqPct < 5) bear.push("The thin pool means you may not be able to sell near the price you see.");
+  if (ch24 <= -40) bear.push("The sharp drop suggests insiders or early buyers have already left.");
+  if (stage === "Cooling after a run" || ch24 > 200) bear.push("After a run this big, late buyers are usually the ones left holding when it reverses.");
+  if (!t.desc && !t.about) bear.push("No stated purpose or team, so nothing holds the price up except hype.");
+  if (copy) bear.push(`The borrowed ${sym} ticker is a red flag.`);
+  if (mood && mood.word && ["cold", "cool"].includes(mood.word)) bear.push("The wider memecoin market is weak today, which makes it harder for any single coin to hold gains.");
+  if (!hasX && !hasTg && !hasWeb) bear.push("No social links, which makes it hard to tell who is behind it.");
+  bear.push("Memecoins have no earnings or product to fall back on. If attention moves on, the price usually goes with it.");
+
+  let risk = "High";
+  if (stage === "Collapsed" || (liqPct != null && liqPct < 3) || (ageH != null && ageH < 24) || copy || (t.mcap != null && t.mcap < 1e5)) risk = "Extreme";
+  else if ((ageH != null && ageH < 24 * 14) || (t.mcap != null && t.mcap < 1e7)) risk = "Very high";
+
+  const watch = stage === "Collapsed" ? "Whether trading dries up completely. If volume disappears, the coin is effectively dead."
+    : stage === "Pumping" || stage === "Cooling after a run" ? "Whether the price holds above where the run started its last leg. A fast give-back of half the gains usually means the run is over."
+    : liqPct != null && liqPct < 5 ? "Whether the pool grows. Rising liquidity would mean more serious money is coming in."
+    : "Whether volume rises with the price. Price moves without volume rarely last.";
+
+  const chainN = t.chain ? t.chain[0].toUpperCase() + t.chain.slice(1) : "an unknown chain";
+  const headline = `${NARR_SHORT[narr.label] || "A memecoin"} on ${chainN}${ageH != null && ageH < 72 ? `, ${age} old` : ""}, ${stage === "Cooling after a run" ? "cooling after a big run" : stage.toLowerCase()}`;
+  return { headline, what: what.join(" "), narrative: narr.label + ". " + narr.text, doing: doing.join(" "), bull, bear: [...new Set(bear)].slice(0, 5), watch, risk, stage, source: "data" };
+}
+function thesisMajor(c, mood) {
+  const narr = narrativeOf(c.name, "");
+  const doing = [`${c.name} is ${fpct(c.ch24)} today and ${fpct(c.ch7)} over the past week, worth about ${money2(c.mcap)}.`];
+  doing.push(c.ch7 > 15 ? "It is in a strong week, which usually means money is rotating into memecoins." : c.ch7 < -15 ? "It has had a rough week, a sign money is leaving memecoins." : "Its weekly move is modest. It is following the wider market rather than leading it.");
+  if (mood && mood.text) doing.push("Across memecoins: " + mood.text.split(". ").slice(-1)[0]);
+  return {
+    headline: `${narr.label === "Pure attention play" ? "One of the biggest memecoins" : (NARR_SHORT[narr.label] || "A memecoin").replace(/^An? /, "An established ").replace("An established coin named", "An established coin named")}, ${c.ch7 > 5 ? "rising" : c.ch7 < -5 ? "falling" : "steady"} this week`,
+    what: c.about || `${c.name} (${c.symbol}) is one of the largest memecoins by value.`,
+    narrative: narr.label + ". " + narr.text,
+    doing: doing.join(" "),
+    bull: ["It is large and widely listed, so it is easy to buy and sell.", "Big memecoins usually lead when money flows back into the sector.", ...(c.ch7 > 5 ? ["It has momentum this week."] : [])],
+    bear: ["It has no earnings or product. Its value depends on attention and the wider crypto mood.", "It usually falls harder than Bitcoin when crypto sells off.", ...(c.ch7 < -5 ? ["It is losing ground this week."] : [])],
+    watch: "Bitcoin and the memecoin mood. Large memecoins rarely move against both.",
+    risk: "High", stage: c.ch24 > 5 ? "Climbing" : c.ch24 < -5 ? "Sliding" : "Flat", source: "data"
+  };
+}
 async function build4() {
   const { res, errors } = await settle({
     boosts: getJSON(`${DS}/token-boosts/top/v1`),
@@ -610,10 +720,15 @@ async function build4() {
       desc: cleanDesc(b.description || p.info && p.info.description || ""),
       links: [...(b.links || []), ...(p.info && p.info.socials || []).map((x) => ({ type: x.type, url: x.url })), ...(p.info && p.info.websites || []).map((x) => ({ type: "website", url: x.url }))].filter((l) => l && l.url).slice(0, 4),
       about: MEME_ABOUT[(p.baseToken.symbol || "").toUpperCase()] || null,
-      notes: tokenNotes(p)
+      notes: tokenNotes(p),
+      _p: p
     };
-  }).filter(Boolean).slice(0, 18);
+  }).filter(Boolean).filter((t) => (t.liq == null || t.liq >= 1500) && (t.mcap == null || t.mcap >= 1e4)).slice(0, 18);
   const majors = (res.majors || []).map((c) => ({ name: c.name, symbol: c.symbol.toUpperCase(), image: c.image, price: c.current_price, mcap: c.market_cap, ch24: c.price_change_percentage_24h_in_currency ?? c.price_change_percentage_24h, ch7: c.price_change_percentage_7d_in_currency, about: MEME_ABOUT[c.symbol.toUpperCase()] || null }));
+  const avg0 = majors.length ? majors.reduce((a, c) => a + (c.ch24 || 0), 0) / majors.length : null;
+  const mood0 = { word: avg0 == null ? "" : avg0 > 5 ? "hot" : avg0 > 1 ? "warm" : avg0 < -5 ? "cold" : avg0 < -1 ? "cool" : "flat", text: "" };
+  hot.forEach((t) => { t.thesis = thesisFor(t, t._p, mood0); delete t._p; });
+  majors.forEach((c) => { c.thesis = thesisMajor(c, mood0); });
   const lines = [];
   if (majors.length) {
     const up = majors.filter((c) => c.ch24 > 0).length;
@@ -1765,7 +1880,10 @@ async function build14(q = {}) {
   tokens.forEach((t) => {
     const sym = String(t.symbol || "").toUpperCase();
     if (!sym || tokenNews[sym]) return;
-    const parts = [sym.length >= 3 ? "\\b\\$?" + sym.replace(/[^A-Z0-9]/g, "") + "\\b" : null, t.name && t.name.length >= 4 && /^[\x20-\x7e]+$/.test(t.name) ? "\\b" + t.name.replace(/[^\w ]/g, "").trim() + "\\b" : null].filter(Boolean);
+    const own = MAJOR_TICKERS[sym] && new RegExp(MAJOR_TICKERS[sym], "i").test(t.name || "");
+    const borrowed = MAJOR_TICKERS[sym] && !own;
+    const nameOk = t.name && t.name.length >= 4 && /^[\x20-\x7e]+$/.test(t.name) && !Object.values(MAJOR_TICKERS).some((n) => n.toLowerCase() === t.name.toLowerCase()) || own;
+    const parts = [sym.length >= 3 && !borrowed ? "\\b\\$?" + sym.replace(/[^A-Z0-9]/g, "") + "\\b" : null, nameOk ? "\\b" + t.name.replace(/[^\w ]/g, "").trim() + "\\b" : null].filter(Boolean);
     if (!parts.length) return;
     const re = new RegExp(parts.join("|"), "i");
     const hits = items.filter((i) => re.test(i.title)).slice(0, 3).map((i) => ({ title: i.title, link: i.link, source: i.source, time: i.time }));
@@ -1800,10 +1918,25 @@ Return ONLY JSON: {"summary": "2 sentences: what is driving memecoins right now"
       aiStatus = "error: " + String(e.message || e).slice(0, 160);
     }
   }
+  let theses = {};
+  if (hasAI() && m.hot.length) {
+    try {
+      const pick2 = m.hot.slice(0, 10);
+      const r2 = await askClaude({
+        maxTokens: 3500,
+        system: VOICE2 + "\nYou write short investment-style theses on memecoins for everyday readers. Be honest about risk. Never say to buy or sell.",
+        user: `For each token, rewrite the draft thesis into clear, specific plain English using only the data given. Data: ${JSON.stringify(pick2.map((h) => ({ symbol: h.symbol, name: h.name, chain: h.chain, description: h.desc || h.about, price_change_1h: h.ch1, price_change_24h: h.ch24, market_value: h.mcap, liquidity: h.liq, volume_24h: h.vol24, age_hours: h.created ? Math.round((Date.now() - h.created) / 36e5) : null, draft: h.thesis })))}
+Return ONLY JSON: {"SYMBOL": {"headline": "under 80 characters", "what": "2-3 sentences: what the coin is and its story", "narrative": "1-2 sentences: the meme or trend it rides", "doing": "2-4 sentences: how it is doing right now, with the numbers", "bull": ["2-3 short points"], "bear": ["2-4 short points"], "watch": "1 sentence", "risk": "Extreme|Very high|High"}}`
+      });
+      if (r2 && typeof r2 === "object") Object.entries(r2).forEach(([k, v]) => { if (v && v.what) theses[k.toUpperCase()] = { ...v, source: "ai" }; });
+    } catch (e) {
+      aiStatus = "error: " + String(e.message || e).slice(0, 160);
+    }
+  }
   if (ai && Array.isArray(ai.effects)) ai.effects.forEach((e) => { if (picked[e.ref - 1] && e.effect) picked[e.ref - 1].effect = e.effect; });
   let forYou = prof.filter((x) => MEME_FOR[x.m] !== undefined).map((x) => ({ market: x.m, text: x.m === "memes" ? (avg != null && avg < -3 ? "A risk-off day. Newer coins with thin liquidity are the most likely to keep falling. Size down or wait for the mood to turn." : avg != null && avg > 3 ? "A risk-on day. Attention is flowing to new and trending coins, but runs fade fast. Know where you'd get out before you get in." : "A mixed day. Coin-specific news matters more than the overall mood right now.") : MEME_FOR[x.m] })).filter((x) => x.text);
   if (ai && Array.isArray(ai.for_you) && ai.for_you.length) forYou = ai.for_you.slice(0, 6);
-  return { mood, summary: ai && ai.summary || "", drivers: picked, tokenNews, forYou, aiStatus, source: ai ? "ai" : "rules", updated: Date.now() };
+  return { mood, summary: ai && ai.summary || "", drivers: picked, tokenNews, theses, forYou, aiStatus, source: ai ? "ai" : "rules", updated: Date.now() };
 }
 
 // api/_lib/router.js

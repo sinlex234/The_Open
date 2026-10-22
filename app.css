@@ -386,6 +386,25 @@ table.t td small{display:block;color:var(--ink-3);font-size:12px;font-family:var
 .flag{font-size:12px;padding:3px 9px;border-radius:99px;background:var(--panel-3);color:var(--ink-2)}
 .flag.warn{background:var(--down-bg);color:var(--down)} .flag.ok{background:var(--up-bg);color:var(--up)}
 
+/* memecoin thesis */
+.mgrid{grid-template-columns:repeat(auto-fill,minmax(400px,1fr))}
+.th-head{margin:0;font:600 15px/1.4 var(--sans);letter-spacing:-.01em}
+.th-tags{display:flex;gap:6px;flex-wrap:wrap}
+.pill.warn{border-color:transparent;background:rgba(245,158,11,.12);color:var(--warn)}
+.th-wrap summary{cursor:pointer;font:500 12.5px var(--sans);color:var(--acc-2);list-style:none}
+.th-wrap summary::-webkit-details-marker{display:none}
+.th-wrap summary::before{content:"+ "}
+.th-wrap[open] summary::before{content:"− "}
+.thesis{display:grid;gap:12px;margin-top:12px}
+.th-sec h4{margin:0 0 4px;font:500 11px var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+.th-sec p{margin:0;font-size:13.5px;line-height:1.6;color:var(--ink-2)}
+.th-cases{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.th-cases .th-sec{background:var(--panel-2);border-radius:var(--r-sm);padding:10px 12px}
+.th-sec.bull h4{color:var(--up)} .th-sec.bear h4{color:var(--down)}
+.th-list{margin:0;padding-left:16px;display:grid;gap:5px;font-size:13px;line-height:1.5;color:var(--ink-2)}
+.thesis .tnews{border-top:none;padding-top:0}
+@media (max-width:640px){.th-cases{grid-template-columns:1fr}.mgrid{grid-template-columns:1fr}}
+
 /* ---------- glossary ---------- */
 .gl-cat{margin-top:22px;background:var(--panel);border:1px solid var(--rule);border-radius:var(--r);padding:18px 20px 6px}
 .gl{display:grid;grid-template-columns:minmax(150px,240px) 1fr;gap:0 28px;margin:0}

@@ -612,18 +612,32 @@ PAGES.crypto = () => {
 
 // ---------- Memecoins ----------
 const LINK_NAMES = { twitter: 'X', telegram: 'Telegram', website: 'Website', discord: 'Discord' };
-function tokenCard(t, news, mine) {
-  const about = t.about || t.desc;
+const RISK_CLASS = { Extreme: 'down', 'Very high': 'warn', High: '' };
+function thesisHTML(th, news) {
+  if (!th) return '';
+  const list = (arr, cls) => (arr || []).length ? `<ul class="${cls}">${arr.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : '';
+  return `<div class="thesis">
+    <div class="th-sec"><h4>What it is</h4><p>${esc(th.what)}</p></div>
+    <div class="th-sec"><h4>The story it rides</h4><p>${esc(th.narrative)}</p></div>
+    <div class="th-sec"><h4>How it’s doing</h4><p>${esc(th.doing)}</p></div>
+    ${news && news.length ? `<div class="th-sec"><h4>Latest news</h4><ul class="tnews">${news.slice(0, 3).map(n => `<li><a href="${esc(n.link)}" target="_blank" rel="noopener">${esc(n.title)}</a><small>${esc(n.source)}, ${ago(n.time)}</small></li>`).join('')}</ul></div>` : ''}
+    <div class="th-cases"><div class="th-sec bull"><h4>Bull case</h4>${list(th.bull, 'th-list')}</div><div class="th-sec bear"><h4>Bear case</h4>${list(th.bear, 'th-list')}</div></div>
+    <div class="th-sec"><h4>What to watch</h4><p>${esc(th.watch)}</p></div>
+  </div>`;
+}
+function tokenCard(t, news, mine, aiThesis) {
+  const th = aiThesis || t.thesis;
   const icon = t.icon || t.image;
   const links = (t.links || []).filter(l => /^https?:/.test(l.url)).map(l => `<a href="${esc(l.url)}" target="_blank" rel="noopener nofollow">${esc(LINK_NAMES[l.type] || l.label || 'Link')}</a>`).join('');
+  const open = store.get('thesisOpen', true);
   return `<article class="tok${mine ? ' mine' : ''}">
     <div class="nm">${icon ? `<img class="coin" src="${esc(icon)}" alt="" loading="lazy">` : `<span class="ph">${esc((t.symbol || '?').slice(0, 3))}</span>`}
       <div>${t.url ? `<a href="${esc(t.url)}" target="_blank" rel="noopener">${esc(t.name)}</a>` : `<b>${esc(t.name)}</b>`}<small>${esc(t.symbol)}${t.chain ? ' · ' + esc(t.chain) : ''}</small></div>
       <div class="r"><span class="pr">${usd(t.price)}</span>${chg(t.ch24)}</div></div>
-    <p class="about${about ? '' : ' none'}">${about ? esc(about) : 'No description published. With no stated purpose, the price runs purely on attention.'}</p>
+    ${th ? `<p class="th-head">${esc(th.headline)}</p><div class="th-tags"><span class="pill ${RISK_CLASS[th.risk] || ''}">Risk: ${esc(th.risk)}</span>${th.stage ? `<span class="pill">${esc(th.stage)}</span>` : ''}${th.source === 'ai' ? '<span class="pill acc">Written by AI</span>' : ''}</div>` : ''}
     <div class="stats"><span>Value<b>${big(t.mcap)}</b></span>${t.liq != null ? `<span>Liquidity<b>${big(t.liq)}</b></span><span>Volume<b>${big(t.vol24)}</b></span>` : `<span>7 days<b>${t.ch7 != null ? (t.ch7 > 0 ? '+' : '') + t.ch7.toFixed(1) + '%' : '—'}</b></span>`}</div>
+    ${th ? `<details class="th-wrap"${open ? ' open' : ''}><summary>Full thesis</summary>${thesisHTML(th, news)}</details>` : ''}
     ${t.notes && t.notes.length ? `<div class="flags">${t.notes.map(n => `<span class="flag ${n.tone}">${esc(n.text)}</span>`).join('')}</div>` : ''}
-    ${news && news.length ? `<ul class="tnews">${news.slice(0, 2).map(n => `<li><a href="${esc(n.link)}" target="_blank" rel="noopener">${esc(n.title)}</a><small>${esc(n.source)}, ${ago(n.time)}</small></li>`).join('')}</ul>` : ''}
     ${links ? `<div class="links">${links}</div>` : ''}
   </article>`;
 }
@@ -634,9 +648,10 @@ PAGES.memes = () => {
     <div class="mood" id="mMood"></div>
     ${fb.html}
     <section class="block card"><h2 class="sec">What it means for you</h2><ul class="fyl" id="mFor"></ul><p class="small faint" id="mIntro" style="margin-top:14px"></p></section>
-    <section class="block"><div class="sec-row"><h2 class="sec">The established names</h2></div><div class="mgrid" id="mMajors"></div></section>
+    <section class="block"><div class="sec-row"><h2 class="sec">The established names</h2><button class="linkbtn" id="thToggle" type="button"></button></div><div class="mgrid" id="mMajors"></div></section>
     <section class="block"><div class="sec-row"><h2 class="sec">Getting the most attention right now</h2></div><p class="small faint" style="margin:-6px 0 14px">“Promoted” tokens are ones someone paid to put in front of buyers on DexScreener. That’s attention, not quality.</p><div class="mgrid" id="mHot"></div></section>`);
   const chains = myAssets().map(a => a.chain).filter(Boolean);
+  const tg = $('#thToggle'); if (tg) { tg.textContent = store.get('thesisOpen', true) ? 'Collapse all theses' : 'Expand all theses'; tg.onclick = () => { const v = !store.get('thesisOpen', true); store.set('thesisOpen', v); main.querySelectorAll('.th-wrap').forEach(x => x.open = v); tg.textContent = v ? 'Collapse all theses' : 'Expand all theses'; }; }
   const d = api('memes');
   const md = api('memedesk?' + profileQuery(), 3 * 60e3);
   fill('mMood', 'the memecoin mood', md, x => `<span class="gauge ${esc(x.mood.word)}">${esc(x.mood.word)}</span><div><p>${esc(x.mood.text)}</p>${x.summary ? `<p>${esc(x.summary)}</p>` : ''}</div>`);
@@ -644,8 +659,8 @@ PAGES.memes = () => {
   fill('mFor', 'your notes', md, x => x.forYou.length ? x.forYou.map(f => `<li><b>${esc(marketLabel(f.market))}</b>${esc(f.text)}</li>`).join('') : '<li class="empty">Add your markets in setup to see what memecoin news means for them.</li>');
   fill('mIntro', 'summary', d, x => esc(x.lines.join(' ')));
   const both = Promise.all([d, md.catch(() => ({ tokenNews: {} }))]);
-  fill('mMajors', 'memecoins', both, ([x, m]) => x.majors.map(c => tokenCard(c, m.tokenNews[c.symbol], false)).join('') || '<p class="empty">Not available.</p>');
-  fill('mHot', 'tokens', both, ([x, m]) => { const hot = [...x.hot.filter(t => chains.includes(t.chain)), ...x.hot.filter(t => !chains.includes(t.chain))]; return hot.length ? hot.map(t => tokenCard(t, m.tokenNews[String(t.symbol).toUpperCase()], chains.includes(t.chain))).join('') : '<p class="empty">Nothing to show right now.</p>'; });
+  fill('mMajors', 'memecoins', both, ([x, m]) => x.majors.map(c => tokenCard(c, m.tokenNews[c.symbol], false, (m.theses || {})[c.symbol])).join('') || '<p class="empty">Not available.</p>');
+  fill('mHot', 'tokens', both, ([x, m]) => { const hot = [...x.hot.filter(t => chains.includes(t.chain)), ...x.hot.filter(t => !chains.includes(t.chain))]; return hot.length ? hot.map(t => tokenCard(t, m.tokenNews[String(t.symbol).toUpperCase()], chains.includes(t.chain), (m.theses || {})[String(t.symbol).toUpperCase()])).join('') : '<p class="empty">Nothing to show right now.</p>'; });
 };
 
 // ---------- Options ----------
