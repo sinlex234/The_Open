@@ -269,7 +269,7 @@ function leadHTML(d) {
     <ol class="stories">${(d.stories || []).map(s => { const r = d.refs[s.ref - 1] || {}; return `<li>
       <h3><a href="${esc(r.link)}" target="_blank" rel="noopener">${esc(s.headline)}</a></h3>
       ${s.why ? `<p>${esc(s.why)}</p>` : ''}${effects(s)}
-      <p class="src">${esc(r.source || '')}${r.time ? ', ' + ago(r.time) : ''}</p></li>`; }).join('')}</ol>
+      <p class="src">${esc(r.source || '')}${r.time ? ', ' + ago(r.time) : ''}${s.since ? ' ' + reactTxt(s.since) : ''}</p></li>`; }).join('')}</ol>
     ${(d.across || []).length ? `<dl class="across">${d.across.map(a => `<dt>${esc(a.area)}</dt><dd>${withRefs(a.text, d.refs)}</dd>`).join('')}</dl>` : ''}
     ${(d.watch || []).length ? `<div class="watch"><h3>What could move markets next</h3><ul>${d.watch.map(w => `<li>${esc(w)}</li>`).join('')}</ul></div>` : ''}
     ${used.length ? `<details class="sources"><summary>Sources (${used.length})</summary><ol>${used.map(n => { const r = d.refs[n - 1]; return `<li value="${n}"><a href="${esc(r.link)}" target="_blank" rel="noopener">${esc(r.title)}</a> <span class="faint">${esc(r.source)}, ${ago(r.time)}</span></li>`; }).join('')}</ol></details>` : ''}`;

@@ -1375,7 +1375,7 @@ function rules2(prof, stories, refs, rows, pick, events, nextUp, res) {
   if (spx) sum.push(`US stocks are ${word(spx.pct, "higher", "lower")}${fmtP(spx.pct)}${eu ? `, Europe is ${word(eu.pct, "up", "down")}` : ""}${jp ? ` and Japan is ${word(jp.pct, "up", "down")}` : ""}.`);
   if (tnx && dxy) sum.push(`Bond yields are ${word(tnx.change, "rising", "falling")} and the dollar is ${word(dxy.pct, "stronger", "weaker")}.`);
   if (top) sum.push(`The biggest story right now: “${top.title}” (${top.source}).`);
-  const storiesOut = stories.slice(0, 5).map((h, i) => ({ ref: i + 1, headline: h.title, why: h.why || "", effects: h.reaction ? [{ market: h.reaction.label, dir: h.reaction.change > 0 ? "up" : h.reaction.change < 0 ? "down" : "mixed" }] : [] }));
+  const storiesOut = stories.slice(0, 5).map((h, i) => ({ ref: i + 1, headline: h.title, why: h.why || "", effects: [], since: h.reaction || null }));
   const across = [];
   if (spx) across.push({ area: "Stocks", text: `S&P 500 ${word(spx.pct, "up", "down")}${fmtP(spx.pct)}.${res.mv && res.mv.lines[3] ? " " + res.mv.lines[3] : ""}` });
   if (tnx) across.push({ area: "Bonds", text: `The 10-year yield is ${tnx.price.toFixed(2)}%, ${word(tnx.change, "up", "down")} today. Higher yields tend to weigh on stocks, especially tech.` });
