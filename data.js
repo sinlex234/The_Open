@@ -813,6 +813,11 @@ var REACT = {
   EURUSD: { sym: "EURUSD=X", label: "EUR/USD", dp: 5, unit: "pips", pip: 1e-4 }
 };
 function reactKey(h) {
+  const t = h.title;
+  if (/bitcoin|\bbtc\b|crypto|ether(eum)?\b|solana|memecoin|stablecoin/i.test(t)) return "BTC";
+  if (/\bgold\b|bullion/i.test(t)) return "GOLD";
+  if (/\boil\b|crude|opec|brent/i.test(t)) return "OIL";
+  if (/dollar|\beuro\b|\byen\b|sterling|\bpound\b|forex|eur\/usd|usd\/jpy|gbp\/usd|currenc/i.test(t) && !/stock|nasdaq|s&p|dow/i.test(t)) return "EURUSD";
   if (h.theme === "crypto" || h.theme === "memes") return "BTC";
   if (h.theme === "gold") return "GOLD";
   if (h.theme === "energy") return "OIL";
