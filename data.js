@@ -17,14 +17,14 @@ var __copyProps = (to, from, except, desc) => {
 };
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
-// ../the-open/api/_lib/router.js
+// api/_lib/router.js
 var router_exports = {};
 __export(router_exports, {
   default: () => handler
 });
 module.exports = __toCommonJS(router_exports);
 
-// ../the-open/api/_lib/util.js
+// api/_lib/util.js
 var UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36";
 async function getText(url, { headers = {}, timeout = 9e3 } = {}) {
   const ctrl = new AbortController();
@@ -188,7 +188,7 @@ function quoteFromMeta(meta, bars) {
   return { price, prevClose: prev, change: price != null && prev ? price - prev : null, changePct: price != null && prev ? (price - prev) / prev * 100 : null };
 }
 
-// ../the-open/api/_lib/words.js
+// api/_lib/words.js
 var FAKEOUT = "The first jump after a big number is often a head-fake. Plenty of traders let the first few minutes play out and wait to see which side gives up.";
 var QUIET_BEFORE = "Price usually goes quiet and drifts sideways into the release, and those tight little ranges leave stop orders stacked just above and below.";
 var EVENTS = [
@@ -308,7 +308,7 @@ function levelTable(L) {
   return rows.sort((a, b) => b.value - a.value);
 }
 
-// ../the-open/api/calendar.js
+// api/calendar.js
 var FEEDS = {
   thisWeek: "https://nfs.faireconomy.media/ff_calendar_thisweek.json",
   nextWeek: "https://nfs.faireconomy.media/ff_calendar_nextweek.json"
@@ -323,10 +323,11 @@ async function build() {
     seen.add(k);
     return true;
   }).map((e) => ({ title: e.title, country: e.country, impact: e.impact, forecast: e.forecast || "", previous: e.previous || "", time: e.time, allDay: /T00:00:00/.test(e.date) && /holiday|meeting|summit|election/i.test(e.title), ...explainEvent(e) })).sort((a, b) => a.time - b.time);
+  if (errors.nextWeek && /404/.test(errors.nextWeek)) delete errors.nextWeek;
   return { events, errors, updated: Date.now() };
 }
 
-// ../the-open/api/markets.js
+// api/markets.js
 var SETS = {
   futures: {
     levels: [["NQ=F", "Nasdaq 100 futures", "NQ", 2, 18], ["ES=F", "S&P 500 futures", "ES", 2, 18]],
@@ -432,7 +433,7 @@ async function build2(section = "futures") {
   return out;
 }
 
-// ../the-open/api/crypto.js
+// api/crypto.js
 var CG = "https://api.coingecko.com/api/v3";
 function fearWords(v) {
   if (v == null) return null;
@@ -498,7 +499,7 @@ async function build3() {
   };
 }
 
-// ../the-open/api/memes.js
+// api/memes.js
 var DS = "https://api.dexscreener.com";
 function tokenNotes(p) {
   const notes = [];
@@ -570,7 +571,7 @@ async function build4() {
   return { hot, majors, lines, errors, updated: Date.now() };
 }
 
-// ../the-open/api/earnings.js
+// api/earnings.js
 var HEAVY = ["AAPL", "MSFT", "NVDA", "AMZN", "META", "GOOGL", "GOOG", "AVGO", "TSLA", "COST", "NFLX", "AMD", "ADBE", "PEP", "CSCO", "TMUS", "INTC", "QCOM", "TXN", "INTU", "AMAT", "MU", "PLTR", "JPM", "V", "MA", "LLY", "UNH", "WMT", "XOM", "ORCL", "CRM", "BRK.B"];
 var money = (s) => {
   const n = parseFloat(String(s || "").replace(/[$,]/g, ""));
@@ -603,24 +604,25 @@ async function build5() {
   return { days: out, lines, errors, updated: Date.now() };
 }
 
-// ../the-open/api/news.js
+// api/news.js
 var FEEDS2 = {
   "CNBC": "https://www.cnbc.com/id/100003114/device/rss/rss.html",
   "CNBC Markets": "https://www.cnbc.com/id/20910258/device/rss/rss.html",
   "MarketWatch": "https://feeds.content.dowjones.io/public/rss/mw_topstories",
   "MarketWatch Pulse": "https://feeds.content.dowjones.io/public/rss/mw_marketpulse",
-  "Yahoo Finance": "https://finance.yahoo.com/news/rssindex",
+  "WSJ Markets": "https://feeds.content.dowjones.io/public/rss/RSSMarketsMain",
   "Federal Reserve": "https://www.federalreserve.gov/feeds/press_all.xml",
-  "FXStreet": "https://www.fxstreet.com/rss/news",
+  "Investing.com Forex": "https://www.investing.com/rss/news_1.rss",
+  "ECB": "https://www.ecb.europa.eu/rss/press.html",
   "CoinDesk": "https://www.coindesk.com/arc/outboundfeeds/rss/",
   "Cointelegraph": "https://cointelegraph.com/rss",
   "Decrypt": "https://decrypt.co/feed"
 };
 var BY_SECTION = {
   all: Object.keys(FEEDS2),
-  futures: ["CNBC", "CNBC Markets", "MarketWatch", "MarketWatch Pulse", "Yahoo Finance", "Federal Reserve"],
-  options: ["CNBC Markets", "MarketWatch Pulse", "Yahoo Finance", "Federal Reserve", "CNBC"],
-  forex: ["FXStreet", "Federal Reserve", "CNBC", "MarketWatch"],
+  futures: ["CNBC", "CNBC Markets", "MarketWatch", "MarketWatch Pulse", "WSJ Markets", "Federal Reserve"],
+  options: ["CNBC Markets", "MarketWatch Pulse", "WSJ Markets", "Federal Reserve", "CNBC"],
+  forex: ["Investing.com Forex", "ECB", "Federal Reserve", "CNBC", "MarketWatch", "WSJ Markets"],
   crypto: ["CoinDesk", "Cointelegraph", "Decrypt"],
   memes: ["CoinDesk", "Cointelegraph", "Decrypt"]
 };
@@ -644,7 +646,7 @@ async function build6(section = "all") {
   return { section, items: items.slice(0, 50), errors, updated: Date.now() };
 }
 
-// ../the-open/api/brief.js
+// api/brief.js
 var fmtTime = (t) => new Date(t).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" });
 var dayName = (t) => new Date(t).toLocaleDateString("en-US", { timeZone: "America/New_York", weekday: "long" });
 function headlineFor(todayBig, n) {
@@ -758,7 +760,7 @@ ${JSON.stringify(out)}` }]
   return { ...out, updated: Date.now() };
 }
 
-// ../the-open/api/_lib/router.js
+// api/_lib/router.js
 var ROUTES = {
   calendar: [() => build(), 900],
   markets: [(q) => build2(String(q.section || "futures")), 120],

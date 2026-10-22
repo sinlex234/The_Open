@@ -1,4 +1,5 @@
 // The Open One: front end. Plain JS, no build step.
+import { initMe, me, myMarkets, myAssets, mySessions, isBeginner, has, forYouEvent, forYouHeadline, greeting, windowStatus, startAlerts, openAlerts } from './me.js';
 const $ = s => document.querySelector(s);
 const main = $('#main');
 const TZ = 'America/New_York';
@@ -16,7 +17,9 @@ applyTheme();
 $('#themeBtn').onclick = () => {
   const light = document.documentElement.dataset.theme === 'light';
   store.set('theme', light ? 'dark' : 'light'); applyTheme();
+  if (started) { mountTicker(); route(); }
 };
+let started = false;
 
 // ---------- time helpers ----------
 const nyParts = (t = Date.now()) => {
@@ -65,7 +68,7 @@ async function fill(el, what, promise, render) {
 
 // ---------- markets the viewer trades ----------
 const MARKETS = [['futures', 'Futures & indexes'], ['forex', 'Forex'], ['crypto', 'Crypto'], ['memes', 'Memecoins'], ['options', 'Options']];
-let mine = store.get('markets', ['futures']);
+const briefMarkets = () => [...new Set(myMarkets().map(m => m === 'stocks' ? 'futures' : m))];
 
 // ---------- clock + session ribbon ----------
 const SESSIONS = [
@@ -123,7 +126,7 @@ function drawRibbon() {
   const s = currentSession(n);
   $('#sessionNow').innerHTML = isClosed(n) ? '<b>Weekend.</b> Crypto is still trading.' : `<span class="dot" style="background:var(--${s.cls === 'pm' ? 'ny' : s.cls})"></span><b>${esc((SESSION_WORDS[s.label] || s.label).split('.')[0])}.</b> ${esc((SESSION_WORDS[s.label] || '').split('. ').slice(1).join('. '))}`;
   if (calendarCache) {
-    const next = calendarCache.find(e => e.time > Date.now() - 60e3 && (e.impact === 'High') && (e.country === 'USD' || mine.includes('forex')));
+    const next = calendarCache.find(e => e.time > Date.now() - 60e3 && (e.impact === 'High') && (e.country === 'USD' || myMarkets().includes('forex')));
     $('#nextUp').innerHTML = next ? `Next big release: <b>${esc(next.name)}</b> (${esc(next.country)}) ${until(next.time)}, ${fmtTime(next.time)}` : 'No big releases left this week.';
   }
 }
@@ -166,81 +169,217 @@ function leaderBlock(L, fmt) {
 }
 function newsList(items, limit = 14) {
   if (!items.length) return '<p class="muted">No fresh headlines right now.</p>';
-  return `<ul class="news">${items.slice(0, limit).map(i => `<li><a href="${esc(i.link)}" target="_blank" rel="noopener">${esc(i.title)}</a>
-    ${i.why ? `<div class="why">${esc(i.why)}</div>` : ''}
-    <div class="meta">${i.themeLabel ? `<span class="tag">${esc(i.themeLabel)}</span>` : ''}<span>${esc(i.source)}</span><span>${ago(i.time)}</span></div></li>`).join('')}</ul>`;
+  const pro = !isBeginner();
+  return `<ul class="news">${items.slice(0, limit).map(i => {
+    const fy = forYouHeadline(i);
+    const why = pro && fy ? '' : i.why;
+    return `<li><a href="${esc(i.link)}" target="_blank" rel="noopener">${esc(i.title)}</a>
+    ${why ? `<div class="why">${esc(why)}</div>` : ''}${fy ? `<div class="fy"><b>For you</b> ${esc(fy)}</div>` : ''}
+    <div class="meta">${i.themeLabel ? `<span class="tag">${esc(i.themeLabel)}</span>` : ''}<span>${esc(i.source)}</span><span>${ago(i.time)}</span></div></li>`;
+  }).join('')}</ul>`;
 }
-function eventRow(e, mini = false) {
+function rankNews(items) {
+  // Stories that touch your markets first, then the rest, newest first within each group
+  const mk = new Set(myMarkets().map(m => m === 'stocks' ? 'futures' : m));
+  const mine = items.filter(i => i.markets && i.markets.some(m => mk.has(m)));
+  return [...mine, ...items.filter(i => !mine.includes(i))];
+}
+function eventRow(e, mini = false, showFy = true) {
   const past = e.time < Date.now() - 5 * 60e3, soon = !past && e.time - Date.now() < 60 * 60e3;
   const fp = [e.forecast && `Expected ${e.forecast}`, e.previous && `Last ${e.previous.split('|')[0]}`].filter(Boolean).join(', ');
-  return `<details class="ev${past ? ' past' : ''}${soon ? ' soon' : ''}"><summary>
+  const fy = showFy ? forYouEvent(e) : null;
+  const beginner = isBeginner();
+  const body = [beginner && e.what ? `<p>${esc(e.what)}</p>` : '', `<p>${esc(e.why)}</p>`,
+    e.note && (beginner || has('strategy', 'ict') || has('strategy', 'pa') || has('strategy', 'news')) ? `<p class="note">${esc(e.note)}</p>` : '',
+    mini && fp ? `<p class="muted small">${esc(fp)}</p>` : ''].join('');
+  return `<details class="ev${past ? ' past' : ''}${soon ? ' soon' : ''}${mini ? ' mini' : ''}${fy ? ' mine' : ''}"><summary>
       <span class="t">${e.allDay ? 'All day' : fmtTime(e.time)}</span><span class="imp ${e.impact}" title="${e.impact} impact"></span>
       ${mini ? '' : `<span class="cc">${esc(e.country)}</span>`}
       <span class="nm">${esc(e.name)}${e.name !== e.title ? `<small>${mini ? esc(e.country) + ', ' : ''}${esc(e.title)}</small>` : (mini ? `<small>${esc(e.country)}</small>` : '')}</span>
-      ${mini ? '' : `<span class="fp">${esc(fp)}</span>`}</summary>
-    <div class="body">${e.what ? `<p>${esc(e.what)}</p>` : ''}<p>${esc(e.why)}</p>${e.note ? `<p class="note">${esc(e.note)}</p>` : ''}${mini && fp ? `<p class="muted small">${esc(fp)}</p>` : ''}</div></details>`;
+      ${mini ? '' : `<span class="fp">${esc(fp)}</span>`}
+      ${fy ? `<span class="fy"><b>For you</b> ${esc(fy)}</span>` : ''}</summary>
+    <div class="body">${body}</div></details>`;
 }
 const stamp = d => `<p class="stamp">Updated ${fmtTime(d.updated || Date.now())}</p>`;
 
+// ---------- live widgets (TradingView) ----------
+const tvTheme = () => document.documentElement.dataset.theme === 'light' ? 'light' : 'dark';
+function tvWidget(el, kind, cfg, height) {
+  if (typeof el === 'string') el = document.getElementById(el);
+  if (!el) return;
+  el.innerHTML = '';
+  const c = document.createElement('div'); c.className = 'tradingview-widget-container'; c.style.height = height + 'px';
+  const w = document.createElement('div'); w.className = 'tradingview-widget-container__widget'; w.style.height = '100%'; c.appendChild(w);
+  const sc = document.createElement('script'); sc.src = `https://s3.tradingview.com/external-embedding/embed-widget-${kind}.js`; sc.async = true; sc.innerHTML = JSON.stringify(cfg); c.appendChild(sc);
+  el.appendChild(c);
+}
+function tvChart(el, symbol, height = 500) {
+  const dark = tvTheme() === 'dark';
+  tvWidget(el, 'advanced-chart', { autosize: true, symbol, interval: '15', timezone: 'America/New_York', theme: tvTheme(), style: '1', locale: 'en', allow_symbol_change: true, hide_volume: true, save_image: false, calendar: false, support_host: 'https://www.tradingview.com', backgroundColor: dark ? 'rgba(6,9,18,1)' : 'rgba(255,255,255,1)', gridColor: dark ? 'rgba(140,165,255,0.06)' : 'rgba(30,45,90,0.06)' }, height);
+}
+const CHART_NOTE = 'Live chart from TradingView. Index futures are shown with their CFD twins (e.g. US100 for NQ), which track them tick for tick and are free to embed. Type any symbol into the chart to switch.';
+function chartPicker(boxId, pickId, options, noteId) {
+  const pick = document.getElementById(pickId); if (!pick) return;
+  const uniq = []; const seen = new Set(); options.forEach(o => { if (o.tv && !seen.has(o.tv)) { seen.add(o.tv); uniq.push(o); } });
+  if (!uniq.length) return;
+  pick.innerHTML = uniq.map((o, i) => `<button class="chip" data-tv="${esc(o.tv)}" aria-pressed="${i === 0}">${esc(o.id)}</button>`).join('');
+  pick.querySelectorAll('button').forEach(b => b.onclick = () => { pick.querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', x === b)); tvChart(boxId, b.dataset.tv); });
+  tvChart(boxId, uniq[0].tv);
+  if (noteId && document.getElementById(noteId)) document.getElementById(noteId).textContent = CHART_NOTE;
+}
+function mountTicker() {
+  const el = document.getElementById('tickerTape'); if (!el) return;
+  const mine = myAssets().filter(a => a.tv).map(a => ({ proName: a.tv, title: a.id }));
+  const base = [{ proName: 'OANDA:NAS100USD', title: 'US100' }, { proName: 'OANDA:SPX500USD', title: 'US500' }, { proName: 'TVC:DXY', title: 'Dollar' }, { proName: 'OANDA:XAUUSD', title: 'Gold' }, { proName: 'BINANCE:BTCUSDT', title: 'BTC' }, { proName: 'TVC:US10Y', title: '10Y' }];
+  const seen = new Set(); const symbols = [...mine, ...base].filter(x => !seen.has(x.proName) && seen.add(x.proName)).slice(0, 12);
+  tvWidget(el, 'ticker-tape', { symbols, showSymbolLogo: true, isTransparent: true, displayMode: 'adaptive', colorTheme: tvTheme(), locale: 'en' }, 46);
+}
+
 // ---------- pages ----------
 const PAGES = {};
+let refreshing = false, shownPage = null;
+function layout(html) { if (refreshing && main.dataset.page === shownPage && main.innerHTML) return false; main.innerHTML = html; return true; }
+
+// ---------- personal data: gather what the viewer's assets need ----------
+function needs() {
+  const src = new Set(myAssets().map(a => a.src));
+  return {
+    fut: src.has('fut') || src.has('futq') || myMarkets().includes('futures') || myMarkets().includes('stocks'),
+    fx: src.has('fx') || src.has('fxq'),
+    crypto: src.has('btc') || src.has('coin') || myMarkets().includes('crypto'),
+    em: src.has('em'), memes: src.has('meme'),
+  };
+}
+async function personalData() {
+  const n = needs();
+  const jobs = { cal: api('calendar', 10 * 60e3) };
+  if (n.fut) jobs.fut = api('markets?section=futures');
+  if (n.fx) jobs.fx = api('markets?section=forex');
+  if (n.crypto) jobs.crypto = api('crypto');
+  if (n.em) jobs.opt = api('markets?section=options');
+  if (n.memes) jobs.memes = api('memes');
+  const keys = Object.keys(jobs);
+  const res = await Promise.allSettled(keys.map(k => jobs[k]));
+  const out = {}; keys.forEach((k, i) => { out[k] = res[i].status === 'fulfilled' ? res[i].value : null; });
+  return out;
+}
+// One card of numbers + notes for each of the viewer's assets
+function assetView(a, D) {
+  const find = (arr, short) => (arr || []).find(x => x.short === short);
+  if (a.src === 'fut' && D.fut) { const L = find(D.fut.leaders, a.short); if (L) return { a, price: L.price, dp: L.dp, ch: L.changePct, L, notes: L.notes, adr: L.levels && L.levels.adr }; }
+  if ((a.src === 'futq' || a.src === 'fut') && D.fut) { const q = find(D.fut.quotes, a.short) || find(D.fut.leaders, a.short); if (q) return { a, price: q.price, dp: q.dp, ch: q.changePct, notes: [] }; }
+  if (a.src === 'fx' && D.fx) { const L = find(D.fx.leaders, a.short); if (L) return { a, price: L.price, dp: L.dp, ch: L.changePct, L, notes: L.notes, adr: L.levels && L.levels.adr }; }
+  if ((a.src === 'fxq' || a.src === 'fx') && D.fx) { const q = find(D.fx.quotes, a.short); if (q) return { a, price: q.price, dp: q.dp, ch: q.changePct, notes: [] }; }
+  if (a.src === 'btc' && D.crypto && D.crypto.btc) { const b = D.crypto.btc; return { a, price: b.price, dp: 0, ch: b.changePct, L: { ...b, name: 'Bitcoin', dp: 0 }, notes: b.notes, adr: b.levels && b.levels.adr, money: true }; }
+  if (a.src === 'coin' && D.crypto) { const c = D.crypto.coins.find(x => x.symbol === a.short); if (c) return { a, price: c.price, dp: c.price > 100 ? 0 : c.price > 1 ? 2 : 4, ch: c.ch24, notes: [], money: true }; }
+  if (a.src === 'em' && D.opt) { const e = (D.opt.expectedMove || []).find(x => x.short === a.short); if (e) return { a, price: e.price, dp: 0, ch: null, notes: [`Options are pricing a move of about ±${num(e.move, 0)} points today (${num(e.price - e.move, 0)} to ${num(e.price + e.move, 0)}).`] }; }
+  if (a.src === 'meme' && D.memes) {
+    const hot = D.memes.hot.filter(t => !a.chain || t.chain === a.chain);
+    const top = hot.slice(0, 3).map(t => `${t.symbol} (${t.ch24 > 0 ? '+' : ''}${(t.ch24 || 0).toFixed(0)}%)`);
+    return { a, meme: true, notes: [hot.length ? `${hot.length} of the most-promoted tokens right now are ${a.chain ? 'on ' + a.chain : 'getting attention'}: ${top.join(', ')}.` : `Quiet on ${a.chain} among the most-promoted tokens right now.`] };
+  }
+  return null;
+}
+function moveLine(v) {
+  const a = v.a; if (!v.adr) return '';
+  if (a.pt) return `A normal day moves about <b>${num(v.adr, 0)} points</b>, which is <b>$${num(v.adr * a.pt, 0)}</b> per ${a.id} contract.`;
+  if (a.pip) return `A normal day moves about <b>${num(v.adr / a.pip, 0)} pips</b>.`;
+  if (v.money) return `A normal day moves about <b>$${num(v.adr, 0)}</b>.`;
+  return `A normal day moves about <b>${num(v.adr, v.dp)}</b>.`;
+}
+function planCard(v) {
+  const a = v.a, beginner = isBeginner();
+  if (v.meme) return `<div class="pcard"><div class="pc-h"><b>${esc(a.label)}</b></div><p class="pc-n">${esc(v.notes[0])}</p><a class="pc-link" href="#memes">See the tokens</a></div>`;
+  const notes = (v.notes || []).slice(0, beginner ? 3 : 2);
+  return `<div class="pcard"><div class="pc-h"><b>${esc(a.id)}</b><span class="pc-px">${v.money ? '$' : ''}${num(v.price, v.dp)}</span>${v.ch != null ? chg(v.ch) : ''}</div>
+    ${moveLine(v) ? `<p class="pc-m">${moveLine(v)}</p>` : ''}
+    ${notes.length ? `<ul class="pc-notes">${notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul>` : `<p class="pc-n muted">Live price only. Key levels are worked out for NQ, ES, the main forex pairs, gold and Bitcoin.</p>`}</div>`;
+}
+function planHTML(D) {
+  const ws = windowStatus();
+  const now = Date.now(), today = nyParts().date;
+  const seenEv = new Set();
+  const evs = (D.cal ? D.cal.events : []).filter(e => nyParts(e.time).date === today && e.impact !== 'Low' && forYouEvent(e)).filter(e => { const k = e.name + e.time; if (seenEv.has(k)) return false; seenEv.add(k); return true; });
+  const later = evs.filter(e => e.time > now - 10 * 60e3);
+  const big = later.filter(e => e.impact === 'High');
+  const views = myAssets().map(a => assetView(a, D)).filter(Boolean);
+  const beginner = isBeginner();
+  let verdict;
+  if (big.length) {
+    const inWin = big.filter(e => /inside your/.test(forYouEvent(e)));
+    verdict = inWin.length ? `${inWin.length === 1 ? 'A big release lands' : `${inWin.length} big releases land`} inside your trading window today. Plan around ${esc(inWin[0].name)} at ${fmtTime(inWin[0].time)}.`
+      : `There’s big news today (${esc(big[0].name)} at ${fmtTime(big[0].time)}), but it falls outside your usual hours.`;
+  } else if (later.length) verdict = 'Only smaller news for your markets today. Price levels should matter more than headlines.';
+  else verdict = 'Nothing on the calendar for your markets today. A cleaner day to trade off levels.';
+  const tips = [];
+  if (has('goals', 'news') && big.length) tips.push(`Turn on alerts and you’ll get a heads-up before ${esc(big[0].name)}.`);
+  if (has('goals', 'levels')) tips.push('Your levels are below, highest first, with the ones price is close to marked.');
+  if (has('goals', 'discipline')) tips.push(big.length ? 'Decide now whether you’ll trade the release or wait it out, and stick to it.' : 'With a quiet calendar, the risk is overtrading. Pick your best setup and stop there.');
+  if (has('goals', 'why') && beginner) tips.push('Tap any calendar event to see what it is and how price usually reacts.');
+  return `<div class="plan-top">
+      <div><h1 class="head plan-h">${esc(greeting())}.</h1><p class="plan-v">${verdict}</p><p class="plan-w"><span class="dot" style="background:var(--${ws.now ? 'up' : 'ny'})"></span>${esc(ws.text)}</p></div>
+      ${tips.length ? `<ul class="plan-tips">${tips.slice(0, beginner ? 3 : 2).map(t => `<li>${t}</li>`).join('')}</ul>` : ''}
+    </div>
+    <div class="plan-grid">
+      <div class="plan-col"><h2>Watch out for</h2>${evs.length ? `<div class="cal-mini">${evs.map(e => eventRow(e, true)).join('')}</div>` : '<p class="muted">No news on today’s calendar touches your markets.</p>'}
+        ${big.length ? `<button class="btn-ghost small-btn" id="planAlerts">Set alerts for these</button>` : ''}</div>
+      <div class="plan-col"><h2>Your markets</h2><div class="pcards">${views.slice(0, 4).map(planCard).join('') || '<p class="muted">Pick some assets in your setup to see them here.</p>'}</div></div>
+    </div>`;
+}
 
 PAGES.today = async () => {
-  main.innerHTML = `
-    <div class="chips" role="group" aria-label="Markets you trade"><span class="chips-label">I trade:</span>${MARKETS.map(([k, l]) => `<button class="chip" data-m="${k}" aria-pressed="${mine.includes(k)}">${l}</button>`).join('')}</div>
+  if (layout(`
+    <section class="plan" id="plan"></section>
+    <section class="chart-sec"><div class="chart-h"><h2>Live chart</h2><div class="chips tight" id="todayPick"></div></div><div id="todayChart" class="tvbox"></div><p class="muted small" id="todayNote"></p></section>
     <div class="lead">
-      <article>
-        <div id="brief"></div>
-      </article>
+      <article><div id="brief"></div></article>
       <aside class="col-side">
-        <section><h2>Markets right now</h2><div id="tape" class="tape"></div></section>
-        <section class="cal-mini"><h2>Today’s calendar</h2><div id="todayCal"></div></section>
+        <section><h2>Your markets right now</h2><div id="tape" class="tape"></div></section>
+        <section class="cal-mini"><h2>Everything on today’s calendar</h2><div id="todayCal"></div></section>
       </aside>
     </div>
-    <div class="stack" style="margin-top:40px">
+    <div class="stack" style="margin-top:34px">
       <section id="leaders"></section>
-      <section><h2>Headlines</h2><div id="todayNews"></div></section>
-    </div>`;
-  main.querySelectorAll('.chip').forEach(b => b.onclick = () => {
-    const k = b.dataset.m; mine = mine.includes(k) ? mine.filter(x => x !== k) : [...mine, k]; if (!mine.length) mine = [k];
-    store.set('markets', mine); PAGES.today();
-  });
-  fill('brief', 'today’s story', api('brief?markets=' + mine.join(','), 5 * 60e3), d => `
-    <h1 class="head">${esc(d.headline)}</h1>
-    <p class="byline">Morning brief for ${esc(fmtDay(Date.now()))}${d.source === 'ai' ? ', written with AI from today’s data' : ''}</p>
+      <section><h2>Headlines, yours first</h2><div id="todayNews"></div></section>
+    </div>`)) {
+    chartPicker('todayChart', 'todayPick', myAssets(), 'todayNote');
+  }
+  const D = personalData();
+  fill('plan', 'your game plan', D, d => planHTML(d)).then(() => { const b = document.getElementById('planAlerts'); if (b) b.onclick = openAlerts; });
+  fill('brief', 'today’s story', api('brief?markets=' + briefMarkets().join(','), 5 * 60e3), d => `
+    <h2 class="brief-h">${esc(d.headline)}</h2>
+    <p class="byline">The wider market for ${esc(fmtDay(Date.now()))}${d.source === 'ai' ? ', written with AI from today’s data' : ''}</p>
     <div class="story">${d.paragraphs.map(p => `<p>${esc(p)}</p>`).join('')}</div>${stamp(d)}`);
   fill('todayCal', 'the calendar', api('calendar', 10 * 60e3), d => {
     const n = nyParts();
     const ev = d.events.filter(e => nyParts(e.time).date === n.date && (e.country === 'USD' || e.impact === 'High') && e.impact !== 'Low');
-    return ev.length ? ev.map(e => eventRow(e, true)).join('') : '<p class="muted">Nothing important scheduled today.</p>';
+    return ev.length ? ev.map(e => eventRow(e, true, false)).join('') : '<p class="muted">Nothing important scheduled today.</p>';
   });
-  // Tape: pick symbols for the viewer's markets
-  const tapeJobs = [];
-  if (mine.includes('futures') || mine.includes('options')) tapeJobs.push(api('markets?section=futures').then(d => [...d.leaders, ...d.quotes.filter(q => ['VIX', '10Y', 'DXY', 'Gold'].includes(q.short))]));
-  if (mine.includes('forex')) tapeJobs.push(api('markets?section=forex').then(d => d.leaders.filter(q => q.short !== 'Gold')));
-  if (mine.includes('crypto') || mine.includes('memes')) tapeJobs.push(api('crypto').then(d => d.coins.slice(0, 3).map(c => ({ short: c.symbol, name: c.name, price: c.price, dp: c.price > 100 ? 0 : 2, changePct: c.ch24 }))));
-  fill('tape', 'prices', Promise.allSettled(tapeJobs).then(rs => { const ok = rs.filter(r => r.status === 'fulfilled').flatMap(r => r.value); if (!ok.length) throw new Error('no prices'); const seen = new Set(); return ok.filter(q => !seen.has(q.short) && seen.add(q.short)); }), qs => qs.map(tapeRow).join(''));
-  const first = mine[0];
-  const leadJob = first === 'forex' ? api('markets?section=forex').then(d => ({ title: 'Where the euro sits', L: d.leaders[0] }))
-    : first === 'crypto' || first === 'memes' ? api('crypto').then(d => ({ title: 'Where Bitcoin sits', L: d.btc && { ...d.btc, name: 'Bitcoin', dp: 0 }, fmt: v => '$' + num(v, 0) }))
-    : api('markets?section=futures').then(d => ({ title: d.leaders[0] && d.leaders[0].short === 'NQ' ? 'Where Nasdaq futures sit' : 'Where index futures sit', L: d.leaders[0] }));
-  fill('leaders', 'levels', leadJob, ({ title, L, fmt }) => L ? `<h2>${esc(title)}</h2>${leaderBlock(L, fmt)}` : '');
-  const newsSec = mine.length === 1 ? mine[0] : 'all';
-  fill('todayNews', 'headlines', api('news?section=' + newsSec), d => newsList(d.items, 12));
+  fill('tape', 'prices', D.then(d => {
+    const rows = myAssets().map(a => assetView(a, d)).filter(v => v && !v.meme && v.price != null).map(v => ({ short: v.a.id, name: v.a.label, price: v.price, dp: v.dp, changePct: v.ch }));
+    if (d.fut) d.fut.quotes.filter(q => ['VIX', '10Y', 'DXY'].includes(q.short)).forEach(q => rows.push(q));
+    if (!rows.length) throw new Error('no prices'); return rows;
+  }), qs => qs.map(tapeRow).join(''));
+  fill('leaders', 'levels', D.then(d => myAssets().map(a => assetView(a, d)).find(v => v && v.L)), v => v ? `<h2>Where ${esc(v.a.id)} sits</h2>${leaderBlock(v.L, v.money ? x => '$' + num(x, 0) : undefined)}` : '');
+  fill('todayNews', 'headlines', api('news?section=all'), d => newsList(rankNews(d.items), 12));
 };
 
 PAGES.futures = async () => {
-  main.innerHTML = `<h1 class="head">Futures &amp; indexes</h1>
+  if (layout(`<h1 class="head">Futures &amp; indexes</h1>
     <p class="sec-intro" id="futIntro"></p>
+    <section class="chart-sec"><div class="chart-h"><h2>Live chart</h2><div class="chips tight" id="futPick"></div></div><div id="futChart" class="tvbox"></div><p class="muted small" id="futNote"></p></section>
     <div id="futLeaders"></div>
-    <section style="margin-top:34px"><h2>Everything else</h2><div id="futQuotes"></div></section>
-    <div class="grid2" style="margin-top:40px">
+    <section style="margin-top:30px"><h2>Everything else</h2><div id="futQuotes"></div></section>
+    <div class="grid2" style="margin-top:34px">
       <section class="cal-mini"><h2>US news this week</h2><div id="futCal"></div></section>
       <section><h2>Headlines that move indexes</h2><div id="futNews"></div></section>
-    </div>`;
+    </div>`)) {
+    const mine = myAssets().filter(a => ['fut', 'futq'].includes(a.src));
+    chartPicker('futChart', 'futPick', [...mine, { id: 'NQ', tv: 'OANDA:NAS100USD' }, { id: 'ES', tv: 'OANDA:SPX500USD' }, { id: 'YM', tv: 'OANDA:US30USD' }, { id: 'RTY', tv: 'OANDA:US2000USD' }], 'futNote');
+  }
   const d = api('markets?section=futures');
   fill('futIntro', 'summary', d, x => esc(x.macro.join(' ') || 'Here’s how the main index futures are set up.'));
-  fill('futLeaders', 'futures', d, x => x.leaders.map(L => leaderBlock(L)).join('') + stamp(x) + (x.leaders.length < 2 ? '<p class="muted small">Some data didn’t load.</p>' : ''));
+  fill('futLeaders', 'futures', d, x => x.leaders.map(L => leaderBlock(L)).join('') + stamp(x));
   fill('futQuotes', 'prices', d, x => `<div class="qgrid">${x.quotes.map(qcard).join('')}</div>`);
   fill('futCal', 'the calendar', api('calendar', 10 * 60e3), x => {
     const ev = x.events.filter(e => e.country === 'USD' && e.impact !== 'Low' && e.time > Date.now() - 6 * 36e5).slice(0, 12);
@@ -250,14 +389,18 @@ PAGES.futures = async () => {
 };
 
 PAGES.forex = async () => {
-  main.innerHTML = `<h1 class="head">Forex</h1>
+  if (layout(`<h1 class="head">Forex</h1>
     <p class="sec-intro" id="fxIntro"></p>
-    <div class="grid2" style="margin:18px 0 10px"><section><h2>Strongest to weakest today</h2><div id="fxStrength"></div></section><section><h2>Other pairs</h2><div id="fxQuotes" class="tape"></div></section></div>
+    <section class="chart-sec"><div class="chart-h"><h2>Live chart</h2><div class="chips tight" id="fxPick"></div></div><div id="fxChart" class="tvbox"></div></section>
+    <div class="grid2" style="margin:24px 0 10px"><section><h2>Strongest to weakest today</h2><div id="fxStrength"></div></section><section><h2>Other pairs</h2><div id="fxQuotes" class="tape"></div></section></div>
     <div id="fxLeaders"></div>
-    <div class="grid2" style="margin-top:40px">
+    <div class="grid2" style="margin-top:34px">
       <section class="cal-mini"><h2>Central banks &amp; big releases</h2><div id="fxCal"></div></section>
       <section><h2>Currency headlines</h2><div id="fxNews"></div></section>
-    </div>`;
+    </div>`)) {
+    const mine = myAssets().filter(a => ['fx', 'fxq'].includes(a.src));
+    chartPicker('fxChart', 'fxPick', [...mine, { id: 'EUR/USD', tv: 'FX:EURUSD' }, { id: 'GBP/USD', tv: 'FX:GBPUSD' }, { id: 'USD/JPY', tv: 'FX:USDJPY' }, { id: 'Gold', tv: 'OANDA:XAUUSD' }]);
+  }
   const d = api('markets?section=forex');
   fill('fxIntro', 'summary', d, x => esc((x.strength && x.strength.length > 1 ? `The ${x.strength[0].ccy} is leading and the ${x.strength[x.strength.length - 1].ccy} is lagging today. ` : '') + x.macro.join(' ')));
   fill('fxStrength', 'currency strength', d, x => {
@@ -274,14 +417,18 @@ PAGES.forex = async () => {
 };
 
 PAGES.crypto = async () => {
-  main.innerHTML = `<h1 class="head">Crypto</h1>
+  if (layout(`<h1 class="head">Crypto</h1>
     <div class="lead"><div><div id="cIntro" class="story"></div></div><aside><h2>Crypto mood</h2><div id="cMood"></div></aside></div>
-    <div id="cBtc" style="margin-top:30px"></div>
-    <div class="grid2" style="margin-top:34px">
+    <section class="chart-sec"><div class="chart-h"><h2>Live chart</h2><div class="chips tight" id="cPick"></div></div><div id="cChart" class="tvbox"></div></section>
+    <div id="cBtc" style="margin-top:24px"></div>
+    <div class="grid2" style="margin-top:30px">
       <section><h2>Biggest coins</h2><div id="cCoins"></div></section>
       <section><h2>What people are searching for</h2><div id="cTrend"></div></section>
     </div>
-    <section style="margin-top:40px"><h2>Crypto headlines</h2><div id="cNews"></div></section>`;
+    <section style="margin-top:34px"><h2>Crypto headlines</h2><div id="cNews"></div></section>`)) {
+    const mine = myAssets().filter(a => ['btc', 'coin'].includes(a.src));
+    chartPicker('cChart', 'cPick', [...mine, { id: 'BTC', tv: 'BINANCE:BTCUSDT' }, { id: 'ETH', tv: 'BINANCE:ETHUSDT' }, { id: 'SOL', tv: 'BINANCE:SOLUSDT' }]);
+  }
   const d = api('crypto');
   fill('cIntro', 'summary', d, x => x.lines.map(l => `<p>${esc(l)}</p>`).join('') + (x.summary ? `<p class="muted small">Total value of all crypto: ${big(x.summary.mcap)}. Traded in the last day: ${big(x.summary.vol)}.</p>` : ''));
   fill('cMood', 'mood', d, x => x.fear ? `<div class="gauge"><span class="num">${x.fear.value}</span><div><b>${esc(x.fear.label)}</b><div class="muted small">out of 100</div></div></div><div class="gbar"><i style="left:${x.fear.value}%"></i></div><div class="em-ends"><span>Fear</span><span>Greed</span></div><p class="small muted">Readings near the ends have often marked turning points.</p>` : '<p class="muted">Not available.</p>');
@@ -292,31 +439,32 @@ PAGES.crypto = async () => {
 };
 
 PAGES.memes = async () => {
-  main.innerHTML = `<h1 class="head">Memecoins</h1>
+  layout(`<h1 class="head">Memecoins</h1>
     <div class="lead"><div><div id="mIntro" class="story"></div></div>
       <aside><div class="callout">Most new tokens go to zero. Watch liquidity: it decides whether you can actually sell. “Promoted” means someone paid to put the token in front of buyers.</div></aside></div>
-    <div class="grid2" style="margin-top:34px">
-      <section><h2>Getting the most attention</h2><p class="muted small" style="margin-top:-6px">The most-promoted tokens on DexScreener right now</p><div id="mHot"></div></section>
-      <section><h2>The established names</h2><div id="mMajors"></div><h2 style="margin-top:34px">Memecoin headlines</h2><div id="mNews"></div></section>
-    </div>`;
+    <div class="grid2" style="margin-top:30px">
+      <section><h2>Getting the most attention</h2><p class="muted small" style="margin-top:-6px">The most-promoted tokens on DexScreener right now${myAssets().some(a => a.chain) ? ', your chains first' : ''}</p><div id="mHot"></div></section>
+      <section><h2>The established names</h2><div id="mMajors"></div><h2 style="margin-top:30px">Memecoin headlines</h2><div id="mNews"></div></section>
+    </div>`);
   const d = api('memes');
+  const chains = myAssets().map(a => a.chain).filter(Boolean);
   fill('mIntro', 'summary', d, x => x.lines.map(l => `<p>${esc(l)}</p>`).join('') || '<p>Here’s where the attention is.</p>');
-  fill('mHot', 'tokens', d, x => x.hot.length ? x.hot.map(t => `<div class="tok"><div class="nm">${t.icon ? `<img class="coin-img" src="${esc(t.icon)}" alt="" loading="lazy">` : ''}<a href="${esc(t.url)}" target="_blank" rel="noopener" style="text-decoration:none">${esc(t.name)}</a><small>${esc(t.symbol)} on ${esc(t.chain)}</small></div><div>${chg(t.ch24)}</div>
+  fill('mHot', 'tokens', d, x => { const hot = [...x.hot.filter(t => chains.includes(t.chain)), ...x.hot.filter(t => !chains.includes(t.chain))]; return hot.length ? hot.map(t => `<div class="tok"><div class="nm">${t.icon ? `<img class="coin-img" src="${esc(t.icon)}" alt="" loading="lazy">` : ''}<a href="${esc(t.url)}" target="_blank" rel="noopener" style="text-decoration:none">${esc(t.name)}</a><small>${esc(t.symbol)} on ${esc(t.chain)}</small></div><div>${chg(t.ch24)}</div>
       <div class="stats"><span>Price ${usd(t.price)}</span><span>Value ${big(t.mcap)}</span><span>Liquidity ${big(t.liq)}</span><span>Traded today ${big(t.vol24)}</span><span>Last hour ${t.ch1 == null ? '—' : (t.ch1 > 0 ? '+' : '') + t.ch1.toFixed(1) + '%'}</span></div>
-      ${t.notes.length ? `<div class="flags">${t.notes.map(n => `<span class="flag ${n.tone}">${esc(n.text)}</span>`).join('')}</div>` : ''}</div>`).join('') : '<p class="muted">Nothing to show right now.</p>');
+      ${t.notes.length ? `<div class="flags">${t.notes.map(n => `<span class="flag ${n.tone}">${esc(n.text)}</span>`).join('')}</div>` : ''}</div>`).join('') : '<p class="muted">Nothing to show right now.</p>'; });
   fill('mMajors', 'memecoins', d, x => `<table class="t"><thead><tr><th>Coin</th><th>Price</th><th>24h</th><th class="hide-sm">7 days</th></tr></thead><tbody>${x.majors.map(c => `<tr><td class="n">${c.image ? `<img class="coin-img" src="${esc(c.image)}" alt="" loading="lazy">` : ''}${esc(c.symbol)}<small>${esc(c.name)}, ${big(c.mcap)}</small></td><td>${usd(c.price)}</td><td>${chg(c.ch24)}</td><td class="hide-sm">${chg(c.ch7)}</td></tr>`).join('')}</tbody></table>`);
   fill('mNews', 'headlines', api('news?section=memes'), x => newsList(x.items.filter(i => i.markets.includes('memes')).concat(x.items.filter(i => !i.markets.includes('memes'))), 8));
 };
 
 PAGES.options = async () => {
-  main.innerHTML = `<h1 class="head">Options</h1>
+  layout(`<h1 class="head">Options</h1>
     <p class="sec-intro" id="oIntro"></p>
     <section style="margin-top:22px"><h2>How far the market is expected to move today</h2><div id="oEM"></div></section>
-    <div class="grid2" style="margin-top:36px">
+    <div class="grid2" style="margin-top:30px">
       <section><h2>Fear gauges</h2><div id="oVol" class="tape"></div></section>
       <section><h2>Expiration dates</h2><div id="oOpex"></div></section>
     </div>
-    <section style="margin-top:40px"><h2>Headlines</h2><div id="oNews"></div></section>`;
+    <section style="margin-top:34px"><h2>Headlines</h2><div id="oNews"></div></section>`);
   const d = api('markets?section=options');
   fill('oIntro', 'summary', d, x => esc([...(x.structure || []), ...x.macro].join(' ')));
   fill('oEM', 'expected move', d, x => x.expectedMove.length ? `<div class="em">${x.expectedMove.map(e => `<div class="em-card"><h3>${esc(e.name)}</h3><div class="rng">± ${num(e.move, 0)} points</div><div class="muted small">About ${(e.move / e.price * 100).toFixed(2)}% either way, based on what options traders are paying</div><div class="em-bar"><i></i></div><div class="em-ends"><span>${num(e.price - e.move, 0)}</span><span>${num(e.price, 0)}</span><span>${num(e.price + e.move, 0)}</span></div></div>`).join('')}</div><p class="muted small" style="max-width:70ch">Roughly two days out of three stay inside this range. A day that breaks well past it is unusual, and that’s often when trends start or traders get caught on the wrong side.</p>` : '<p class="muted">Not available.</p>');
@@ -332,16 +480,42 @@ PAGES.options = async () => {
   fill('oNews', 'headlines', api('news?section=options'), x => newsList(x.items, 10));
 };
 
+PAGES.heatmaps = async () => {
+  if (!layout(`<h1 class="head">Heatmaps &amp; movers</h1>
+    <p class="sec-intro">See what’s hot and what’s not at a glance. Bigger boxes are bigger companies or coins; green is up, red is down. These update live.</p>
+    <div id="hmBlocks"></div>`)) return;
+  const blocks = {
+    stocks: `<section class="hm"><div class="chart-h"><h2>Stocks</h2><div class="chips tight" id="hmIdx"><button class="chip" data-src="NASDAQ100" aria-pressed="true">Nasdaq 100</button><button class="chip" data-src="SPX500" aria-pressed="false">S&amp;P 500</button></div></div><div id="hmStocks" class="tvbox"></div><p class="muted small">Tech is most of the Nasdaq 100. When the biggest boxes are green, NQ usually is too.</p></section>
+      <section class="hm"><h2>Biggest movers in US stocks</h2><div id="hmMovers" class="tvbox"></div></section>`,
+    crypto: `<section class="hm"><h2>Crypto</h2><div id="hmCrypto" class="tvbox"></div></section>`,
+    forex: `<section class="hm"><h2>Currencies</h2><div id="hmFx" class="tvbox"></div><p class="muted small">Read across a row: each box shows how that currency is doing against the one in the column.</p></section>`,
+  };
+  const mk = myMarkets();
+  const order = ['stocks', 'crypto', 'forex'].sort((a, b) => {
+    const score = k => (k === 'stocks' ? ['futures', 'stocks', 'options'] : k === 'crypto' ? ['crypto', 'memes'] : ['forex']).some(m => mk.includes(m)) ? 0 : 1;
+    return score(a) - score(b);
+  });
+  document.getElementById('hmBlocks').innerHTML = order.map(k => blocks[k]).join('');
+  const theme = tvTheme();
+  const stock = src => tvWidget('hmStocks', 'stock-heatmap', { exchanges: [], dataSource: src, grouping: 'sector', blockSize: 'market_cap_basic', blockColor: 'change', locale: 'en', colorTheme: theme, hasTopBar: false, isDataSetEnabled: false, isZoomEnabled: true, hasSymbolTooltip: true, isMonoSize: false, width: '100%', height: '100%' }, 560);
+  stock('NASDAQ100');
+  document.querySelectorAll('#hmIdx button').forEach(b => b.onclick = () => { document.querySelectorAll('#hmIdx button').forEach(x => x.setAttribute('aria-pressed', x === b)); stock(b.dataset.src); });
+  tvWidget('hmMovers', 'hotlists', { colorTheme: theme, dateRange: '1D', exchange: 'US', showChart: true, locale: 'en', isTransparent: true, showSymbolLogo: true, showFloatingTooltip: false, width: '100%', height: '100%' }, 560);
+  tvWidget('hmCrypto', 'crypto-coins-heatmap', { dataSource: 'Crypto', blockSize: 'market_cap_calc', blockColor: '24h_close_change|5', locale: 'en', colorTheme: theme, hasTopBar: false, isDataSetEnabled: false, isZoomEnabled: true, hasSymbolTooltip: true, isMonoSize: false, width: '100%', height: '100%' }, 520);
+  tvWidget('hmFx', 'forex-heat-map', { width: '100%', height: '100%', currencies: ['EUR', 'USD', 'JPY', 'GBP', 'CHF', 'AUD', 'CAD', 'NZD'], isTransparent: true, colorTheme: theme, locale: 'en' }, 420);
+};
+
 PAGES.calendar = async () => {
-  const f = store.get('calFilter', { imp: ['High', 'Medium'], ccy: ['USD'] });
+  const mineCcy = [...new Set(['USD', ...myAssets().flatMap(a => a.ccy || [])])];
+  const f = store.get('calFilter', { imp: ['High', 'Medium'], ccy: mineCcy });
   const CCY = ['USD', 'EUR', 'GBP', 'JPY', 'CAD', 'AUD', 'NZD', 'CHF', 'CNY'];
-  main.innerHTML = `<h1 class="head">Economic calendar</h1>
-    <p class="sec-intro">Every scheduled release this week and next, explained in plain English. Tap any event to see what it is and how price tends to react. Red means big, amber medium, grey small.</p>
+  layout(`<h1 class="head">Economic calendar</h1>
+    <p class="sec-intro">Every scheduled release this week, explained in plain English${isBeginner() ? '. Tap any event to see what it is and how price tends to react' : ''}. Events that affect your markets say <b>For you</b>. Red means big, amber medium, grey small.</p>
     <div class="chips" role="group" aria-label="Impact"><span class="chips-label">Show:</span>${['High', 'Medium', 'Low'].map(i => `<button class="chip" data-imp="${i}" aria-pressed="${f.imp.includes(i)}">${i === 'High' ? 'Big' : i === 'Medium' ? 'Medium' : 'Small'}</button>`).join('')}</div>
     <div class="chips" role="group" aria-label="Currencies"><span class="chips-label">Countries:</span>${CCY.map(c => `<button class="chip" data-ccy="${c}" aria-pressed="${f.ccy.includes(c)}">${c}</button>`).join('')}</div>
-    <div id="calList"></div>`;
-  main.querySelectorAll('[data-imp]').forEach(b => b.onclick = () => { const k = b.dataset.imp; f.imp = f.imp.includes(k) ? f.imp.filter(x => x !== k) : [...f.imp, k]; store.set('calFilter', f); PAGES.calendar(); });
-  main.querySelectorAll('[data-ccy]').forEach(b => b.onclick = () => { const k = b.dataset.ccy; f.ccy = f.ccy.includes(k) ? f.ccy.filter(x => x !== k) : [...f.ccy, k]; store.set('calFilter', f); PAGES.calendar(); });
+    <div id="calList"></div>`);
+  main.querySelectorAll('[data-imp]').forEach(b => b.onclick = () => { const k = b.dataset.imp; f.imp = f.imp.includes(k) ? f.imp.filter(x => x !== k) : [...f.imp, k]; store.set('calFilter', f); refreshing = false; PAGES.calendar(); });
+  main.querySelectorAll('[data-ccy]').forEach(b => b.onclick = () => { const k = b.dataset.ccy; f.ccy = f.ccy.includes(k) ? f.ccy.filter(x => x !== k) : [...f.ccy, k]; store.set('calFilter', f); refreshing = false; PAGES.calendar(); });
   fill('calList', 'the calendar', api('calendar', 10 * 60e3), d => {
     const ev = d.events.filter(e => f.imp.includes(e.impact) && (f.ccy.includes(e.country) || (e.country === 'All' && f.imp.includes('Low'))));
     if (!ev.length) return '<p class="muted">Nothing matches those filters. Try adding more countries or sizes.</p>';
@@ -353,28 +527,48 @@ PAGES.calendar = async () => {
 };
 
 PAGES.earnings = async () => {
-  main.innerHTML = `<h1 class="head">Earnings</h1>
+  layout(`<h1 class="head">Earnings</h1>
     <p class="sec-intro" id="eIntro"></p>
-    <div id="eList" style="margin-top:20px"></div>`;
+    <div id="eList" style="margin-top:20px"></div>`);
   const d = api('earnings', 15 * 60e3);
   fill('eIntro', 'summary', d, x => esc(x.lines.join(' ')));
   fill('eList', 'earnings', d, x => x.days.map(day => `<div class="cal-day"><h3>${esc(dayLabel(day.date))}</h3>${day.rows.length ? day.rows.map(r => `<div class="earn-row"><span class="sym">${esc(r.symbol)}</span><span>${esc(r.name)}${r.heavy ? '<span class="badge">Moves the index</span>' : ''}<span class="muted small" style="display:block">${r.mcap ? big(r.mcap) + ' company' : ''}${r.eps ? ', expected ' + esc(r.eps) + ' a share' : ''}</span></span><span class="when">${r.when === 'before' ? 'Before the open' : r.when === 'after' ? 'After the close' : 'Time not set'}</span></div>`).join('') : '<p class="muted" style="padding:10px 0">No big companies reporting.</p>'}</div>`).join('') + '<p class="muted small">Showing companies worth $20B or more, plus the heavyweights that drive the Nasdaq and S&P.</p>' + stamp(x));
 };
 
 // ---------- router ----------
-function route() {
+function route(isRefresh = false) {
   const page = (location.hash.slice(1) || 'today').split('?')[0];
-  const fn = PAGES[page] || PAGES.today;
-  document.querySelectorAll('#tabs a').forEach(a => a.setAttribute('aria-current', a.getAttribute('href') === '#' + (PAGES[page] ? page : 'today') ? 'page' : 'false'));
-  const cur = document.querySelector('#tabs a[aria-current="page"]'); if (cur) cur.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-  document.title = page === 'today' || !PAGES[page] ? 'The Open One' : cur.textContent.replace('&amp;', '&') + ' | The Open One';
-  fn();
+  const key = PAGES[page] ? page : 'today';
+  refreshing = isRefresh && shownPage === key;
+  document.querySelectorAll('#tabs a').forEach(a => a.setAttribute('aria-current', a.getAttribute('href') === '#' + key ? 'page' : 'false'));
+  const cur = document.querySelector('#tabs a[aria-current="page"]'); if (cur && !isRefresh) cur.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  document.title = key === 'today' ? 'The Open One' : cur.textContent + ' | The Open One';
+  shownPage = key; main.dataset.page = key;
+  PAGES[key]();
+  refreshing = false;
 }
-addEventListener('hashchange', () => { route(); main.focus({ preventScroll: true }); });
+addEventListener('hashchange', () => { if (!started) return; route(); main.focus({ preventScroll: true }); window.scrollTo({ top: 0 }); });
+function orderTabs() {
+  const nav = document.getElementById('tabs'); const mk = myMarkets();
+  const links = [...nav.querySelectorAll('a')];
+  const mineFirst = links.filter(a => a.dataset.m && a.dataset.m.split(' ').some(m => mk.includes(m)));
+  const rest = links.filter(a => a.getAttribute('href') !== '#today' && !mineFirst.includes(a));
+  [links.find(a => a.getAttribute('href') === '#today'), ...mineFirst, ...rest].forEach(a => nav.appendChild(a));
+}
+async function levelRows() {
+  const D = await personalData();
+  return myAssets().map(a => assetView(a, D)).filter(v => v && v.L).map(v => ({ id: v.a.id, L: v.L.levels, fmt: x => (v.money ? '$' : '') + num(x, v.dp) }));
+}
 
 // ---------- start ----------
 api('calendar', 10 * 60e3).then(d => { calendarCache = d.events; drawRibbon(); }).catch(() => {});
 tick(); setInterval(tick, 30e3);
-route();
-// Refresh the open page every 2 minutes (the API caches, so this is cheap)
-setInterval(() => { if (document.visibilityState === 'visible') { cache.clear(); api('calendar').then(d => { calendarCache = d.events; }).catch(() => {}); route(); } }, 120e3);
+document.getElementById('bellBtn').onclick = () => { if (started) openAlerts(); };
+initMe(() => {
+  started = true;
+  orderTabs(); mountTicker(); route();
+  startAlerts({ calendar: () => calendarCache, levels: levelRows });
+});
+addEventListener('open:profile', () => { orderTabs(); mountTicker(); cache.clear(); route(); });
+// Refresh the open page's data every 2 minutes without reloading charts
+setInterval(() => { if (started && document.visibilityState === 'visible') { cache.clear(); api('calendar').then(d => { calendarCache = d.events; }).catch(() => {}); route(true); } }, 120e3);
