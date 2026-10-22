@@ -421,3 +421,19 @@ body.locked .mast,body.locked .ribbon-wrap,body.locked main,body.locked .foot,bo
   .icon-btn{width:34px;height:34px}
   .ev summary .fy,.ev:not(.mini) summary .fy{grid-column:1/-1}
 }
+
+/* charts: proper height + full screen */
+.tvbox.chartbox{height:clamp(440px,68vh,720px)}
+.chart-h{gap:10px}
+.chart-h .chips.tight{margin-left:auto}
+.fs-btn{display:inline-flex;align-items:center;gap:7px}
+.chart-shell{position:relative}
+.fs-exit{display:none}
+.chart-shell.fs{position:fixed;inset:0;z-index:90;background:var(--bg);padding:14px}
+.chart-shell.fs .tvbox.chartbox{height:100%;border-radius:14px}
+.chart-shell.fs .fs-exit{display:inline-flex;align-items:center;gap:8px;position:absolute;top:24px;right:24px;z-index:2;
+  font:800 13.5px var(--sans);color:var(--ink);background:color-mix(in srgb,var(--surface-solid) 88%,transparent);backdrop-filter:blur(10px);
+  border:1px solid var(--line2);border-radius:11px;padding:9px 14px;cursor:pointer;box-shadow:0 10px 30px -10px rgba(0,0,0,.6)}
+.chart-shell.fs .fs-exit:hover{border-color:var(--ink3)}
+body.fs-open{overflow:hidden}
+@media (max-width:620px){.tvbox.chartbox{height:440px}.chart-shell.fs{padding:6px}.chart-shell.fs .fs-exit{top:12px;right:12px}}

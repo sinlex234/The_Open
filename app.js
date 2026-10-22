@@ -208,12 +208,16 @@ function tvWidget(el, kind, cfg, height) {
   if (typeof el === 'string') el = document.getElementById(el);
   if (!el) return;
   el.innerHTML = '';
-  const c = document.createElement('div'); c.className = 'tradingview-widget-container'; c.style.height = height + 'px';
+  // The widget fills its parent, so the parent box carries the size (charts get a responsive height from CSS)
+  if (!el.classList.contains('chartbox')) el.style.height = height + 'px';
+  const c = document.createElement('div'); c.className = 'tradingview-widget-container'; c.style.height = '100%'; c.style.width = '100%';
   const w = document.createElement('div'); w.className = 'tradingview-widget-container__widget'; w.style.height = '100%'; c.appendChild(w);
   const sc = document.createElement('script'); sc.src = `https://s3.tradingview.com/external-embedding/embed-widget-${kind}.js`; sc.async = true; sc.innerHTML = JSON.stringify(cfg); c.appendChild(sc);
   el.appendChild(c);
 }
 function tvChart(el, symbol, height = 500) {
+  if (typeof el === 'string') el = document.getElementById(el);
+  if (el) el.classList.add('chartbox');
   const dark = tvTheme() === 'dark';
   tvWidget(el, 'advanced-chart', { autosize: true, symbol, interval: '15', timezone: 'America/New_York', theme: tvTheme(), style: '1', locale: 'en', allow_symbol_change: true, hide_volume: true, save_image: false, calendar: false, support_host: 'https://www.tradingview.com', backgroundColor: dark ? 'rgba(6,9,18,1)' : 'rgba(255,255,255,1)', gridColor: dark ? 'rgba(140,165,255,0.06)' : 'rgba(30,45,90,0.06)' }, height);
 }
@@ -225,8 +229,40 @@ function chartPicker(boxId, pickId, options, noteId) {
   pick.innerHTML = uniq.map((o, i) => `<button class="chip" data-tv="${esc(o.tv)}" aria-pressed="${i === 0}">${esc(o.id)}</button>`).join('');
   pick.querySelectorAll('button').forEach(b => b.onclick = () => { pick.querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', x === b)); tvChart(boxId, b.dataset.tv); });
   tvChart(boxId, uniq[0].tv);
+  addFullscreen(boxId, pick);
   if (noteId && document.getElementById(noteId)) document.getElementById(noteId).textContent = CHART_NOTE;
 }
+// Full-screen chart: the chart box is lifted into a fixed overlay (no reload), plus browser full screen where allowed
+function addFullscreen(boxId, pick) {
+  const box = document.getElementById(boxId); if (!box) return;
+  let shell = box.parentElement;
+  if (!shell.classList.contains('chart-shell')) {
+    shell = document.createElement('div'); shell.className = 'chart-shell';
+    box.parentNode.insertBefore(shell, box); shell.appendChild(box);
+    const x = document.createElement('button'); x.className = 'fs-exit'; x.type = 'button';
+    x.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>Exit full screen';
+    x.onclick = () => exitFs(shell); shell.appendChild(x);
+  }
+  if (!pick.parentElement.querySelector('.fs-btn')) {
+    const b = document.createElement('button'); b.className = 'chip fs-btn'; b.type = 'button';
+    b.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/></svg>Full screen';
+    b.onclick = () => enterFs(shell); pick.parentElement.appendChild(b);
+  }
+}
+function enterFs(shell) {
+  shell.classList.add('fs'); document.body.classList.add('fs-open');
+  if (shell.requestFullscreen) shell.requestFullscreen().catch(() => {});
+  const x = shell.querySelector('.fs-exit'); if (x) x.focus();
+}
+function exitFs(shell) {
+  shell = shell || document.querySelector('.chart-shell.fs'); if (!shell) return;
+  shell.classList.remove('fs'); document.body.classList.remove('fs-open');
+  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+}
+document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement) exitFs(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && document.querySelector('.chart-shell.fs')) exitFs(); });
+addEventListener('hashchange', () => exitFs());
+
 function mountTicker() {
   const el = document.getElementById('tickerTape'); if (!el) return;
   const mine = myAssets().filter(a => a.tv).map(a => ({ proName: a.tv, title: a.id }));
