@@ -601,3 +601,80 @@ body.locked .mast,body.locked .strip,body.locked main,body.locked .foot{visibili
   .chip{flex:none}
 }
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+/* ---------- every device: phones, tablets, touch, notches ---------- */
+html{-webkit-tap-highlight-color:transparent}
+body{padding-left:env(safe-area-inset-left);padding-right:env(safe-area-inset-right)}
+.foot{padding-bottom:calc(40px + env(safe-area-inset-bottom))}
+.toast{bottom:calc(20px + env(safe-area-inset-bottom))}
+img,svg,video,iframe{max-width:100%}
+.gate,.wizard{grid-template-columns:minmax(0,1fr);padding:max(16px,env(safe-area-inset-top)) 16px max(16px,env(safe-area-inset-bottom))}
+.gate-card,.wz-card{max-width:100%;min-width:0}
+.gate-card>*,.wz-card>*{min-width:0}
+.gate-points,.gate-fine,.wz-sub,.wz-h{overflow-wrap:anywhere}
+.bh,.slist a.t,.tok .nm a,.th-head,.play h3,.ol h3,.stories h3,.page-h,.lead-h{overflow-wrap:break-word;hyphens:auto}
+table.t,.mytable,.wm-g table{max-width:100%}
+.chart-shell.fs{padding:max(12px,env(safe-area-inset-top)) max(12px,env(safe-area-inset-right)) max(12px,env(safe-area-inset-bottom)) max(12px,env(safe-area-inset-left))}
+/* tablets */
+@media (min-width:641px) and (max-width:980px){
+  .wrap{padding-left:20px;padding-right:20px}
+  .rail{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}
+  .rail .tvbox.chartbox{height:360px}
+  .mgrid,.plays,.outlook{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .topics{grid-template-columns:1fr 1fr}
+}
+/* touch screens: bigger targets */
+@media (pointer:coarse){
+  .chip{min-height:38px;padding:8px 14px}
+  .nav a{padding:10px 13px}
+  .icon-btn{width:42px;height:42px}
+  .linkbtn{padding:8px 0;min-height:36px}
+  .th-wrap summary{padding:8px 0}
+  .tok .links a{padding:6px 12px}
+  .brief-actions button,.brief-actions a{padding:9px 14px}
+  .ev summary{padding:13px 2px}
+  .am-item{padding:12px 8px}
+  .x{min-width:40px;min-height:40px}
+  .sec-row a,.more{display:inline-block;padding:8px 0}
+}
+/* phones */
+@media (max-width:640px){
+  body{font-size:15px}
+  .eyebrow,.glance h2,.wm-g h3,.bl,.th-sec h4,.play small,.ol-top,.fyl b,.xp dt,table.t th,.chips-label,.stamp,.ev .t,.ev .cc,.tl .tt{font-size:12px}
+  .pill,.flag,.eff,.fy b,.tag-heavy,.tok .links a,.tok .stats,.tok .nm small,.bm,.meta,.react,.chg,.small,.disclaim,.bnote,.play-why,.mytable small,table.t td small,.ev .nm small,.gb small,.lrow small{font-size:12.5px}
+  .fld input,.search,select,textarea{font-size:16px}
+  .mast-row{height:52px}
+  .nav{height:46px}
+  .strip{height:42px}
+  .page-h{font-size:28px}
+  .bh{font-size:16.5px}
+  .bc{padding:16px 14px}
+  .brow{margin-top:10px;padding-top:10px}
+  .tok{padding:14px}
+  .tok .nm .r .pr{font-size:12.5px}
+  .tvbox.chartbox,.rail .tvbox.chartbox{height:min(62vh,440px)}
+  .chart-h{flex-direction:column;align-items:flex-start}
+  .acct-menu,.alerts-panel{left:12px;right:12px;width:auto}
+  .toast{left:12px;right:12px;width:auto}
+  .gate-card,.wz-card{border-radius:12px}
+  .gate-h{font-size:26px}
+  .wz-foot{flex-wrap:wrap}
+  .wz-foot .btn-primary{flex:1 1 100%;order:3;margin-left:0}
+  table.t td,table.t th{padding-left:4px;padding-right:4px}
+}
+@media (max-width:360px){
+  .wrap{padding-left:12px;padding-right:12px}
+  .mast-tools .icon-btn{width:38px;height:38px}
+  .wordmark{font-size:15px}
+  .tok .stats{grid-template-columns:1fr 1fr}
+  .gb{grid-template-columns:80px 1fr 58px}
+}
+/* big screens */
+@media (min-width:1600px){
+  .wrap{max-width:1440px}
+  .acct-menu,.alerts-panel{right:max(24px,calc((100vw - 1440px)/2 + 24px))}
+}
+@media (max-width:640px){.chart-h .chips{align-self:stretch;max-width:100%;min-width:0}}
+.tok .nm .ph{font-size:12px}
+.tnews small{font-size:12px}
+@media (pointer:coarse){.tnews li a{display:inline-block;padding:3px 0}}
