@@ -93,21 +93,109 @@ function tick() {
   $('#exchanges').innerHTML = EXCH.map(x => { const s = exchState(x); return `<li class="${s.open ? 'open' : ''}" title="${esc(s.tip)}">${esc(x.name)}</li>`; }).join('');
 }
 
-// ---------- live ticker (TradingView, prices move in real time) ----------
+// ---------- live ticker: our own, updated every second ----------
+// Crypto streams from Coinbase in real time; everything else comes from /api/data?fn=ticks once a second.
+const LOGO = 'https://s3-symbol-logo.tradingview.com/';
 const TAPE = [
-  ['OANDA:SPX500USD', 'S&P 500'], ['OANDA:NAS100USD', 'Nasdaq 100'], ['OANDA:US30USD', 'Dow'], ['OANDA:DE30EUR', 'DAX'], ['OANDA:JP225USD', 'Nikkei'],
-  ['FX:EURUSD', 'EUR/USD'], ['FX:USDJPY', 'USD/JPY'], ['FX:GBPUSD', 'GBP/USD'], ['OANDA:XAUUSD', 'Gold'], ['OANDA:WTICOUSD', 'Oil'],
-  ['BINANCE:BTCUSDT', 'Bitcoin'], ['BINANCE:ETHUSDT', 'Ether'], ['BINANCE:SOLUSDT', 'Solana'],
+  { k: 'NQ', y: 'NQ=F', logo: 'indices/nasdaq-100.svg', dp: 2 },
+  { k: 'S&P 500', y: 'ES=F', logo: 'indices/s-and-p-500.svg', dp: 2 },
+  { k: 'Dow', y: 'YM=F', logo: 'indices/dow-30.svg', dp: 0 },
+  { k: 'DAX', y: '^GDAXI', logo: 'indices/dax.svg', dp: 1 },
+  { k: 'Nikkei', y: '^N225', logo: 'indices/nikkei-225.svg', dp: 1 },
+  { k: 'EUR/USD', y: 'EURUSD=X', flags: ['EU', 'US'], dp: 5 },
+  { k: 'USD/JPY', y: 'USDJPY=X', flags: ['US', 'JP'], dp: 3 },
+  { k: 'GBP/USD', y: 'GBPUSD=X', flags: ['GB', 'US'], dp: 5 },
+  { k: 'Gold', y: 'GC=F', logo: 'metal/gold.svg', dp: 1 },
+  { k: 'Oil', y: 'CL=F', logo: 'crude-oil.svg', dp: 2 },
+  { k: 'BTC', cb: 'BTC-USD', logo: 'crypto/XTVCBTC.svg', dp: 0 },
+  { k: 'ETH', cb: 'ETH-USD', logo: 'crypto/XTVCETH.svg', dp: 2 },
+  { k: 'SOL', cb: 'SOL-USD', logo: 'crypto/XTVCSOL.svg', dp: 2 },
 ];
-let tapeKey = '';
+const CB_EXTRA = { XRP: ['XRP-USD', 'crypto/XTVCXRP.svg', 4], DOGE: ['DOGE-USD', 'crypto/XTVCDOGE.svg', 5] };
+const FLAG = { USD: 'US', EUR: 'EU', JPY: 'JP', GBP: 'GB', CHF: 'CH', AUD: 'AU', CAD: 'CA', NZD: 'NZ' };
+function tapeItems() {
+  const mine = [];
+  myAssets().forEach(a => {
+    const hit = TAPE.find(t => (a.ysym && t.y === a.ysym) || (t.cb && t.k === a.id));
+    if (hit) { if (!mine.includes(hit)) mine.push(hit); return; }
+    if (CB_EXTRA[a.id]) { const [cb, logo, dp] = CB_EXTRA[a.id]; mine.push({ k: a.id, cb, logo, dp }); return; }
+    if (a.ysym && /^[A-Z]{6}=X$/.test(a.ysym)) { const b = a.ysym.slice(0, 3), q = a.ysym.slice(3, 6); mine.push({ k: b + '/' + q, y: a.ysym, flags: [FLAG[b], FLAG[q]].filter(Boolean), dp: q === 'JPY' ? 3 : 5 }); return; }
+    if (a.ysym) mine.push({ k: shortName(a), y: a.ysym, dp: 2 });
+  });
+  return [...mine, ...TAPE.filter(t => !mine.includes(t))].slice(0, 16);
+}
+const tape = { items: [], key: '', q: {}, cb: {}, prev: {}, timer: null, ws: null, wsKeys: '', backoff: 1000 };
+function tkLogo(t) {
+  if (t.flags && t.flags.length) return `<span class="tk-logo pair">${t.flags.map(f => `<img src="${LOGO}country/${f}.svg" alt="" loading="lazy" onerror="this.remove()">`).join('')}</span>`;
+  if (t.logo) return `<span class="tk-logo"><img src="${LOGO}${t.logo}" alt="" loading="lazy" onerror="this.parentNode.remove()"></span>`;
+  return '';
+}
 function mountStrip(force = false) {
-  const mine = myAssets().filter(a => a.tv).map(a => [a.tv, a.short || a.label]);
-  const seen = new Set();
-  const syms = [...mine, ...TAPE].filter(([s]) => !seen.has(s) && seen.add(s)).slice(0, 16);
-  const key = tvTheme() + syms.map(x => x[0]).join(',');
-  if (!force && key === tapeKey && $('#strip').children.length) return;
-  tapeKey = key;
-  tvWidget('strip', 'ticker-tape', { symbols: syms.map(([proName, title]) => ({ proName, title })), showSymbolLogo: false, isTransparent: true, displayMode: 'adaptive', colorTheme: tvTheme(), locale: 'en' }, 46);
+  const items = tapeItems();
+  const key = items.map(t => t.k).join('|');
+  const el = $('#strip');
+  if (force || key !== tape.key || !el.querySelector('.tk-track')) {
+    tape.key = key; tape.items = items;
+    const row = items.map(t => `<span class="tk" data-k="${esc(t.k)}">${tkLogo(t)}<b>${esc(t.k)}</b><span class="tk-p">—</span><span class="tk-c"></span></span>`).join('');
+    el.innerHTML = `<div class="tk-track" aria-hidden="true"><div class="tk-row">${row}</div><div class="tk-row">${row}</div></div><span class="sr-only">Live prices</span>`;
+    el.style.setProperty('--tk-dur', Math.max(40, items.length * 6) + 's');
+    renderTape();
+  }
+  startTape();
+}
+function renderTape() {
+  tape.items.forEach(t => {
+    let p, pc;
+    if (t.cb) { const c = tape.cb[t.cb]; if (!c) return; p = c.p; pc = c.o; }
+    else { const r = tape.q[t.y]; if (!r) return; p = r.p; pc = r.pc; }
+    if (p == null) return;
+    const ch = pc ? p - pc : null, pct = pc ? (p - pc) / pc * 100 : null;
+    const dir = ch == null ? '' : ch > 0 ? 'up' : ch < 0 ? 'down' : '';
+    const last = tape.prev[t.k];
+    const flash = last != null && p !== last ? (p > last ? 'fl-up' : 'fl-down') : '';
+    tape.prev[t.k] = p;
+    const pTxt = num(p, t.dp);
+    const cTxt = ch == null ? '' : `${ch > 0 ? '+' : ch < 0 ? '−' : ''}${num(Math.abs(ch), t.dp)} (${pct > 0 ? '+' : pct < 0 ? '−' : ''}${Math.abs(pct).toFixed(2)}%)`;
+    document.querySelectorAll(`#strip .tk[data-k="${CSS.escape(t.k)}"]`).forEach(n => {
+      const pe = n.querySelector('.tk-p'), ce = n.querySelector('.tk-c');
+      if (pe.textContent !== pTxt) { pe.textContent = pTxt; if (flash) { pe.classList.remove('fl-up', 'fl-down'); void pe.offsetWidth; pe.classList.add(flash); } }
+      ce.textContent = cTxt; ce.className = 'tk-c ' + dir;
+    });
+  });
+}
+async function pollTicks() {
+  const ys = tape.items.filter(t => t.y).map(t => t.y);
+  if (!ys.length) return;
+  try {
+    const r = await fetch('/api/data?fn=ticks&s=' + encodeURIComponent(ys.join(',')), { cache: 'no-store' });
+    if (r.ok) { const j = await r.json(); Object.assign(tape.q, j.q || {}); }
+  } catch {}
+}
+function connectCoinbase() {
+  const ids = [...new Set(tape.items.filter(t => t.cb).map(t => t.cb))];
+  const keyIds = ids.join(',');
+  if (tape.ws && tape.wsKeys === keyIds && tape.ws.readyState <= 1) return;
+  if (tape.ws) { try { tape.ws.onclose = null; tape.ws.close(); } catch {} tape.ws = null; }
+  tape.wsKeys = keyIds;
+  if (!ids.length || !('WebSocket' in window)) return;
+  let ws;
+  try { ws = new WebSocket('wss://ws-feed.exchange.coinbase.com'); } catch { return; }
+  tape.ws = ws;
+  ws.onopen = () => { tape.backoff = 1000; ws.send(JSON.stringify({ type: 'subscribe', product_ids: ids, channels: ['ticker'] })); };
+  ws.onmessage = e => { try { const d = JSON.parse(e.data); if (d.type === 'ticker' && d.product_id) tape.cb[d.product_id] = { p: +d.price, o: +d.open_24h }; } catch {} };
+  ws.onclose = () => { if (tape.ws !== ws) return; tape.ws = null; setTimeout(() => { if (document.visibilityState === 'visible') connectCoinbase(); }, tape.backoff); tape.backoff = Math.min(tape.backoff * 2, 30000); };
+}
+function startTape() {
+  connectCoinbase();
+  if (tape.timer) return;
+  let busy = false;
+  const tick = async () => {
+    if (document.visibilityState !== 'visible' || busy) return;
+    busy = true; await pollTicks(); busy = false; renderTape();
+  };
+  tick();
+  tape.timer = setInterval(() => { if (tape.items.some(t => t.cb)) renderTape(); tick(); }, 1000);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { connectCoinbase(); tick(); } });
 }
 
 // ---------- TradingView live charts and heatmaps ----------

@@ -2072,6 +2072,42 @@ Return ONLY JSON: {"SYMBOL": {"headline": "under 80 characters", "what": "2-3 se
   return { mood, summary: ai && ai.summary || "", drivers: picked, tokenNews, theses, forYou, aiStatus, source: ai ? "ai" : "rules", updated: Date.now() };
 }
 
+// api/ticks.js  (fast prices for the ticker: shared CDN cache of about one second)
+var TICK_OK = /^[A-Za-z0-9^=.\-]{1,15}$/;
+async function sparkBatch(syms) {
+  const u = "/v8/finance/spark?symbols=" + syms.map(encodeURIComponent).join(",") + "&range=1d&interval=1m";
+  let j;
+  try { j = await getJSON("https://query1.finance.yahoo.com" + u); } catch (e) { j = await getJSON("https://query2.finance.yahoo.com" + u); }
+  const out = {};
+  const list = j && j.spark && Array.isArray(j.spark.result) ? j.spark.result.map((r) => ({ symbol: r.symbol, ...(r.response && r.response[0] || {}) })) : Object.entries(j || {}).map(([symbol, v]) => ({ symbol, ...(v || {}) }));
+  list.forEach((r) => {
+    const meta = r.meta || {};
+    const closes = (r.close || r.indicators && r.indicators.quote && r.indicators.quote[0] && r.indicators.quote[0].close || []).filter((x) => x != null);
+    const price = meta.regularMarketPrice ?? closes[closes.length - 1];
+    const prev = meta.chartPreviousClose ?? meta.previousClose ?? r.chartPreviousClose ?? r.previousClose;
+    if (price != null && r.symbol) out[r.symbol] = { p: price, pc: prev ?? null, t: (meta.regularMarketTime || 0) * 1e3 || null };
+  });
+  return out;
+}
+async function build15(q) {
+  const syms = String(q.s || "").split(",").map((x) => x.trim()).filter((x) => TICK_OK.test(x)).slice(0, 16);
+  if (!syms.length) throw new Error("No symbols");
+  let out = {};
+  try { out = await memo("spark:" + syms.join(","), 900, () => sparkBatch(syms)); } catch (e) { out = {}; }
+  const missing = syms.filter((x) => !out[x]);
+  if (missing.length) {
+    const { res } = await settle(Object.fromEntries(missing.map((x) => [x, memo("tick:" + x, 900, () => yahooChartRaw(x, { interval: "1m", range: "1d" }))])));
+    missing.forEach((x) => {
+      const c = res[x];
+      if (!c) return;
+      const m = c.meta || {};
+      const last = c.bars.length ? c.bars[c.bars.length - 1].c : null;
+      out[x] = { p: m.regularMarketPrice ?? last, pc: m.chartPreviousClose ?? m.previousClose ?? null, t: (m.regularMarketTime || 0) * 1e3 || null };
+    });
+  }
+  return { q: out, at: Date.now() };
+}
+
 // api/_lib/router.js
 var ROUTES = {
   calendar: [() => build(), 900],
@@ -2086,6 +2122,7 @@ var ROUTES = {
   recap: [(q) => build10(String(q.sym || "NQ").toUpperCase()), 180],
   desk: [(q) => build11(q), hasAI() ? 900 : 180],
   world: [() => build13(), 120],
+  ticks: [(q) => build15(q), 1],
   memedesk: [(q) => build14(q), hasAI() ? 600 : 180],
   explain: [(q) => build12(q), 86400]
 };
