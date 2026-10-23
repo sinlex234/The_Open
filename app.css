@@ -718,4 +718,4 @@ table.t,.mytable,.wm-g table{max-width:100%}
 @keyframes fl-down{from{background:rgba(244,63,94,.35)}to{background:transparent}}
 .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 @media (max-width:640px){.strip{height:42px}.tk{padding:0 14px;font-size:13px;gap:6px}.tk-p{font-size:13px}.tk-c{font-size:12px}}
-@media (prefers-reduced-motion:reduce){.tk-track{animation:none}.strip{overflow-x:auto;pointer-events:auto}}
+@media (prefers-reduced-motion:reduce){.tk-track{animation:tk-scroll calc(var(--tk-dur,70s) * 1.6) linear infinite!important}.tk-p.fl-up,.tk-p.fl-down{animation:none!important}}
