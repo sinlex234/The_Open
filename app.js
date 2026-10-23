@@ -127,7 +127,7 @@ function tvChart(el, symbol) {
   if (!el) return;
   el.classList.add('chartbox');
   const dark = tvTheme() === 'dark';
-  tvWidget(el, 'advanced-chart', { autosize: true, symbol, interval: intraday() ? '15' : 'D', timezone: 'America/New_York', theme: tvTheme(), style: '1', locale: 'en', allow_symbol_change: true, hide_volume: true, save_image: false, calendar: false, support_host: 'https://www.tradingview.com', backgroundColor: dark ? 'rgba(18,18,21,1)' : 'rgba(255,255,255,1)', gridColor: dark ? 'rgba(42,42,49,0.45)' : 'rgba(9,9,11,0.06)' }, 500);
+  tvWidget(el, 'advanced-chart', { autosize: true, symbol, interval: intraday() ? '15' : 'D', timezone: 'America/New_York', theme: tvTheme(), style: '1', locale: 'en', allow_symbol_change: true, hide_volume: true, save_image: false, calendar: false, support_host: 'https://www.tradingview.com', backgroundColor: dark ? 'rgba(17,17,43,1)' : 'rgba(255,255,255,1)', gridColor: dark ? 'rgba(139,92,246,0.08)' : 'rgba(76,60,160,0.07)' }, 500);
 }
 function chartPicker(boxId, pickId, options) {
   const pick = document.getElementById(pickId); if (!pick) return;
