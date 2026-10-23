@@ -969,14 +969,18 @@ PAGES.glossary = () => {
 };
 
 // ---------- router ----------
-const ALIASES = { heatmaps: 'markets', movers: 'markets' };
-const pagePath = key => key === 'today' ? '/' : '/' + key;
+const ALIASES = { heatmaps: 'markets', movers: 'markets', memecoins: 'memes' };
+const SLUG = { memes: 'memecoins' };
+const pagePath = key => key === 'today' ? '/' : '/' + (SLUG[key] || key);
 function currentPage() {
   // Old links used #news style addresses: move them to /news (but leave sign-in tokens alone)
   const h = location.hash.slice(1).split('?')[0];
   if (h && (PAGES[h] || ALIASES[h])) history.replaceState(null, '', pagePath(ALIASES[h] || h));
   const p = location.pathname.replace(/^\/+|\/+$/g, '').split('/')[0] || 'today';
-  return ALIASES[p] || p;
+  const key = ALIASES[p] || p;
+  // Keep one address per page, e.g. /memes becomes /memecoins
+  if (PAGES[key] && SLUG[key] && p !== SLUG[key]) history.replaceState(null, '', pagePath(key) + location.search);
+  return key;
 }
 function route(isRefresh = false) {
   const page = currentPage();

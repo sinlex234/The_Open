@@ -39,7 +39,7 @@
       "dest": "/data.js"
     },
     {
-      "src": "/(today|news|markets|futures|forex|crypto|memes|options|calendar|earnings|glossary|heatmaps|movers)/?",
+      "src": "/(today|news|markets|futures|forex|crypto|memes|memecoins|options|calendar|earnings|glossary|heatmaps|movers)/?",
       "dest": "/index.html"
     },
     {
