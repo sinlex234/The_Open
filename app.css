@@ -694,3 +694,7 @@ table.t,.mytable,.wm-g table{max-width:100%}
 .chart-shell.fs .cd{bottom:52px;right:88px}
 @media (pointer:coarse){.tfbar button{padding:9px 12px}}
 @media (max-width:640px){.cd{right:64px;bottom:36px;font-size:11px}.cd b{font-size:12.5px}.cd .cd-l{display:none}}
+
+.tfbar .tf-reload{display:grid;place-items:center;border-left:1px solid var(--rule-2);border-radius:0 5px 5px 0;margin-left:2px}
+.tv-fail{height:100%;display:grid;place-content:center;justify-items:center;gap:12px;padding:24px;text-align:center}
+.tv-fail p{margin:0;max-width:40ch;color:var(--ink-2);font-size:14px}

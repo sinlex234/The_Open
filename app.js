@@ -121,6 +121,21 @@ function tvWidget(el, kind, cfg, height) {
   const w = document.createElement('div'); w.className = 'tradingview-widget-container__widget'; w.style.height = '100%'; c.appendChild(w);
   const sc = document.createElement('script'); sc.src = `https://s3.tradingview.com/external-embedding/embed-widget-${kind}.js`; sc.async = true; sc.innerHTML = JSON.stringify(cfg); c.appendChild(sc);
   el.appendChild(c);
+  // If TradingView doesn't load (slow network, blocked script), try again once, then offer a button.
+  const token = String(Math.random()); el.dataset.tvToken = token;
+  const tries = +(el.dataset.tvTries || 0);
+  const check = () => {
+    if (el.dataset.tvToken !== token || !el.isConnected) return;
+    const f = el.querySelector('iframe');
+    if (f && f.offsetHeight > 20) { el.dataset.tvTries = '0'; return; }
+    if (kind === 'ticker-tape') return;
+    if (tries < 1) { el.dataset.tvTries = String(tries + 1); tvWidget(el, kind, cfg, height); return; }
+    el.dataset.tvTries = '0';
+    el.innerHTML = `<div class="tv-fail"><p>The live chart didn’t load. This is usually a slow connection or an ad blocker blocking TradingView.</p><button type="button" class="btn-ghost">Reload chart</button></div>`;
+    el.querySelector('button').onclick = () => tvWidget(el, kind, cfg, height);
+  };
+  sc.onerror = () => setTimeout(check, 500);
+  setTimeout(check, 9000);
 }
 // ---------- countdown to bar close (TradingView's embed forces its own one off, so we draw it) ----------
 const TFS = [['1', '1m', 1], ['5', '5m', 5], ['15', '15m', 15], ['60', '1h', 60], ['240', '4h', 240], ['D', '1D', 1440]];
@@ -189,8 +204,9 @@ function chartPicker(boxId, pickId, options) {
   const box = document.getElementById(boxId), shell = box && box.parentElement;
   if (shell && !shell.querySelector(':scope > .tfbar')) {
     const bar = document.createElement('div'); bar.className = 'tfbar'; bar.setAttribute('role', 'group'); bar.setAttribute('aria-label', 'Timeframe');
-    bar.innerHTML = TFS.map(([v, l]) => `<button type="button" data-tf="${v}" aria-pressed="${v === chartTf()}">${l}</button>`).join('');
-    bar.querySelectorAll('button').forEach(b => b.onclick = () => { store.set('chartTf', b.dataset.tf); document.querySelectorAll('.tfbar button').forEach(x => x.setAttribute('aria-pressed', x.dataset.tf === b.dataset.tf)); tvChart(boxId, box.dataset.sym); });
+    bar.innerHTML = TFS.map(([v, l]) => `<button type="button" data-tf="${v}" aria-pressed="${v === chartTf()}">${l}</button>`).join('') + `<button type="button" class="tf-reload" title="Reload chart" aria-label="Reload chart"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 4v5h-5"/></svg></button>`;
+    bar.querySelector('.tf-reload').onclick = () => tvChart(boxId, box.dataset.sym);
+    bar.querySelectorAll('button[data-tf]').forEach(b => b.onclick = () => { store.set('chartTf', b.dataset.tf); document.querySelectorAll('.tfbar button[data-tf]').forEach(x => x.setAttribute('aria-pressed', x.dataset.tf === b.dataset.tf)); tvChart(boxId, box.dataset.sym); });
     shell.insertBefore(bar, box);
   }
   tvChart(boxId, uniq[0].tv);
