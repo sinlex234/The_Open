@@ -122,21 +122,78 @@ function tvWidget(el, kind, cfg, height) {
   const sc = document.createElement('script'); sc.src = `https://s3.tradingview.com/external-embedding/embed-widget-${kind}.js`; sc.async = true; sc.innerHTML = JSON.stringify(cfg); c.appendChild(sc);
   el.appendChild(c);
 }
+// ---------- countdown to bar close (TradingView's embed forces its own one off, so we draw it) ----------
+const TFS = [['1', '1m', 1], ['5', '5m', 5], ['15', '15m', 15], ['60', '1h', 60], ['240', '4h', 240], ['D', '1D', 1440]];
+const chartTf = () => { const v = store.get('chartTf', null); return TFS.some(t => t[0] === v) ? v : (intraday() ? '15' : 'D'); };
+function nyOffset(t) {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: TZ, year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', hourCycle: 'h23' }).formatToParts(new Date(t)).map(x => [x.type, x.value]));
+  return Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute) - Math.floor(t / 60e3) * 60e3;
+}
+function marketKind(sym) {
+  if (/^(BINANCE|COINBASE|BYBIT|KRAKEN|BITSTAMP|CRYPTO|OKX|BITGET|MEXC|GATEIO):/i.test(sym)) return 'crypto';
+  if (/^(NASDAQ|NYSE|AMEX|ARCA|BATS|NYSEARCA):/i.test(sym)) return 'stock';
+  return 'fx';
+}
+function barClose(sym, tf, t = Date.now()) {
+  const kind = marketKind(sym), H = 36e5, M = 6e4;
+  const mins = (TFS.find(x => x[0] === tf) || TFS[2])[2];
+  if (kind === 'crypto') {
+    if (mins === 1440) return { at: Math.floor(t / 864e5) * 864e5 + 864e5 };
+    const P = mins * M; return { at: Math.floor(t / P) * P + P };
+  }
+  const off = nyOffset(t), ny = t + off, dayStart = Math.floor(ny / 864e5) * 864e5, tod = ny - dayStart;
+  const dow = new Date(ny).getUTCDay();
+  if (kind === 'stock') {
+    const open = 9.5 * H, close = 16 * H;
+    if (dow === 0 || dow === 6 || tod < open || tod >= close) return { closed: 'Market closed' };
+    if (mins === 1440) return { at: dayStart + close - off };
+    const P = mins * M; const k = Math.floor((tod - open) / P) * P + P + open;
+    return { at: dayStart + Math.min(k, close) - off };
+  }
+  const anchor = 17 * H;
+  if (dow === 6 || (dow === 5 && tod >= anchor) || (dow === 0 && tod < anchor)) return { closed: 'Market closed for the weekend' };
+  if (mins === 1440) return { at: dayStart + (tod < anchor ? anchor : anchor + 864e5) - off };
+  const P = mins * M; const k = Math.floor((ny - anchor) / P) * P + P + anchor;
+  return { at: k - off };
+}
+const fmtLeft = ms => { const s = Math.max(0, Math.round(ms / 1000)); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60; return (h ? h + ':' + String(m).padStart(2, '0') : String(m)) + ':' + String(x).padStart(2, '0'); };
+let cdTimer = null;
+function tickCountdowns() {
+  document.querySelectorAll('.cd[data-sym]').forEach(el => {
+    if (!el.isConnected) return;
+    const tf = el.dataset.tf, r = barClose(el.dataset.sym, tf), label = (TFS.find(x => x[0] === tf) || [])[1] || tf;
+    el.innerHTML = r.closed ? `<span>${esc(r.closed)}</span>` : `<span>${esc(label)}<span class="cd-l"> bar closes in</span></span><b>${fmtLeft(r.at - Date.now())}</b>`;
+  });
+}
+function ensureCdTimer() { if (!cdTimer) cdTimer = setInterval(() => { if (document.visibilityState === 'visible') tickCountdowns(); }, 1000); }
 function tvChart(el, symbol) {
   if (typeof el === 'string') el = document.getElementById(el);
   if (!el) return;
   el.classList.add('chartbox');
+  el.dataset.sym = symbol;
   const dark = tvTheme() === 'dark';
-  tvWidget(el, 'advanced-chart', { autosize: true, symbol, interval: intraday() ? '15' : 'D', timezone: 'America/New_York', theme: tvTheme(), style: '1', locale: 'en', allow_symbol_change: true, hide_volume: true, save_image: false, calendar: false, support_host: 'https://www.tradingview.com', backgroundColor: dark ? 'rgba(18,18,21,1)' : 'rgba(255,255,255,1)', gridColor: dark ? 'rgba(42,42,49,0.45)' : 'rgba(9,9,11,0.06)' }, 500);
+  const tf = chartTf();
+  const shell = el.parentElement;
+  let cd = shell && shell.querySelector(':scope > .cd');
+  if (shell && !cd) { cd = document.createElement('div'); cd.className = 'cd'; cd.setAttribute('aria-live', 'off'); shell.appendChild(cd); }
+  if (cd) { cd.dataset.sym = symbol; cd.dataset.tf = tf; tickCountdowns(); ensureCdTimer(); }
+  tvWidget(el, 'advanced-chart', { autosize: true, symbol, interval: tf, timezone: 'America/New_York', theme: tvTheme(), style: '1', locale: 'en', allow_symbol_change: true, hide_volume: true, save_image: false, calendar: false, support_host: 'https://www.tradingview.com', backgroundColor: dark ? 'rgba(18,18,21,1)' : 'rgba(255,255,255,1)', gridColor: dark ? 'rgba(42,42,49,0.45)' : 'rgba(9,9,11,0.06)' }, 500);
 }
 function chartPicker(boxId, pickId, options) {
   const pick = document.getElementById(pickId); if (!pick) return;
   const seen = new Set(); const uniq = options.filter(o => o && o.tv && !seen.has(o.tv) && seen.add(o.tv)).slice(0, 7);
   if (!uniq.length) return;
   pick.innerHTML = uniq.map((o, i) => `<button class="chip" data-tv="${esc(o.tv)}" aria-pressed="${i === 0}">${esc(o.name || o.id)}</button>`).join('');
-  pick.querySelectorAll('button').forEach(b => b.onclick = () => { pick.querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', x === b)); tvChart(boxId, b.dataset.tv); });
-  tvChart(boxId, uniq[0].tv);
+  pick.querySelectorAll('button[data-tv]').forEach(b => b.onclick = () => { pick.querySelectorAll('button[data-tv]').forEach(x => x.setAttribute('aria-pressed', x === b)); tvChart(boxId, b.dataset.tv); });
   addFullscreen(boxId, pick);
+  const box = document.getElementById(boxId), shell = box && box.parentElement;
+  if (shell && !shell.querySelector(':scope > .tfbar')) {
+    const bar = document.createElement('div'); bar.className = 'tfbar'; bar.setAttribute('role', 'group'); bar.setAttribute('aria-label', 'Timeframe');
+    bar.innerHTML = TFS.map(([v, l]) => `<button type="button" data-tf="${v}" aria-pressed="${v === chartTf()}">${l}</button>`).join('');
+    bar.querySelectorAll('button').forEach(b => b.onclick = () => { store.set('chartTf', b.dataset.tf); document.querySelectorAll('.tfbar button').forEach(x => x.setAttribute('aria-pressed', x.dataset.tf === b.dataset.tf)); tvChart(boxId, box.dataset.sym); });
+    shell.insertBefore(bar, box);
+  }
+  tvChart(boxId, uniq[0].tv);
 }
 function addFullscreen(boxId, pick) {
   const box = document.getElementById(boxId); if (!box) return;

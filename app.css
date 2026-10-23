@@ -678,3 +678,19 @@ table.t,.mytable,.wm-g table{max-width:100%}
 .tok .nm .ph{font-size:12px}
 .tnews small{font-size:12px}
 @media (pointer:coarse){.tnews li a{display:inline-block;padding:3px 0}}
+
+/* timeframe bar + countdown to bar close */
+.tfbar{display:flex;gap:2px;padding:3px;margin:0 0 8px;width:max-content;max-width:100%;overflow-x:auto;scrollbar-width:none;border:1px solid var(--rule-2);border-radius:var(--r-sm);background:var(--panel)}
+.tfbar::-webkit-scrollbar{display:none}
+.tfbar button{flex:none;border:none;background:none;color:var(--ink-3);font:500 12.5px var(--mono);padding:5px 10px;border-radius:5px;cursor:pointer}
+.tfbar button:hover{color:var(--ink)}
+.tfbar button[aria-pressed="true"]{background:var(--panel-3);color:var(--ink)}
+.chart-shell{position:relative}
+.cd{position:absolute;right:76px;bottom:40px;z-index:3;display:flex;align-items:baseline;gap:7px;padding:5px 9px;border-radius:6px;background:rgba(9,9,11,.82);border:1px solid var(--rule-2);color:var(--ink-2);font:500 11.5px var(--sans);pointer-events:none;-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)}
+:root[data-theme="light"] .cd{background:rgba(255,255,255,.9)}
+.cd b{font:600 13px var(--mono);color:var(--ink);font-variant-numeric:tabular-nums}
+.cd:empty{display:none}
+.chart-shell.fs .tfbar{position:absolute;top:22px;left:50%;transform:translateX(-50%);z-index:3;margin:0}
+.chart-shell.fs .cd{bottom:52px;right:88px}
+@media (pointer:coarse){.tfbar button{padding:9px 12px}}
+@media (max-width:640px){.cd{right:64px;bottom:36px;font-size:11px}.cd b{font-size:12.5px}.cd .cd-l{display:none}}
