@@ -491,7 +491,7 @@ function guideHTML() {
       <li><b>Read Today’s briefing</b>The 3 stories that matter most for you, what they’ll likely do to your market, and what to watch next.</li>
       <li><b>Check your prices</b>Your markets and a live chart sit right next to the briefing.</li>
       <li><b>See what’s going to happen next</b>The most likely path for your markets, and a game plan for the strategies you use.</li>
-      <li><b>Go deeper in your tab</b>Tabs with a blue dot are your markets. Each opens with its own briefing. Stuck on a word? Try the <a href="#glossary">Glossary</a>.</li>
+      <li><b>Go deeper in your tab</b>Tabs with a blue dot are your markets. Each opens with its own briefing. Stuck on a word? Try the <a href="/glossary">Glossary</a>.</li>
     </ol></section>`;
 }
 const DIR_TXT = { up: '↑ Likely up', down: '↓ Likely down', mixed: '↕ Unclear' };
@@ -528,8 +528,8 @@ function playbookHTML(d) {
     </article>`).join('')}</div><p class="disclaim">How traders using each strategy usually approach news like today’s. It’s education, not financial advice. Your own rules come first.</p>`;
 }
 function marketBriefing(id, focus, label) {
-  return { html: `<section class="mbrief"><div class="sec-row"><h2 class="sec">Briefing for ${esc(label)}</h2><a href="#news">All news</a></div><ol class="bfeed" id="${id}"></ol></section>
-    <section class="mbrief"><div class="sec-row"><h2 class="sec">What’s going to happen next</h2><a href="#calendar">Full calendar</a></div><div id="${id}Next"></div></section>
+  return { html: `<section class="mbrief"><div class="sec-row"><h2 class="sec">Briefing for ${esc(label)}</h2><a href="/news">All news</a></div><ol class="bfeed" id="${id}"></ol></section>
+    <section class="mbrief"><div class="sec-row"><h2 class="sec">What’s going to happen next</h2><a href="/calendar">Full calendar</a></div><div id="${id}Next"></div></section>
     <section class="mbrief"><div class="sec-row"><h2 class="sec">How to trade this with your strategy</h2><button class="linkbtn" type="button" data-edit>Change strategies</button></div><div id="${id}Play"></div></section>`,
     load: () => { const p = api('desk?' + profileQuery() + '&focus=' + focus, 5 * 60e3); fill(id, 'the briefing', p, d => briefingHTML(d)); fill(id + 'Next', 'what’s next', p, nextHTML); fill(id + 'Play', 'your game plan', p, playbookHTML); main.querySelectorAll('[data-edit]').forEach(b => b.onclick = editSetup); } };
 }
@@ -580,7 +580,7 @@ function briefHTML(desk, D) {
     ${tips.length ? `<p class="small"><mark>${esc(tips[0])}</mark></p>` : ''}
     ${views.length ? `<h3>Your markets</h3><table class="mytable">${views.map(v => `<tr><td>${esc(shortName(v.a))}${v.sectorName ? `<small>${esc(v.sectorName)} sector</small>` : v.meme ? `<small>${v.count} of the most-promoted tokens</small>` : ''}</td><td>${v.meme ? (v.top[0] ? esc(v.top[0].symbol) : '—') : v.price != null ? (v.money ? '$' : '') + (v.unit === '%' ? num(v.price, 2) + '%' : num(v.price, v.dp)) : ''}</td><td>${v.meme ? (v.top[0] ? chg(v.top[0].ch24) : '') : chg(v.pct)}</td></tr>`).join('')}</table>` : ''}
     ${evs.length ? `<h3>Ahead today for you</h3><div>${evs.map(e => eventRow(e, true)).join('')}</div>` : ''}
-    <div class="brief-actions"><button type="button" id="briefEdit">Edit my setup</button><button type="button" id="briefAlerts">Alerts</button>${isLearning() ? '<a href="#glossary" class="more">Learn the terms</a>' : ''}</div>`;
+    <div class="brief-actions"><button type="button" id="briefEdit">Edit my setup</button><button type="button" id="briefAlerts">Alerts</button>${isLearning() ? '<a href="/glossary" class="more">Learn the terms</a>' : ''}</div>`;
 }
 const TOPICS = [
   { id: 'econ', name: 'Economy and central banks', secs: ['economy', 'centralbanks'], mk: ['stocks', 'futures', 'forex', 'options'] },
@@ -612,16 +612,16 @@ PAGES.today = () => {
     <h1 class="page-h">${esc(greeting())}</h1>
     <p class="page-intro" id="todayIntro">${isLearning() ? 'Here’s how today’s news connects to the markets you’re learning about.' : ws.text ? esc(ws.text) : 'Here’s what matters for your markets today.'}</p>
     <div class="front">
-      <section class="briefing"><div class="sec-row"><h2 class="sec">Today’s briefing</h2><a href="#news">All news</a></div><ol class="bfeed" id="bfeed">${'<li>' + skel(3) + '</li>'}</ol></section>
+      <section class="briefing"><div class="sec-row"><h2 class="sec">Today’s briefing</h2><a href="/news">All news</a></div><ol class="bfeed" id="bfeed">${'<li>' + skel(3) + '</li>'}</ol></section>
       <aside class="rail">
         <section id="myPrices"></section>
         <section class="rail-chart"><div class="chart-h"><h2 class="sec">Live chart</h2></div><div class="chips tight" id="todayChartPick"></div><div id="todayChart" class="tvbox"></div></section>
       </aside>
     </div>
-    <section class="block"><div class="sec-row"><h2 class="sec">What’s going to happen next</h2><a href="#calendar">Full calendar</a></div><div id="outlook"></div></section>
+    <section class="block"><div class="sec-row"><h2 class="sec">What’s going to happen next</h2><a href="/calendar">Full calendar</a></div><div id="outlook"></div></section>
     <section class="block"><div class="sec-row"><h2 class="sec">How to trade today’s news with your strategy</h2><button class="linkbtn" type="button" data-edit>Change strategies</button></div><div id="todayPlay"></div></section>
-    <section class="block"><div class="sec-row"><h2 class="sec">More news by topic</h2><a href="#news">All news</a></div><div class="topics" id="topics"></div></section>
-    <section class="block"><div class="sec-row"><h2 class="sec">World markets</h2><a href="#markets">All markets</a></div><div id="worldMini"></div></section>`)) {
+    <section class="block"><div class="sec-row"><h2 class="sec">More news by topic</h2><a href="/news">All news</a></div><div class="topics" id="topics"></div></section>
+    <section class="block"><div class="sec-row"><h2 class="sec">World markets</h2><a href="/markets">All markets</a></div><div id="worldMini"></div></section>`)) {
     chartPicker('todayChart', 'todayChartPick', todayChartOptions());
     const gx = $('#guideX'); if (gx) gx.onclick = () => { store.set('guideDone', true); const g = $('#guide'); if (g) g.remove(); };
   }
@@ -738,7 +738,7 @@ function recapSection(boxId, pickId, keys) {
 }
 const recapBlock = (id, title = 'How today has played out') => intraday() || levelTrader() ? `<section class="block"><div class="chart-h"><h2 class="sec">${title}</h2><div class="chips tight" id="${id}Pick"></div></div><div id="${id}"></div></section>` : '';
 const chartBlock = id => `<section class="block"><div class="chart-h"><h2 class="sec">Live chart</h2><div class="chips tight" id="${id}Pick"></div></div><div id="${id}" class="tvbox"></div></section>`;
-const newsBlock = (id, title) => `<section class="block"><div class="sec-row"><h2 class="sec">${title}</h2><a href="#news">All news</a></div><ul class="slist" id="${id}"></ul></section>`;
+const newsBlock = (id, title) => `<section class="block"><div class="sec-row"><h2 class="sec">${title}</h2><a href="/news">All news</a></div><ul class="slist" id="${id}"></ul></section>`;
 function marketNews(id, section, n = 8) { fill(id, 'news', api('wire?section=' + section, 60e3), d => storyList(rankStories(d.items).slice(0, n), { notes: 3 }) || '<li class="empty">No fresh stories right now.</li>'); }
 
 // ---------- Stocks & futures ----------
@@ -970,13 +970,20 @@ PAGES.glossary = () => {
 
 // ---------- router ----------
 const ALIASES = { heatmaps: 'markets', movers: 'markets' };
+const pagePath = key => key === 'today' ? '/' : '/' + key;
+function currentPage() {
+  // Old links used #news style addresses: move them to /news (but leave sign-in tokens alone)
+  const h = location.hash.slice(1).split('?')[0];
+  if (h && (PAGES[h] || ALIASES[h])) history.replaceState(null, '', pagePath(ALIASES[h] || h));
+  const p = location.pathname.replace(/^\/+|\/+$/g, '').split('/')[0] || 'today';
+  return ALIASES[p] || p;
+}
 function route(isRefresh = false) {
-  let page = (location.hash.slice(1) || 'today').split('?')[0];
-  page = ALIASES[page] || page;
+  const page = currentPage();
   const key = PAGES[page] ? page : 'today';
   if (isRefresh && key === 'glossary') return;
   refreshing = isRefresh && shownPage === key;
-  document.querySelectorAll('#tabs a').forEach(a => a.setAttribute('aria-current', a.getAttribute('href') === '#' + key ? 'page' : 'false'));
+  document.querySelectorAll('#tabs a').forEach(a => a.setAttribute('aria-current', a.getAttribute('href') === pagePath(key) ? 'page' : 'false'));
   const cur = document.querySelector('#tabs a[aria-current="page"]');
   if (cur && !isRefresh) cur.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   document.title = key === 'today' ? 'The Open One' : (cur ? cur.textContent : '') + ' | The Open One';
@@ -984,11 +991,27 @@ function route(isRefresh = false) {
   PAGES[key]();
   refreshing = false;
 }
-addEventListener('hashchange', () => { if (!started) return; exitFs(); route(); main.focus({ preventScroll: true }); window.scrollTo({ top: 0 }); });
+function go(path) {
+  if (path !== location.pathname) history.pushState(null, '', path);
+  if (!started) return;
+  exitFs(); route(); main.focus({ preventScroll: true }); window.scrollTo({ top: 0 });
+}
+document.addEventListener('click', e => {
+  if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+  const a = e.target.closest && e.target.closest('a[href^="/"]');
+  if (!a || a.target === '_blank' || a.hasAttribute('download')) return;
+  const url = new URL(a.href, location.href);
+  if (url.origin !== location.origin || url.pathname.startsWith('/api/')) return;
+  const p = url.pathname.replace(/^\/+|\/+$/g, '') || 'today';
+  if (!PAGES[ALIASES[p] || p]) return;
+  e.preventDefault();
+  go(url.pathname);
+});
+addEventListener('popstate', () => { if (!started) return; exitFs(); route(); });
 function orderTabs() {
   const nav = $('#tabs'), mk = myMarkets();
   const links = [...nav.querySelectorAll('a')];
-  const fixed = ['#today', '#news', '#markets'].map(h => links.find(a => a.getAttribute('href') === h));
+  const fixed = ['/', '/news', '/markets'].map(h => links.find(a => a.getAttribute('href') === h));
   const mine = links.filter(a => a.dataset.m && a.dataset.m.split(' ').some(m => mk.includes(m)));
   const rest = links.filter(a => !fixed.includes(a) && !mine.includes(a));
   links.forEach(a => a.classList.toggle('mine', mine.includes(a)));

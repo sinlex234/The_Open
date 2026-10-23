@@ -392,7 +392,7 @@ export function windowStatus(now = Date.now()) {
 }
 
 // ================= Supabase =================
-const redirectURL = () => location.origin + location.pathname;
+const redirectURL = () => location.origin + '/';
 async function loadAnswers() {
   if (!sb || !me.user) return null;
   const { data, error } = await sb.from('open_profiles').select('answers').eq('user_id', me.user.id).maybeSingle();
@@ -728,7 +728,7 @@ export async function initMe(onReady) {
       setTimeout(() => afterSignIn(session.user), 0);
     } else if (event === 'INITIAL_SESSION' || event === 'SIGNED_OUT') {
       handled = null; me.user = null; me.answers = null;
-      if (event === 'SIGNED_OUT') { readyFired = false; location.hash = '#today'; }
+      if (event === 'SIGNED_OUT') { readyFired = false; if (location.pathname !== '/') { history.pushState(null, '', '/'); dispatchEvent(new PopStateEvent('popstate')); } }
       showGate();
     }
   });

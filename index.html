@@ -6,18 +6,18 @@
 <title>The Open One</title>
 <meta name="description" content="What’s happening in the world and how it’s moving markets, explained in plain English for the way you trade.">
 <meta name="theme-color" content="#09090b">
-<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="app.css">
+<link rel="stylesheet" href="/app.css">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.3/dist/umd/supabase.js"></script>
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
 <header class="mast">
   <div class="mast-row wrap">
-    <a class="wordmark" href="#today" aria-label="The Open One, front page">The Open One</a>
+    <a class="wordmark" href="/" aria-label="The Open One, front page">The Open One</a>
     <p class="mast-date" id="mastDate"></p>
     <ul class="exchanges" id="exchanges" aria-label="Which stock exchanges are open"></ul>
     <div class="mast-tools">
@@ -31,17 +31,17 @@
     </div>
   </div>
   <nav class="nav wrap" id="tabs" aria-label="Sections">
-    <a href="#today">Today</a>
-    <a href="#news">News</a>
-    <a href="#markets">Markets</a>
-    <a href="#futures" data-m="stocks futures">Stocks &amp; futures</a>
-    <a href="#forex" data-m="forex">Forex</a>
-    <a href="#crypto" data-m="crypto">Crypto</a>
-    <a href="#memes" data-m="memes">Memecoins</a>
-    <a href="#options" data-m="options">Options</a>
-    <a href="#calendar">Economy</a>
-    <a href="#earnings">Earnings</a>
-    <a href="#glossary">Glossary</a>
+    <a href="/">Today</a>
+    <a href="/news">News</a>
+    <a href="/markets">Markets</a>
+    <a href="/futures" data-m="stocks futures">Stocks &amp; futures</a>
+    <a href="/forex" data-m="forex">Forex</a>
+    <a href="/crypto" data-m="crypto">Crypto</a>
+    <a href="/memes" data-m="memes">Memecoins</a>
+    <a href="/options" data-m="options">Options</a>
+    <a href="/calendar">Economy</a>
+    <a href="/earnings">Earnings</a>
+    <a href="/glossary">Glossary</a>
   </nav>
   <div class="acct-menu" id="acctMenu" hidden></div>
   <div class="alerts-panel" id="alertsPanel" role="dialog" aria-label="Alerts" hidden></div>
@@ -52,11 +52,11 @@
 
 <footer class="foot wrap">
   <p>Prices from Yahoo Finance (futures and stocks can be delayed by 10 to 15 minutes), CoinGecko and DexScreener. Live charts and heatmaps by TradingView. Calendar from ForexFactory. Headlines link to their publishers. Times are New York time unless marked. This is news and context, not financial advice.</p>
-  <p><a href="#glossary">Market terms explained</a></p>
+  <p><a href="/glossary">Market terms explained</a></p>
 </footer>
 <div class="gate" id="gate" hidden></div>
 <div class="wizard" id="wizard" hidden></div>
 <div class="toast" id="toast" role="status" hidden></div>
-<script src="app.js" type="module"></script>
+<script src="/app.js" type="module"></script>
 </body>
 </html>
