@@ -138,8 +138,8 @@ function tvWidget(el, kind, cfg, height) {
   setTimeout(check, 9000);
 }
 // ---------- countdown to bar close (TradingView's embed forces its own one off, so we draw it) ----------
-const TFS = [['1', '1m', 1], ['5', '5m', 5], ['15', '15m', 15], ['60', '1h', 60], ['240', '4h', 240], ['D', '1D', 1440]];
-const chartTf = () => { const v = store.get('chartTf', null); return TFS.some(t => t[0] === v) ? v : (intraday() ? '15' : 'D'); };
+const TFS = [['1', '1m', 1], ['5', '5m', 5], ['60', '1h', 60], ['240', '4h', 240], ['D', '1D', 1440]];
+const chartTf = () => { const v = store.get('chartTf', null); return TFS.some(t => t[0] === v) ? v : (intraday() ? '5' : 'D'); };
 function nyOffset(t) {
   const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: TZ, year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', hourCycle: 'h23' }).formatToParts(new Date(t)).map(x => [x.type, x.value]));
   return Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute) - Math.floor(t / 60e3) * 60e3;
@@ -151,7 +151,7 @@ function marketKind(sym) {
 }
 function barClose(sym, tf, t = Date.now()) {
   const kind = marketKind(sym), H = 36e5, M = 6e4;
-  const mins = (TFS.find(x => x[0] === tf) || TFS[2])[2];
+  const mins = (TFS.find(x => x[0] === tf) || TFS[1])[2];
   if (kind === 'crypto') {
     if (mins === 1440) return { at: Math.floor(t / 864e5) * 864e5 + 864e5 };
     const P = mins * M; return { at: Math.floor(t / P) * P + P };
