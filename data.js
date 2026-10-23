@@ -2092,11 +2092,10 @@ async function sparkBatch(syms) {
 async function build15(q) {
   const syms = String(q.s || "").split(",").map((x) => x.trim()).filter((x) => TICK_OK.test(x)).slice(0, 16);
   if (!syms.length) throw new Error("No symbols");
-  let out = {};
-  try { out = await memo("spark:" + syms.join(","), 900, () => sparkBatch(syms)); } catch (e) { out = {}; }
-  const missing = syms.filter((x) => !out[x]);
+  const out = {};
+  const missing = syms;
   if (missing.length) {
-    const { res } = await settle(Object.fromEntries(missing.map((x) => [x, memo("tick:" + x, 900, () => yahooChartRaw(x, { interval: "1m", range: "1d" }))])));
+    const { res } = await settle(Object.fromEntries(missing.map((x) => [x, memo("tick:" + x, 2500, () => yahooChartRaw(x, { interval: "1m", range: "1d" }))])));
     missing.forEach((x) => {
       const c = res[x];
       if (!c) return;
@@ -2122,7 +2121,7 @@ var ROUTES = {
   recap: [(q) => build10(String(q.sym || "NQ").toUpperCase()), 180],
   desk: [(q) => build11(q), hasAI() ? 900 : 180],
   world: [() => build13(), 120],
-  ticks: [(q) => build15(q), 1],
+  ticks: [(q) => build15(q), 2],
   memedesk: [(q) => build14(q), hasAI() ? 600 : 180],
   explain: [(q) => build12(q), 86400]
 };

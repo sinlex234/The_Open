@@ -164,12 +164,54 @@ function renderTape() {
   });
 }
 async function pollTicks() {
-  const ys = tape.items.filter(t => t.y).map(t => t.y);
+  // Anything that streamed in the last 20 seconds is already fresher than the snapshot
+  const ys = tape.items.filter(t => t.y && !(tape.q[t.y] && tape.q[t.y].live && Date.now() - tape.q[t.y].at < 20e3)).map(t => t.y);
   if (!ys.length) return;
   try {
     const r = await fetch('/api/data?fn=ticks&s=' + encodeURIComponent(ys.join(',')), { cache: 'no-store' });
-    if (r.ok) { const j = await r.json(); Object.assign(tape.q, j.q || {}); }
+    if (r.ok) { const j = await r.json(); Object.entries(j.q || {}).forEach(([k, v]) => { const cur = tape.q[k]; if (!(cur && cur.live && Date.now() - cur.at < 20e3)) tape.q[k] = { ...v, at: Date.now() }; }); }
   } catch {}
+}
+// Yahoo's own live price stream (protobuf messages). Streams currencies, indexes and stocks; US futures don't stream for free.
+function pbDecode(b64) {
+  const bin = atob(b64), u = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+  const dv = new DataView(u.buffer), out = {};
+  let i = 0;
+  const vint = () => { let r = 0, m = 1, b; do { b = u[i++]; r += (b & 127) * m; m *= 128; } while (b & 128 && i < u.length); return r; };
+  while (i < u.length) {
+    const tag = vint(), f = Math.floor(tag / 8), w = tag & 7;
+    if (w === 0) out[f] = vint();
+    else if (w === 5) { out[f] = dv.getFloat32(i, true); i += 4; }
+    else if (w === 1) { out[f] = dv.getFloat64(i, true); i += 8; }
+    else if (w === 2) { const n = vint(); out[f] = new TextDecoder().decode(u.subarray(i, i + n)); i += n; }
+    else break;
+  }
+  return out;
+}
+function connectYahoo() {
+  const syms = [...new Set(tape.items.filter(t => t.y).map(t => t.y))];
+  const keyS = syms.join(',');
+  if (tape.yws && tape.ywsKeys === keyS && tape.yws.readyState <= 1) return;
+  if (tape.yws) { try { tape.yws.onclose = null; tape.yws.close(); } catch {} tape.yws = null; }
+  tape.ywsKeys = keyS;
+  if (!syms.length || !('WebSocket' in window)) return;
+  let ws;
+  try { ws = new WebSocket('wss://streamer.finance.yahoo.com/?version=2'); } catch { return; }
+  tape.yws = ws;
+  ws.onopen = () => { tape.ybackoff = 1000; ws.send(JSON.stringify({ subscribe: syms })); };
+  ws.onmessage = e => {
+    try {
+      let raw = e.data; if (typeof raw !== 'string') return;
+      if (raw[0] === '{') { const m = JSON.parse(raw); if (!m.message) return; raw = m.message; }
+      const d = pbDecode(raw), id = d[1], p = d[2];
+      if (!id || !(p > 0)) return;
+      const ch = typeof d[12] === 'number' ? d[12] : null;
+      const prevC = tape.q[id] && tape.q[id].pc;
+      tape.q[id] = { p, pc: ch != null ? p - ch : prevC ?? null, live: true, at: Date.now() };
+    } catch {}
+  };
+  ws.onclose = () => { if (tape.yws !== ws) return; tape.yws = null; const wait = tape.ybackoff || 1000; setTimeout(() => { if (document.visibilityState === 'visible') connectYahoo(); }, wait); tape.ybackoff = Math.min(wait * 2, 30000); };
 }
 function connectCoinbase() {
   const ids = [...new Set(tape.items.filter(t => t.cb).map(t => t.cb))];
@@ -186,7 +228,7 @@ function connectCoinbase() {
   ws.onclose = () => { if (tape.ws !== ws) return; tape.ws = null; setTimeout(() => { if (document.visibilityState === 'visible') connectCoinbase(); }, tape.backoff); tape.backoff = Math.min(tape.backoff * 2, 30000); };
 }
 function startTape() {
-  connectCoinbase();
+  connectCoinbase(); connectYahoo();
   if (tape.timer) return;
   let busy = false;
   const tick = async () => {
@@ -194,8 +236,9 @@ function startTape() {
     busy = true; await pollTicks(); busy = false; renderTape();
   };
   tick();
-  tape.timer = setInterval(() => { if (tape.items.some(t => t.cb)) renderTape(); tick(); }, 1000);
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { connectCoinbase(); tick(); } });
+  let n = 0;
+  tape.timer = setInterval(() => { renderTape(); if (++n % 3 === 0) tick(); }, 1000);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { connectCoinbase(); connectYahoo(); tick(); } });
 }
 
 // ---------- TradingView live charts and heatmaps ----------
