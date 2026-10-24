@@ -2159,20 +2159,21 @@ function releaseEffects(sc, ccy, d) {
   ];
 }
 var RES_REACT = ["NQ", "EURUSD", "GOLD", "BTC"];
-async function build16() {
-  const now = Date.now(), today = ny(now).date;
+async function build16(date) {
+  const now = Date.now(), today0 = ny(now).date;
+  const today = /^\d{4}-\d{2}-\d{2}$/.test(String(date || "")) && String(date) <= today0 ? String(date) : today0, isToday = today === today0;
   const { res } = await settle({
     // Nasdaq's calendar lists each day's releases under the NEXT day's date
-    nq: memo("econ:" + today, 6e3, () => getJSON(`https://api.nasdaq.com/api/calendar/economicevents?date=${addDays(today, 1)}`, { headers: { Accept: "application/json, text/plain, */*", Origin: "https://www.nasdaq.com", Referer: "https://www.nasdaq.com/" } })),
+    nq: memo("econ:" + today, isToday ? 6e3 : 6e5, () => getJSON(`https://api.nasdaq.com/api/calendar/economicevents?date=${addDays(today, 1)}`, { headers: { Accept: "application/json, text/plain, */*", Origin: "https://www.nasdaq.com", Referer: "https://www.nasdaq.com/" } })),
     cal: memo("calendar", 6e4, () => build())
   });
   const rows = (res.nq && res.nq.data && res.nq.data.rows || []).map((r) => {
     const [hh, mm] = String(r.gmt || "").split(":").map(Number);
     return { name: decode(r.eventName || "").trim(), ccy: NQ_CCY[String(r.country || "").trim()] || null, mins: isNaN(hh) ? null : hh * 60 + (mm || 0), actual: String(r.actual || "").trim(), consensus: String(r.consensus || "").trim(), previous: String(r.previous || "").trim() };
   });
-  const evs = (res.cal && res.cal.events || []).filter((e) => ny(e.time).date === today && (e.impact === "High" || e.impact === "Medium") && !e.allDay);
+  const evs = (res.cal && res.cal.events || []).filter((e) => ny(e.time).date === today && ["High", "Medium", "Low"].includes(e.impact) && !e.allDay);
   let charts = {};
-  if (evs.some((e) => e.time <= now)) {
+  if (isToday && evs.some((e) => e.time <= now && e.impact !== "Low")) {
     const c = await settle(Object.fromEntries(RES_REACT.map((k) => [k, yahooChart(REACT[k].sym, { interval: "1m", range: "1d" })])));
     charts = c.res;
   }
@@ -2199,11 +2200,14 @@ async function build16() {
     const sc = SCEN.find((x) => x.re.test(e.name || "") || x.re.test(e.title)) || null;
     const lab = d === "up" ? (sc ? sc.up[0] : "Above forecast") : d === "down" ? (sc ? sc.down[0] : "Below forecast") : d === "inline" ? "In line with forecast" : released ? "Released" : null;
     const text = d === "up" && sc ? sc.up[1] : d === "down" && sc ? sc.down[1] : d === "inline" ? "Close to what markets expected, so the reaction often fades quickly." : "";
-    const since = released ? RES_REACT.map((k) => charts[k] ? reaction(charts[k].bars, e.time, REACT[k]) : null).filter(Boolean) : [];
+    // which way the surprise is good or bad for the event's own currency (green/red like ForexFactory)
+    const flip = sc ? HAWK_KIND[sc.title] ?? 1 : /inventor|claims|unemploy|jobless|deficit/i.test(e.title) ? -1 : 1;
+    const ccyDir = d === "up" || d === "down" ? ((d === "up" ? 1 : -1) * flip > 0 ? "good" : "bad") : null;
+    const since = released && e.impact !== "Low" ? RES_REACT.map((k) => charts[k] ? reaction(charts[k].bars, e.time, REACT[k]) : null).filter(Boolean) : [];
     return {
       key: `${e.country}|${e.title}|${e.time}`, title: e.title, name: e.name, country: e.country, impact: e.impact, time: e.time,
-      forecast, previous: (best && best.previous) || e.previous || "", actual, released, dir: d, label: lab,
-      text: text.replace(/CCY/g, CCY_NAME[e.country] || e.country), effects: released ? releaseEffects(sc, e.country, d) : [], since
+      forecast, previous: (best && best.previous) || e.previous || "", actual, released, dir: d, ccyDir, label: lab,
+      text: text.replace(/CCY/g, CCY_NAME[e.country] || e.country), effects: released && e.impact !== "Low" ? releaseEffects(sc, e.country, d) : [], since
     };
   });
   return { events: out, matched: out.filter((x) => x.actual).length, updated: now };
@@ -2224,7 +2228,7 @@ var ROUTES = {
   desk: [(q) => build11(q), hasAI() ? 900 : 180],
   world: [() => build13(), 120],
   ticks: [(q) => build15(q), 2],
-  results: [() => build16(), 5],
+  results: [(q) => build16(q.date), 5],
   memedesk: [(q) => build14(q), hasAI() ? 600 : 180],
   explain: [(q) => build12(q), 86400]
 };
