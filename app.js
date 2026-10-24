@@ -430,9 +430,9 @@ async function pollResults() {
         });
         const now = Date.now();
         fast = (j.events || []).some(ev => !ev.actual && ev.time - now < 60e3 && now - ev.time < 30 * 60e3);
-        const firstLoad = !results.loaded; results.loaded = true;
+        results.loaded = true;
         renderReleased();
-        if (changed && !firstLoad && started && ['today', 'calendar', 'futures', 'forex'].includes(shownPage)) route(true);
+        if (changed && started && ['today', 'calendar', 'futures', 'forex'].includes(shownPage)) route(true);
       }
     }
   } catch {}
