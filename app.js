@@ -862,8 +862,8 @@ PAGES.heatmaps = () => {
       const lead = sec.slice(0, 2).map(z => z.name).join(' and '), lag = sec.slice(-2).reverse().map(z => z.name).join(' and ');
       const up = sec.filter(z => z.pct > 0).length;
       return `<p class="muted">${esc(x.lines.slice(0, 2).join(' '))}</p>
-        ${sec.length ? `<p class="muted">${up} of ${sec.length} sectors are up${tf !== 'd' ? ' today' : ''}. Leading: ${esc(lead)}. Lagging: ${esc(lag)}.</p>` : ''}
-        ${h.id === 'ndx' && x.giants ? `<p class="small faint">Points each giant is adding to or taking off the Nasdaq 100 today:</p>${giantsHTML(x.giants, 8)}` : ''}`;
+        ${sec.length ? `<p class="muted">${up} of ${sec.length} sectors ${shut ? 'finished up in the last session' : `are up${tf !== 'd' ? ' today' : ''}`}. Leading: ${esc(lead)}. Lagging: ${esc(lag)}.</p>` : ''}
+        ${h.id === 'ndx' && x.giants ? `<p class="small faint">Points each giant ${shut ? 'added to or took off the Nasdaq 100 in the last session' : 'is adding to or taking off the Nasdaq 100 today'}:</p>${giantsHTML(x.giants, 8)}` : ''}`;
     });
   } else if (h.id === 'crypto') {
     fill('hmSay', 'the summary', api('crypto', 2 * 60e3).catch(() => null), d => {
