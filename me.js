@@ -381,14 +381,25 @@ export function greeting() {
   const part = h < 5 ? 'Up early' : h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening';
   return me.name ? `${part}, ${me.name.split(/[ @]/)[0]}` : part;
 }
+const nyDow = t => ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(new Intl.DateTimeFormat('en-US', { timeZone: TZ, weekday: 'short' }).format(new Date(t)));
+const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+// Trading sessions only happen on trading days: Asia opens Sunday to Thursday evenings (New York time), the rest Monday to Friday.
+const sessionDay = (s, dow) => s.from >= 1200 ? dow >= 0 && dow <= 4 : dow >= 1 && dow <= 5;
 export function windowStatus(now = Date.now()) {
-  const m = nyMins(now), ss = mySessions();
+  const m = nyMins(now), dow = nyDow(now), ss = mySessions();
   if (!ss.length) return { text: '' };
-  const inside = ss.find(s => s.from <= m && m < s.to);
+  const inside = ss.find(s => sessionDay(s, dow) && s.from <= m && m < s.to);
   if (inside) return { now: true, s: inside, text: `You’re in your usual trading time, ${inside.phrase}, until ${fmtM(inside.to)}.` };
-  const next = ss.map(s => ({ s, d: (s.from - m + 1440) % 1440 })).sort((x, y) => x.d - y.d)[0];
-  const h = Math.floor(next.d / 60), mi = next.d % 60;
-  return { now: false, s: next.s, inMins: next.d, text: `Your usual trading time, ${next.s.phrase}, starts in ${h ? h + 'h ' : ''}${mi}m at ${fmtM(next.s.from)} New York time.` };
+  let next = null;
+  for (let off = 0; off <= 7 && !next; off++) {
+    const d = (dow + off) % 7;
+    ss.filter(s => sessionDay(s, d)).forEach(s => { const mins = off * 1440 + s.from - m; if (mins > 0 && (!next || mins < next.d)) next = { s, d: mins, off, day: d }; });
+  }
+  if (!next) return { text: '' };
+  const weekend = dow === 6 || (dow === 5 && m >= 1020) || (dow === 0 && m < 1080);
+  const dd = Math.floor(next.d / 1440), h = Math.floor(next.d % 1440 / 60), mi = next.d % 60;
+  const when = next.off === 0 ? `starts in ${h ? h + 'h ' : ''}${mi}m at ${fmtM(next.s.from)} New York time` : `starts ${next.off === 1 ? 'tomorrow' : DAY_NAMES[next.day]} at ${fmtM(next.s.from)} New York time${dd ? '' : `, in ${h ? h + 'h ' : ''}${mi}m`}`;
+  return { now: false, s: next.s, inMins: next.d, weekend, text: `${weekend ? 'It’s the weekend, so stock and futures markets are closed. ' : ''}Your usual trading time, ${next.s.phrase}, ${when}.` };
 }
 
 // ================= Supabase =================
@@ -657,7 +668,7 @@ async function checkAlerts() {
   if (AL.breaking && alertGetters.wire) {
     try { (await alertGetters.wire()).filter(h => h.breaking && relevance(h) - (h.score || 0) >= 1.5).slice(0, 2).forEach(h => notify('br:' + h.id, 'Breaking: ' + h.title, forYouHeadline(h) || h.why || h.source)); } catch {}
   }
-  if (AL.sessions) mySessions().forEach(s => { const d = (s.from - m + 1440) % 1440; if (d <= 5) notify('ss:' + s.id + today, `${s.label} ${d ? `starts in ${d} min` : 'has started'}`, 'Your briefing is up to date on the front page.'); });
+  if (AL.sessions) mySessions().forEach(s => { const d = (s.from - m + 1440) % 1440; if (d <= 5 && sessionDay(s, nyDow(Date.now() + d * 6e4))) notify('ss:' + s.id + today, `${s.label} ${d ? `starts in ${d} min` : 'has started'}`, 'Your briefing is up to date on the front page.'); });
   if (AL.levels && alertGetters.levels) {
     try {
       (await alertGetters.levels()).forEach(({ id, L, fmt }) => {
