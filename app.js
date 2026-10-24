@@ -302,6 +302,34 @@ function barClose(sym, tf, t = Date.now()) {
   const P = mins * M; const k = Math.floor((ny - anchor) / P) * P + P + anchor;
   return { at: k - off };
 }
+// ---------- weekend: no news while the user's markets are shut ----------
+// Futures, stocks and options: Fri 5 PM to Sun 6 PM ET. Forex: Fri 5 PM to Sun 5 PM ET. Crypto never closes.
+const REOPEN_H = { futures: 18, stocks: 18, options: 18, forex: 17 };
+function marketShut(m, t = Date.now()) {
+  const h = REOPEN_H[m]; if (h == null) return null;
+  const off = nyOffset(t), ny = t + off, day = Math.floor(ny / 864e5) * 864e5, tod = (ny - day) / 36e5, dow = new Date(ny).getUTCDay();
+  if (!(dow === 6 || (dow === 5 && tod >= 17) || (dow === 0 && tod < h))) return null;
+  const sun = day + ((7 - dow) % 7) * 864e5;
+  return sun + h * 36e5 - off;
+}
+// null if any of these markets is open, otherwise the time the first one reopens
+function allShut(markets) {
+  const list = markets.filter(m => m !== 'learning');
+  if (!list.length) return null;
+  const r = list.map(m => marketShut(m));
+  return r.some(x => x == null) ? null : Math.min(...r);
+}
+const SHUT_NAME = { futures: 'futures', stocks: 'stock', options: 'options', forex: 'forex' };
+const showWeekendNews = () => { try { return sessionStorage.getItem('weekendNews') === '1'; } catch { return false; } };
+function closedHTML(reopen, label = 'The market') {
+  const left = reopen - Date.now(), h = Math.floor(left / 36e5), m = Math.floor(left % 36e5 / 6e4);
+  const day = new Date(reopen).toLocaleDateString('en-US', { timeZone: TZ, weekday: 'long' });
+  return `<div class="closed"><p class="closed-h"><span class="closed-dot"></span>No news. ${esc(label)} is closed.</p>
+    <p>Reopens ${esc(day)} at ${fmtTime(reopen)} ET, in ${h ? h + 'h ' : ''}${m}m. The briefing comes back before the open.</p>
+    <button class="linkbtn" type="button" data-weekend>Show weekend headlines anyway</button></div>`;
+}
+function bindWeekend() { main.querySelectorAll('[data-weekend]').forEach(b => b.onclick = () => { try { sessionStorage.setItem('weekendNews', '1'); } catch {} refreshing = false; route(); }); }
+
 const fmtLeft = ms => { const s = Math.max(0, Math.round(ms / 1000)); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60; return (h ? h + ':' + String(m).padStart(2, '0') : String(m)) + ':' + String(x).padStart(2, '0'); };
 let cdTimer = null;
 function tickCountdowns() {
@@ -601,6 +629,10 @@ function playbookHTML(d) {
     </article>`).join('')}</div><p class="disclaim">How traders using each strategy usually approach news like today’s. It’s education, not financial advice. Your own rules come first.</p>`;
 }
 function marketBriefing(id, focus, label) {
+  const shut = !showWeekendNews() && marketShut(focus);
+  if (shut) return { html: `<section class="mbrief"><div class="sec-row"><h2 class="sec">Briefing for ${esc(label)}</h2></div>${closedHTML(shut, `The ${label} market`)}</section>
+    <section class="mbrief"><div class="sec-row"><h2 class="sec">What’s coming when it reopens</h2><a href="/calendar">Full calendar</a></div><div id="${id}Next"></div></section>`,
+    load: () => { fill(id + 'Next', 'what’s next', api('desk?' + profileQuery() + '&focus=' + focus, 5 * 60e3), nextHTML); bindWeekend(); } };
   return { html: `<section class="mbrief"><div class="sec-row"><h2 class="sec">Briefing for ${esc(label)}</h2><a href="/news">All news</a></div><ol class="bfeed" id="${id}"></ol></section>
     <section class="mbrief"><div class="sec-row"><h2 class="sec">What’s going to happen next</h2><a href="/calendar">Full calendar</a></div><div id="${id}Next"></div></section>
     <section class="mbrief"><div class="sec-row"><h2 class="sec">How to trade this with your strategy</h2><button class="linkbtn" type="button" data-edit>Change strategies</button></div><div id="${id}Play"></div></section>`,
@@ -691,23 +723,30 @@ PAGES.today = () => {
         <section class="rail-chart"><div class="chart-h"><h2 class="sec">Live chart</h2></div><div class="chips tight" id="todayChartPick"></div><div id="todayChart" class="tvbox"></div></section>
       </aside>
     </div>
-    <section class="block"><div class="sec-row"><h2 class="sec">What’s going to happen next</h2><a href="/calendar">Full calendar</a></div><div id="outlook"></div></section>
-    <section class="block"><div class="sec-row"><h2 class="sec">How to trade today’s news with your strategy</h2><button class="linkbtn" type="button" data-edit>Change strategies</button></div><div id="todayPlay"></div></section>
-    <section class="block"><div class="sec-row"><h2 class="sec">More news by topic</h2><a href="/news">All news</a></div><div class="topics" id="topics"></div></section>
+    <section class="block"><div class="sec-row"><h2 class="sec" id="outlookH">What’s going to happen next</h2><a href="/calendar">Full calendar</a></div><div id="outlook"></div></section>
+    <section class="block wknd-hide"><div class="sec-row"><h2 class="sec">How to trade today’s news with your strategy</h2><button class="linkbtn" type="button" data-edit>Change strategies</button></div><div id="todayPlay"></div></section>
+    <section class="block wknd-hide"><div class="sec-row"><h2 class="sec">More news by topic</h2><a href="/news">All news</a></div><div class="topics" id="topics"></div></section>
     <section class="block"><div class="sec-row"><h2 class="sec">World markets</h2><a href="/markets">All markets</a></div><div id="worldMini"></div></section>`)) {
     chartPicker('todayChart', 'todayChartPick', todayChartOptions());
     const gx = $('#guideX'); if (gx) gx.onclick = () => { store.set('guideDone', true); const g = $('#guide'); if (g) g.remove(); };
   }
   const deskP = api('desk?' + profileQuery(), 5 * 60e3);
   const wireP = api('wire?section=all', 60e3);
-  fill('bfeed', 'today’s briefing', deskP, d => briefingHTML(d));
+  const shut = !showWeekendNews() && allShut(myMarkets());
+  main.querySelectorAll('.wknd-hide').forEach(x => x.hidden = !!shut);
+  if (shut) {
+    const bf = $('#bfeed'); if (bf) { bf.innerHTML = `<li class="closed-li">${closedHTML(shut, myMarkets().length > 1 ? 'Every market you trade' : `The ${SHUT_NAME[myMarkets()[0]] || ''} market`)}</li>`; bindWeekend(); }
+    const oh = $('#outlookH'); if (oh) oh.textContent = 'What’s coming when it reopens';
+    const ti = $('#todayIntro'); if (ti && !isLearning()) ti.textContent = 'Your markets are closed for the weekend. Here’s what’s coming when they reopen.';
+  }
+  else fill('bfeed', 'today’s briefing', deskP, d => briefingHTML(d));
   fill('outlook', 'what’s next', deskP, nextHTML);
-  fill('todayPlay', 'your game plan', deskP, playbookHTML);
+  if (!shut) fill('todayPlay', 'your game plan', deskP, playbookHTML);
   main.querySelectorAll('[data-edit]').forEach(b => b.onclick = editSetup);
   fill('myPrices', 'your prices', personalData(), pricesHTML).then(() => {
     const e = $('#briefEdit'); if (e) e.onclick = editSetup; const al = $('#briefAlerts'); if (al) al.onclick = openAlerts;
   });
-  fill('topics', 'news sections', Promise.all([wireP, deskP.catch(() => null)]), ([d, desk]) => {
+  if (!shut) fill('topics', 'news sections', Promise.all([wireP, deskP.catch(() => null)]), ([d, desk]) => {
     const used = new Set(desk ? (desk.briefing || []).map(b => b.link) : []);
     return topicsHTML(d.items.filter(i => !used.has(i.link)));
   });
@@ -737,6 +776,8 @@ PAGES.news = () => {
     if (refreshing && fresh && seen.length) { const nb = $('#newBar'); if (nb) { nb.hidden = false; nb.textContent = `${fresh} new ${fresh === 1 ? 'story' : 'stories'} added`; } }
     store.set('newsSeen', d.items.map(i => i.id).slice(0, 150));
   }).catch(() => {});
+  const shut = !showWeekendNews() && !['crypto', 'memes'].includes(f.market) && allShut(f.market === 'all' ? myMarkets() : [f.market]);
+  if (shut) { $('#wireList').innerHTML = `<li class="closed-li">${closedHTML(shut, f.market === 'all' ? (myMarkets().length > 1 ? 'Every market you trade' : `The ${SHUT_NAME[myMarkets()[0]] || ''} market`) : f.market === 'futures' ? 'The stocks and futures market' : 'The forex market')}</li>`; bindWeekend(); return; }
   fill('wireList', 'the news', P, d => {
     let items = d.items.filter(i => f.impact === 'all' || (f.impact === 'high' ? i.impact === 'high' : i.impact !== 'low')).filter(i => !f.topic || i.section === f.topic);
     if (f.mine) items = rankStories(items);
