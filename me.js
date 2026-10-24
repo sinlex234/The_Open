@@ -241,7 +241,7 @@ function migrate(o) {
 }
 
 // ================= state =================
-export const me = { user: null, name: '', answers: null, alerts: ls.get('alerts', { news: true, lead: 5, breaking: true, sessions: true, levels: false }) };
+export const me = { user: null, name: '', answers: null, alerts: { results: true, ...ls.get('alerts', { news: true, lead: 5, breaking: true, sessions: true, levels: false }) } };
 let sb = null, onReadyCb = null, readyFired = false;
 const configured = !!(SUPABASE_URL && SUPABASE_KEY && window.supabase);
 
@@ -637,7 +637,7 @@ function toast(title, body) {
   t.hidden = false; t.querySelector('button').onclick = () => { t.hidden = true; };
   clearTimeout(toast._t); toast._t = setTimeout(() => { t.hidden = true; }, 12000);
 }
-function notify(key, title, body) {
+export function notify(key, title, body) {
   const sent = ls.get('sent', {});
   const today = nyDate(Date.now());
   Object.keys(sent).forEach(k => { if (sent[k] !== today) delete sent[k]; });
@@ -678,13 +678,14 @@ export function openAlerts() {
     <p class="muted small">Alerts show while this site is open in a tab, even in the background.</p>
     ${perm === 'granted' ? '' : perm === 'unsupported' ? '<p class="small muted">This browser can’t show notifications, so alerts appear as banners on the page.</p>' : (perm === 'denied' ? '<p class="small muted">Notifications are blocked for this site. Turn them on in your browser’s site settings. Until then, alerts appear as banners on the page.</p>' : '<button class="btn-primary" id="apPerm" style="width:100%;margin:8px 0 4px">Allow notifications</button>')}
     <label class="tg"><input type="checkbox" id="apNews" ${AL.news ? 'checked' : ''}><span><b>Before big scheduled news in my markets</b><small><select id="apLead">${[2, 5, 10, 15, 30].map(v => `<option value="${v}" ${AL.lead === v ? 'selected' : ''}>${v} min</option>`).join('')}</select> ahead</small></span></label>
+    <label class="tg"><input type="checkbox" id="apRes" ${AL.results !== false ? 'checked' : ''}><span><b>Results the moment big data comes out</b><small>The actual number, the surprise against forecast, and what it likely means for your markets.</small></span></label>
     <label class="tg"><input type="checkbox" id="apBreak" ${AL.breaking ? 'checked' : ''}><span><b>Breaking stories about my markets</b><small>Only big stories that touch what you trade.</small></span></label>
     <label class="tg"><input type="checkbox" id="apSess" ${AL.sessions ? 'checked' : ''}><span><b>When my usual trading time starts</b><small>${esc(mySessions().map(s => s.label).join(', ') || 'Set your times in Edit my setup')}</small></span></label>
     ${lv ? `<label class="tg"><input type="checkbox" id="apLv" ${AL.levels ? 'checked' : ''}><span><b>When price nears yesterday’s high or low</b><small>Based on prices that can lag up to 15 minutes.</small></span></label>` : ''}
     <button class="btn-ghost" id="apTest" style="margin-top:10px">Send a test alert</button>`;
   p.hidden = false;
-  const save = () => { me.alerts = { news: $('#apNews').checked, lead: +$('#apLead').value, breaking: $('#apBreak').checked, sessions: $('#apSess').checked, levels: lv ? $('#apLv').checked : false }; ls.set('alerts', me.alerts); if (me.answers) saveAnswers({ ...me.answers, alerts: me.alerts }); };
-  ['apNews', 'apLead', 'apBreak', 'apSess', 'apLv'].forEach(id => { if ($('#' + id)) $('#' + id).onchange = save; });
+  const save = () => { me.alerts = { results: $('#apRes').checked, news: $('#apNews').checked, lead: +$('#apLead').value, breaking: $('#apBreak').checked, sessions: $('#apSess').checked, levels: lv ? $('#apLv').checked : false }; ls.set('alerts', me.alerts); if (me.answers) saveAnswers({ ...me.answers, alerts: me.alerts }); };
+  ['apRes', 'apNews', 'apLead', 'apBreak', 'apSess', 'apLv'].forEach(id => { if ($('#' + id)) $('#' + id).onchange = save; });
   p.querySelector('.x').onclick = () => { p.hidden = true; };
   if ($('#apPerm')) $('#apPerm').onclick = async () => { await Notification.requestPermission(); openAlerts(); };
   $('#apTest').onclick = () => notify('test' + Date.now(), 'Alerts are working', 'You’ll get notes like this before big news and when your trading time starts.');

@@ -1489,6 +1489,9 @@ var SCEN = [
   { re: /non-?farm|payrolls|employment change/i, title: "Jobs report", markets: ALL_M,
     up: ["More jobs than forecast", "A strong economy means fewer rate cuts. The dollar and yields would likely rise. Stocks could go either way."],
     down: ["Fewer jobs than forecast", "The Fed gets more room to cut. The dollar would likely fall and gold would likely rise. A very weak number can scare stocks too."] },
+  { re: /unemployment rate/i, title: "Unemployment rate", markets: ALL_M,
+    up: ["Higher unemployment than forecast", "The job market is cooling faster. Rate-cut hopes grow: the dollar would likely dip, and stocks may get a lift unless it looks like a slowdown."],
+    down: ["Lower unemployment than forecast", "The job market still looks tight. Fewer rate cuts: the dollar would likely firm up and stocks may dip."] },
   { re: /unemployment claims|jobless claims/i, title: "Weekly jobless claims", markets: ["futures", "forex", "options"],
     up: ["More claims than forecast", "A sign the job market is cooling. The dollar would likely dip and bonds would likely rally."],
     down: ["Fewer claims than forecast", "The job market still looks firm. A small lift for the dollar."] },
@@ -2107,6 +2110,105 @@ async function build15(q) {
   return { q: out, at: Date.now() };
 }
 
+// api/results.js  (actual results the moment economic data comes out)
+var NQ_CCY = { "United States": "USD", "Euro Zone": "EUR", "Eurozone": "EUR", "Germany": "EUR", "France": "EUR", "Italy": "EUR", "Spain": "EUR", "United Kingdom": "GBP", "Japan": "JPY", "Canada": "CAD", "Australia": "AUD", "New Zealand": "NZD", "Switzerland": "CHF", "China": "CNY" };
+var EV_SYN = [[/nonfarm payrolls|non farm payrolls/g, "non-farm employment change"], [/initial jobless claims|jobless claims/g, "unemployment claims"], [/fed interest rate decision|fed funds rate|federal funds rate/g, "federal funds rate"], [/consumer price index/g, "cpi"], [/producer price index/g, "ppi"], [/gross domestic product/g, "gdp"], [/\bmom\b/g, "m/m"], [/\byoy\b/g, "y/y"], [/\bqoq\b/g, "q/q"]];
+var EV_STOP = new Set(["the", "of", "and", "s", "a", "us", "index", "rate", "change", "final", "prelim", "preliminary", "flash", "sa", "nsa"]);
+function evNorm(t) {
+  let x = String(t || "").toLowerCase().replace(/\((jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|q[1-4])\)/g, " ").replace(/[()]/g, " ");
+  EV_SYN.forEach(([re, to]) => { x = x.replace(re, to); });
+  const period = (x.match(/\b(m\/m|y\/y|q\/q)\b/) || [])[1] || "";
+  const words = new Set(x.replace(/m\/m|y\/y|q\/q/g, " ").split(/[^a-z0-9]+/).filter((w) => w.length > 1 && !EV_STOP.has(w)));
+  return { period, words };
+}
+function evScore(a, b) {
+  const A = evNorm(a), B = evNorm(b);
+  if (A.period && B.period && A.period !== B.period) return 0;
+  const inter = [...A.words].filter((w) => B.words.has(w)).length;
+  const uni = new Set([...A.words, ...B.words]).size || 1;
+  return inter / uni;
+}
+var numOf = (v) => { const m = String(v || "").replace(/,/g, "").match(/-?\d+(\.\d+)?/); return m ? parseFloat(m[0]) : null; };
+var HAWK_KIND = { "Inflation report": 1, "Jobs report": 1, "Fed decision or speech": 1, "Weekly jobless claims": -1, "Unemployment rate": -1 };
+function releaseEffects(sc, ccy, d) {
+  const sign = d === "up" ? 1 : d === "down" ? -1 : 0;
+  if (!sign) return [];
+  const kind = sc ? sc.title : "Economic data";
+  const cbLike = kind === "Central bank decision";
+  if (ccy !== "USD") {
+    const dirC = (HAWK_KIND[kind] ?? 1) * sign;
+    return [{ market: "forex", label: CCY_NAME[ccy] || ccy, ccy, dir: dirC > 0 ? "up" : "down", reason: dirC > 0 ? "A stronger reading than expected usually lifts the currency." : "A weaker reading than expected usually weighs on the currency." }];
+  }
+  if (HAWK_KIND[kind] != null || cbLike) {
+    const h = (HAWK_KIND[kind] ?? 1) * sign;
+    const stock = h > 0 ? "down" : "up";
+    return [
+      { market: "futures", label: "Index futures", dir: stock, reason: h > 0 ? "Fewer rate cuts ahead usually weigh on stocks, tech the most." : "More rate-cut hope usually lifts stocks." },
+      { market: "stocks", label: "Stocks", dir: stock, reason: h > 0 ? "Higher rates for longer weigh on stock prices." : "Lower rate expectations support stock prices." },
+      { market: "options", label: "Stocks", dir: stock, reason: "Expect a bigger move than usual right after the release." },
+      { market: "forex", label: "US dollar", ccy: "USD", dir: h > 0 ? "up" : "down", reason: h > 0 ? "Higher rate expectations lift the dollar." : "Rate-cut hopes weigh on the dollar." },
+      { market: "crypto", label: "Crypto", dir: stock, reason: h > 0 ? "Rate worries tend to pull money out of crypto." : "Rate-cut hopes tend to pull money into crypto." },
+      { market: "memes", label: "Memecoins", dir: stock, reason: "Memecoins usually move more than the rest of crypto on rate news." }
+    ];
+  }
+  return [
+    { market: "forex", label: "US dollar", ccy: "USD", dir: sign > 0 ? "up" : "down", reason: sign > 0 ? "Stronger data usually lifts the dollar." : "Weaker data usually weighs on the dollar." },
+    { market: "futures", label: "Index futures", dir: "mixed", reason: sign > 0 ? "Strong data helps earnings but can mean fewer rate cuts. Watch the first reaction." : "Weak data raises rate-cut hopes but also growth worries. Watch the first reaction." },
+    { market: "stocks", label: "Stocks", dir: "mixed", reason: sign > 0 ? "Strong data helps earnings but can mean fewer rate cuts." : "Weak data can mean more rate cuts, but also weaker earnings." },
+    { market: "crypto", label: "Crypto", dir: "mixed", reason: "Crypto usually follows the first move in stocks on data like this." }
+  ];
+}
+var RES_REACT = ["NQ", "EURUSD", "GOLD", "BTC"];
+async function build16() {
+  const now = Date.now(), today = ny(now).date;
+  const { res } = await settle({
+    // Nasdaq's calendar lists each day's releases under the NEXT day's date
+    nq: memo("econ:" + today, 6e3, () => getJSON(`https://api.nasdaq.com/api/calendar/economicevents?date=${addDays(today, 1)}`, { headers: { Accept: "application/json, text/plain, */*", Origin: "https://www.nasdaq.com", Referer: "https://www.nasdaq.com/" } })),
+    cal: memo("calendar", 6e4, () => build())
+  });
+  const rows = (res.nq && res.nq.data && res.nq.data.rows || []).map((r) => {
+    const [hh, mm] = String(r.gmt || "").split(":").map(Number);
+    return { name: decode(r.eventName || "").trim(), ccy: NQ_CCY[String(r.country || "").trim()] || null, mins: isNaN(hh) ? null : hh * 60 + (mm || 0), actual: String(r.actual || "").trim(), consensus: String(r.consensus || "").trim(), previous: String(r.previous || "").trim() };
+  });
+  const evs = (res.cal && res.cal.events || []).filter((e) => ny(e.time).date === today && (e.impact === "High" || e.impact === "Medium") && !e.allDay);
+  let charts = {};
+  if (evs.some((e) => e.time <= now)) {
+    const c = await settle(Object.fromEntries(RES_REACT.map((k) => [k, yahooChart(REACT[k].sym, { interval: "1m", range: "1d" })])));
+    charts = c.res;
+  }
+  const out = evs.map((e) => {
+    const em = ny(e.time).mins;
+    const cands = rows.filter((r) => r.ccy === e.country && r.mins != null && Math.abs(r.mins - em) <= 3);
+    // Same name twice (e.g. "CPI" for both m/m and y/y): prefer the one whose forecast matches ours
+    const fNum = numOf(e.forecast), pNum = numOf(e.previous);
+    const fit = (r) => {
+      const c = numOf(r.consensus), a = numOf(r.actual), p = numOf(r.previous);
+      if (r.consensus && e.forecast && r.consensus.replace(/\s/g, "") === e.forecast.replace(/\s/g, "")) return 0.5;
+      if (p != null && pNum != null && Math.abs(p - pNum) < 1e-9) return 0.4;
+      const ref = c ?? a, tgt = fNum ?? pNum;
+      return ref != null && tgt != null ? -Math.min(0.4, Math.abs(ref - tgt) / (Math.abs(tgt) + 1)) : 0;
+    };
+    let best = null, bs = 0, bfit = -1;
+    cands.forEach((r) => { const sc2 = evScore(e.title, r.name); if (sc2 < 0.25) return; const ft = fit(r); if (sc2 + ft > bs + bfit) { bs = sc2; bfit = ft; best = r; } });
+    const actual = best && best.actual ? best.actual : "";
+    const forecast = (best && best.consensus) || e.forecast || "";
+    const a = numOf(actual), f = numOf(forecast);
+    const released = !!actual && e.time <= now + 6e4;
+    let d = null;
+    if (released && a != null && f != null) d = Math.abs(a - f) < 1e-9 ? "inline" : a > f ? "up" : "down";
+    const sc = SCEN.find((x) => x.re.test(e.name || "") || x.re.test(e.title)) || null;
+    const lab = d === "up" ? (sc ? sc.up[0] : "Above forecast") : d === "down" ? (sc ? sc.down[0] : "Below forecast") : d === "inline" ? "In line with forecast" : released ? "Released" : null;
+    const text = d === "up" && sc ? sc.up[1] : d === "down" && sc ? sc.down[1] : d === "inline" ? "Close to what markets expected, so the reaction often fades quickly." : "";
+    const since = released ? RES_REACT.map((k) => charts[k] ? reaction(charts[k].bars, e.time, REACT[k]) : null).filter(Boolean) : [];
+    return {
+      key: `${e.country}|${e.title}|${e.time}`, title: e.title, name: e.name, country: e.country, impact: e.impact, time: e.time,
+      forecast, previous: (best && best.previous) || e.previous || "", actual, released, dir: d, label: lab,
+      text: text.replace(/CCY/g, CCY_NAME[e.country] || e.country), effects: released ? releaseEffects(sc, e.country, d) : [], since
+    };
+  });
+  return { events: out, matched: out.filter((x) => x.actual).length, updated: now };
+}
+
 // api/_lib/router.js
 var ROUTES = {
   calendar: [() => build(), 900],
@@ -2122,6 +2224,7 @@ var ROUTES = {
   desk: [(q) => build11(q), hasAI() ? 900 : 180],
   world: [() => build13(), 120],
   ticks: [(q) => build15(q), 2],
+  results: [() => build16(), 5],
   memedesk: [(q) => build14(q), hasAI() ? 600 : 180],
   explain: [(q) => build12(q), 86400]
 };

@@ -2,7 +2,7 @@
 import {
   initMe, me, myMarkets, myAssets, isBeginner, isLearning, depth, hasStrat, levelTrader, intraday, stratsFor,
   forYouEvent, forYouHeadline, forYouStrength, relevance, greeting, windowStatus, startAlerts, openAlerts, editSetup,
-  profileQuery, marketLabel, myStruggles, isProp, newsRestricted,
+  profileQuery, marketLabel, myStruggles, isProp, newsRestricted, notify,
 } from './me.js';
 import { GLOSSARY } from './glossary.js';
 
@@ -367,6 +367,78 @@ function exitFs(shell) {
 document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement) exitFs(); });
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && document.querySelector('.chart-shell.fs')) exitFs(); });
 
+// ---------- release results: the actual number the moment data comes out ----------
+const results = { map: {}, loaded: false, timer: null };
+const relKey = e => `${e.country}|${e.title}|${e.time}`;
+function releaseFor(e) { const r = results.map[relKey(e)]; return r && r.released && r.actual ? r : null; }
+function relEffects(r) {
+  const mk = myMarkets().filter(m => m !== 'learning');
+  const pairs = myAssets().map(a => a.id).filter(id => /^[A-Z]{6}$/.test(id));
+  const out = [];
+  (r.effects || []).forEach(e => {
+    if (mk.length && !mk.includes(e.market)) return;
+    if (e.market === 'forex' && e.ccy) {
+      const mine = pairs.filter(p => p.includes(e.ccy));
+      if (mine.length) { mine.forEach(p => { const flip = p.slice(3) === e.ccy; const d = e.dir === 'mixed' ? 'mixed' : flip ? (e.dir === 'up' ? 'down' : 'up') : e.dir; out.push({ ...e, label: p.slice(0, 3) + '/' + p.slice(3), dir: d }); }); return; }
+    }
+    if (!out.some(x => x.label === e.label)) out.push(e);
+  });
+  return out.slice(0, 4);
+}
+function releasedHTML() {
+  const now = Date.now(), gone = store.get('relDismissed', []);
+  const list = Object.values(results.map).filter(r => r.released && r.actual && now - r.time < 90 * 60e3 && !gone.includes(r.key) && (r.impact === 'High' || forYouEvent(r))).sort((a, b) => b.time - a.time).slice(0, 3);
+  if (!list.length) return '';
+  return list.map(r => {
+    const effs = relEffects(r);
+    const cls = r.dir === 'up' ? 'up' : r.dir === 'down' ? 'down' : '';
+    return `<article class="rel" data-key="${esc(r.key)}">
+      <button class="x rel-x" aria-label="Hide this result">×</button>
+      <p class="rel-top"><span class="rel-live"></span>Just released · ${fmtTime(r.time)} ET · ${esc(r.country)}</p>
+      <h2 class="rel-h">${esc(r.name || r.title)}</h2>
+      <div class="rel-nums"><div><small>Actual</small><b class="${cls}">${esc(r.actual)}</b></div>${r.forecast ? `<div><small>Forecast</small><b>${esc(r.forecast)}</b></div>` : ''}${r.previous ? `<div><small>Previous</small><b>${esc(r.previous)}</b></div>` : ''}${r.label ? `<div class="rel-lab"><span class="pill ${cls || 'acc'}">${esc(r.label)}</span></div>` : ''}</div>
+      ${r.text ? `<p class="rel-text">${esc(r.text)}</p>` : ''}
+      ${effs.length ? `<div class="rel-effs">${effs.map(e => `<div class="beff"><span class="pill ${e.dir === 'up' ? 'up' : e.dir === 'down' ? 'down' : ''}"><b>${esc(e.label)}</b> ${DIR_TXT[e.dir] || ''}</span><span class="br">${esc(e.reason)}</span></div>`).join('')}</div>` : ''}
+      ${(r.since || []).length ? `<p class="rel-since"><span>Since the release:</span> ${r.since.map(x => reactTxt(x).replace(' since</span>', '</span>')).join(' · ')}</p>` : ''}
+    </article>`;
+  }).join('');
+}
+function renderReleased() {
+  const el = $('#released'); if (!el) return;
+  const html = releasedHTML();
+  el.innerHTML = html; el.hidden = !html;
+  el.querySelectorAll('.rel-x').forEach(b => b.onclick = () => { const k = b.closest('.rel').dataset.key; store.set('relDismissed', [...store.get('relDismissed', []), k].slice(-40)); renderReleased(); });
+}
+async function pollResults() {
+  clearTimeout(results.timer);
+  let fast = false;
+  try {
+    if (document.visibilityState === 'visible' || !results.loaded) {
+      const r = await fetch('/api/data?fn=results', { cache: 'no-store' });
+      if (r.ok) {
+        const j = await r.json(); let changed = false;
+        (j.events || []).forEach(ev => {
+          const prev = results.map[ev.key];
+          if (ev.released && ev.actual && !(prev && prev.released && prev.actual)) {
+            changed = true;
+            if (results.loaded && me.alerts.results !== false && Date.now() - ev.time < 20 * 60e3 && (ev.impact === 'High' || forYouEvent(ev))) {
+              const effs = relEffects(ev).filter(e => e.dir !== 'mixed').map(e => `${e.label} likely ${e.dir}`).join(', ');
+              notify('rel:' + ev.key, `${ev.name || ev.title}: ${ev.actual}${ev.forecast ? ` vs ${ev.forecast} forecast` : ''}`, [ev.label, effs].filter(Boolean).join('. ') + '.');
+            }
+          }
+          results.map[ev.key] = ev;
+        });
+        const now = Date.now();
+        fast = (j.events || []).some(ev => !ev.actual && ev.time - now < 60e3 && now - ev.time < 30 * 60e3);
+        const firstLoad = !results.loaded; results.loaded = true;
+        renderReleased();
+        if (changed && !firstLoad && started && ['today', 'calendar', 'futures', 'forex'].includes(shownPage)) route(true);
+      }
+    }
+  } catch {}
+  results.timer = setTimeout(pollResults, fast ? 5000 : 60000);
+}
+
 // ---------- shared pieces ----------
 function withRefs(text, refs) {
   return esc(text).replace(/\[(\d+)\]/g, (m, n) => { const r = refs[+n - 1]; return r ? `<a class="ref" href="${esc(r.link)}" target="_blank" rel="noopener" title="${esc(r.title)}, ${esc(r.source)}">${n}</a>` : ''; });
@@ -400,7 +472,8 @@ function storyItem(i, { why = true, explain = false, fy: showFy = true, mark = n
 }
 function eventRow(e, mini = false, showFy = true) {
   const past = e.time < Date.now() - 5 * 60e3, soon = !past && e.time - Date.now() < 60 * 60e3;
-  const fp = [e.forecast && `Expected ${e.forecast}`, e.previous && `Last ${e.previous.split('|')[0]}`].filter(Boolean).join(', ');
+  const rel = releaseFor(e);
+  const fp = [rel ? `Actual ${rel.actual}` : '', e.forecast && `Expected ${e.forecast}`, e.previous && `Last ${e.previous.split('|')[0]}`].filter(Boolean).join(', ');
   const fy = showFy ? forYouEvent(e) : null;
   const deep = depth() !== 'quick';
   const body = [(isBeginner() || depth() === 'deep') && e.what ? `<p>${esc(e.what)}</p>` : '', `<p>${esc(e.why)}</p>`, e.note && deep ? `<p class="note">${esc(e.note)}</p>` : '', mini && fp ? `<p class="small">${esc(fp)}</p>` : ''].join('');
@@ -408,7 +481,7 @@ function eventRow(e, mini = false, showFy = true) {
       <span class="t">${e.allDay ? 'All day' : fmtTime(e.time)}</span><span class="dot ${e.impact}" title="${e.impact} impact"></span>
       ${mini ? '' : `<span class="cc">${esc(e.country)}</span>`}
       <span class="nm">${esc(e.name)}<small>${mini ? esc(e.country) + (e.name !== e.title ? ', ' + esc(e.title) : '') : (e.name !== e.title ? esc(e.title) : '')}</small></span>
-      ${mini ? '' : `<span class="fp">${esc(fp)}</span>`}
+      ${mini ? (rel ? `<span class="act ${rel.dir || ''}">${esc(rel.actual)}</span>` : '') : `<span class="fp">${rel ? `<b class="act ${rel.dir || ''}">${esc(rel.actual)}</b> ` : ''}${esc(fp.replace(/^Actual [^,]*, ?/, ''))}</span>`}
       ${fy ? `<span class="fy"><b>For you</b>${esc(fy)}</span>` : ''}</summary>
     <div class="body">${body}</div></details>`;
 }
@@ -1032,7 +1105,7 @@ tick(); setInterval(tick, 30e3);
 $('#bellBtn').onclick = () => { if (started) openAlerts(); };
 initMe(() => {
   started = true;
-  orderTabs(); mountStrip(); route();
+  orderTabs(); mountStrip(); route(); pollResults();
   api('calendar', 10 * 60e3).then(d => { calendarCache = d.events; }).catch(() => {});
   startAlerts({ calendar: () => calendarCache, wire: () => api('wire?section=all', 60e3).then(d => d.items), levels: levelRows });
 });
