@@ -796,29 +796,91 @@ function sectorsHTML(s) {
 }
 PAGES.markets = () => {
   if (!layout(`<h1 class="page-h">Markets</h1>
-    <p class="page-intro">Prices across the world’s main markets, what’s driving US stocks, and live heatmaps. Your markets are highlighted.</p>
+    <p class="page-intro">Prices across the world’s main markets, what’s driving US stocks, and heatmaps. Your markets are highlighted.</p>
     <div id="world"></div>
     <div class="grid2 block">
       <section><h2 class="sec">What’s driving US stocks</h2><p class="muted" id="mvIntro"></p><div id="giants"></div></section>
       <section><h2 class="sec">Sectors today</h2><div id="sectors"></div></section>
     </div>
-    <section class="block"><div class="chart-h"><h2 class="sec">Heatmaps</h2><div class="chips tight" id="hmPick"></div></div><div id="hm" class="tvbox"></div><p class="small faint">Bigger boxes are bigger companies or coins. Green is up, red is down.</p></section>`)) return;
+    <a class="hm-link block" href="/heatmaps"><span><b>Heatmaps</b><small>See the whole S&amp;P 500, Nasdaq 100, crypto, currencies and ETFs at a glance.</small></span><span aria-hidden="true">→</span></a>`)) return;
   fill('world', 'world markets', api('world', 120e3), d => worldHTML(d) + stamp(d));
   const mv = api('movers', 2 * 60e3);
   fill('mvIntro', 'summary', mv, x => esc(x.lines.slice(0, 2).join(' ')));
   fill('giants', 'the biggest stocks', mv, x => `<p class="small faint">How many Nasdaq 100 points each of the biggest companies is adding or taking away, based on approximate index weights.</p>` + giantsHTML(x.giants));
   fill('sectors', 'sectors', mv, x => sectorsHTML(x.sectors));
-  const maps = [
-    ['stocks', 'US stocks', () => tvWidget('hm', 'stock-heatmap', { exchanges: [], dataSource: 'SPX500', grouping: 'sector', blockSize: 'market_cap_basic', blockColor: 'change', locale: 'en', colorTheme: tvTheme(), hasTopBar: false, isDataSetEnabled: false, isZoomEnabled: true, hasSymbolTooltip: true, isMonoSize: false, width: '100%', height: '100%' }, 560)],
-    ['crypto', 'Crypto', () => tvWidget('hm', 'crypto-coins-heatmap', { dataSource: 'Crypto', blockSize: 'market_cap_calc', blockColor: '24h_close_change|5', locale: 'en', colorTheme: tvTheme(), hasTopBar: false, isDataSetEnabled: false, isZoomEnabled: true, hasSymbolTooltip: true, isMonoSize: false, width: '100%', height: '100%' }, 520)],
-    ['fx', 'Currencies', () => tvWidget('hm', 'forex-heat-map', { width: '100%', height: '100%', currencies: ['EUR', 'USD', 'JPY', 'GBP', 'CHF', 'AUD', 'CAD', 'NZD'], isTransparent: true, colorTheme: tvTheme(), locale: 'en' }, 420)],
-  ];
-  const mk = myMarkets();
-  const first = mk.includes('forex') && !mk.some(m => ['stocks', 'futures', 'options'].includes(m)) ? 'fx' : (mk.includes('crypto') || mk.includes('memes')) && !mk.some(m => ['stocks', 'futures', 'options'].includes(m)) ? 'crypto' : 'stocks';
-  const pick = $('#hmPick');
-  pick.innerHTML = maps.map(([k, l]) => `<button class="chip" data-k="${k}" aria-pressed="${k === first}">${l}</button>`).join('');
-  pick.querySelectorAll('button').forEach(b => b.onclick = () => { pick.querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', x === b)); maps.find(m => m[0] === b.dataset.k)[2](); });
-  maps.find(m => m[0] === first)[2]();
+};
+
+// ---------- Heatmaps ----------
+const HM_TF = [['d', 'Today'], ['w', 'Week'], ['m', 'Month'], ['y', 'This year']];
+const HM_COLOR = { d: 'change', w: 'Perf.W', m: 'Perf.1M', y: 'Perf.YTD' };
+const HM_BASE = { exchanges: [], locale: 'en', hasTopBar: false, isDataSetEnabled: false, isZoomEnabled: true, hasSymbolTooltip: true, isMonoSize: false, width: '100%', height: '100%' };
+const HEATMAPS = [
+  { id: 'ndx', label: 'Nasdaq 100', kind: 'stock-heatmap', cfg: tf => ({ dataSource: 'NASDAQ100', grouping: 'sector', blockSize: 'market_cap_basic', blockColor: HM_COLOR[tf] }), about: 'The 100 biggest non-financial companies on the Nasdaq. This is what NQ and MNQ track, so the biggest boxes here move your chart the most.' },
+  { id: 'spx', label: 'S&P 500', kind: 'stock-heatmap', cfg: tf => ({ dataSource: 'SPX500', grouping: 'sector', blockSize: 'market_cap_basic', blockColor: HM_COLOR[tf] }), about: 'The 500 biggest US companies, grouped by sector. This is what ES and MES track.' },
+  { id: 'crypto', label: 'Crypto', kind: 'crypto-coins-heatmap', cfg: tf => ({ dataSource: 'Crypto', blockSize: 'market_cap_calc', blockColor: tf === 'd' ? '24h_close_change|5' : HM_COLOR[tf] }), about: 'The biggest coins sized by market value. When Bitcoin and Ethereum are the same color as almost everything else, the whole market is moving together.' },
+  { id: 'fx', label: 'Currencies', kind: 'forex-heat-map', tfFixed: true, cfg: () => ({ currencies: ['EUR', 'USD', 'JPY', 'GBP', 'CHF', 'AUD', 'CAD', 'NZD'], isTransparent: true }), about: 'Each square is one currency against another for today. Read across a row: a row that is mostly green means that currency is strong against everything.' },
+  { id: 'etf', label: 'ETFs', kind: 'etf-heatmap', cfg: tf => ({ dataSource: 'AllUSEtf', grouping: 'asset_class', blockSize: 'aum', blockColor: HM_COLOR[tf] }), about: 'US funds grouped by what they hold: stocks, bonds, commodities and currencies. Useful for seeing where money is going across the whole market.' },
+];
+function hmDefault() {
+  const ids = myAssets().map(a => a.id), mk = myMarkets();
+  if (ids.some(i => ['ES', 'MES', 'SPX', 'SPY'].includes(i)) && !ids.some(i => ['NQ', 'MNQ', 'NDX', 'QQQ'].includes(i))) return 'spx';
+  if (mk.some(m => ['stocks', 'futures', 'options'].includes(m))) return mk.includes('stocks') && !mk.includes('futures') ? 'spx' : 'ndx';
+  if (mk.includes('crypto') || mk.includes('memes')) return 'crypto';
+  if (mk.includes('forex')) return 'fx';
+  return 'spx';
+}
+PAGES.heatmaps = () => {
+  const st = store.get('hm', {});
+  const pickId = HEATMAPS.some(h => h.id === st.map) ? st.map : hmDefault();
+  const tf = HM_COLOR[st.tf] ? st.tf : 'd';
+  const h = HEATMAPS.find(x => x.id === pickId);
+  const shut = h.id !== 'crypto' && marketShut(h.id === 'fx' ? 'forex' : 'stocks');
+  if (!layout(`<h1 class="page-h">Heatmaps</h1>
+    <p class="page-intro">The whole market on one screen. Each box is a company, coin or currency. Bigger boxes are bigger, green is up and red is down.</p>
+    <div class="chips" role="group" aria-label="Market"><span class="chips-label">Map</span>${HEATMAPS.map(x => `<button class="chip" data-map="${x.id}" aria-pressed="${x.id === pickId}">${x.label}</button>`).join('')}</div>
+    ${h.tfFixed ? '' : `<div class="chips" role="group" aria-label="Time frame"><span class="chips-label">Change over</span>${HM_TF.map(([k, l]) => `<button class="chip" data-tf="${k}" aria-pressed="${k === tf}">${l}</button>`).join('')}</div>`}
+    <p class="hm-about">${esc(h.about)}${shut && tf === 'd' ? ' The market is closed, so this shows the last session.' : ''}</p>
+    <div id="hmMap" class="tvbox hm-box"></div>
+    <div class="grid2 block hm-read">
+      <section><h2 class="sec">What the map is saying</h2><div id="hmSay"></div></section>
+      <section><h2 class="sec">How to read it</h2><ul class="hm-tips">
+        <li><b>Look at the biggest boxes first.</b> A handful of giant companies move the index more than hundreds of small ones.</li>
+        <li><b>Index green, most boxes red?</b> Only a few giants are holding it up. Moves like that are fragile and can reverse.</li>
+        <li><b>One sector a different color from the rest?</b> Money is rotating. Check the news for that sector.</li>
+        <li><b>Everything the same color?</b> A big-picture driver like rates, the dollar or a headline is moving the whole market.</li>
+      </ul></section>
+    </div>`)) return;
+  const save = (k, v) => { store.set('hm', { ...store.get('hm', {}), map: pickId, tf, [k]: v }); refreshing = false; PAGES.heatmaps(); };
+  main.querySelectorAll('[data-map]').forEach(b => b.onclick = () => save('map', b.dataset.map));
+  main.querySelectorAll('[data-tf]').forEach(b => b.onclick = () => save('tf', b.dataset.tf));
+  const tall = innerWidth < 640 ? 460 : 640;
+  tvWidget('hmMap', h.kind, { ...HM_BASE, ...h.cfg(tf), colorTheme: tvTheme() }, h.id === 'fx' ? (innerWidth < 640 ? 360 : 460) : tall);
+  if (h.id === 'ndx' || h.id === 'spx' || h.id === 'etf') {
+    const mv = api('movers', 2 * 60e3);
+    fill('hmSay', 'the summary', mv, x => {
+      const sec = [...(x.sectors || [])].sort((a, b) => b.pct - a.pct);
+      const lead = sec.slice(0, 2).map(z => z.name).join(' and '), lag = sec.slice(-2).reverse().map(z => z.name).join(' and ');
+      const up = sec.filter(z => z.pct > 0).length;
+      return `<p class="muted">${esc(x.lines.slice(0, 2).join(' '))}</p>
+        ${sec.length ? `<p class="muted">${up} of ${sec.length} sectors are up${tf !== 'd' ? ' today' : ''}. Leading: ${esc(lead)}. Lagging: ${esc(lag)}.</p>` : ''}
+        ${h.id === 'ndx' && x.giants ? `<p class="small faint">Points each giant is adding to or taking off the Nasdaq 100 today:</p>${giantsHTML(x.giants, 8)}` : ''}`;
+    });
+  } else if (h.id === 'crypto') {
+    fill('hmSay', 'the summary', api('crypto', 2 * 60e3).catch(() => null), d => {
+      const list = d && (d.coins || d.top || d.list) || [];
+      const ch = c => c.ch24 ?? c.change24h ?? c.price_change_percentage_24h ?? c.pct;
+      const valid = list.filter(c => ch(c) != null && !/^(usdt|usdc|dai|usde|fdusd)$/i.test(c.symbol || '') && !/wrapped|staked/i.test(c.name || ''));
+      if (!valid.length) return '<p class="muted">Crypto trades around the clock, so this map is always live.</p>';
+      const up = valid.filter(c => ch(c) > 0).length, btc = valid.find(c => /^btc$/i.test(c.symbol || ''));
+      return `<p class="muted">${up} of the ${valid.length} biggest coins are up over the last 24 hours${btc ? `, and Bitcoin is ${ch(btc) >= 0 ? 'up' : 'down'} ${Math.abs(ch(btc)).toFixed(1)}%` : ''}. ${up > valid.length * 0.7 ? 'A broad move: most coins are rising together.' : up < valid.length * 0.3 ? 'A broad sell-off: most coins are falling together.' : 'A mixed market: coins are moving on their own stories.'}</p>`;
+    });
+  } else {
+    fill('hmSay', 'the summary', api('world', 120e3), d => {
+      const fx = (d.groups || []).find(g => /currenc/i.test(g.name));
+      const dxy = fx && fx.rows.find(r => /dollar index/i.test(r.label));
+      return `<p class="muted">${dxy && dxy.pct != null ? `The US dollar index is ${dxy.pct >= 0 ? 'up' : 'down'} ${Math.abs(dxy.pct).toFixed(2)}% today, so look for the USD row to be mostly ${dxy.pct >= 0 ? 'green' : 'red'}. ` : ''}Find the strongest row and the weakest row: pairing those two currencies is usually where the cleanest trend of the day is.</p>`;
+    });
+  }
 };
 
 // ---------- levels and session recaps (shown to traders who use them) ----------
@@ -1083,7 +1145,7 @@ PAGES.glossary = () => {
 };
 
 // ---------- router ----------
-const ALIASES = { heatmaps: 'markets', movers: 'markets', memecoins: 'memes' };
+const ALIASES = { movers: 'markets', memecoins: 'memes' };
 const SLUG = { memes: 'memecoins' };
 const pagePath = key => key === 'today' ? '/' : '/' + (SLUG[key] || key);
 function currentPage() {
@@ -1129,7 +1191,7 @@ addEventListener('popstate', () => { if (!started) return; exitFs(); route(); })
 function orderTabs() {
   const nav = $('#tabs'), mk = myMarkets();
   const links = [...nav.querySelectorAll('a')];
-  const fixed = ['/', '/news', '/markets'].map(h => links.find(a => a.getAttribute('href') === h));
+  const fixed = ['/', '/news', '/markets', '/heatmaps'].map(h => links.find(a => a.getAttribute('href') === h));
   const mine = links.filter(a => a.dataset.m && a.dataset.m.split(' ').some(m => mk.includes(m)));
   const rest = links.filter(a => !fixed.includes(a) && !mine.includes(a));
   links.forEach(a => a.classList.toggle('mine', mine.includes(a)));

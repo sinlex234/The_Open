@@ -749,3 +749,14 @@ table.t,.mytable,.wm-g table{max-width:100%}
 .closed .linkbtn{font-size:13px;color:var(--ink-3)}
 .closed-li{list-style:none;border:0!important;padding:0!important;margin:0!important}
 .closed-li::before,.closed-li::marker{content:none!important}
+
+/* heatmaps */
+.hm-about{margin:4px 0 14px;max-width:72ch;font-size:14.5px;line-height:1.6;color:var(--ink-2)}
+.hm-box{border:1px solid var(--rule);border-radius:var(--r);overflow:hidden}
+.hm-tips{margin:0;padding:0;list-style:none;display:grid;gap:10px}
+.hm-tips li{font-size:14px;line-height:1.55;color:var(--ink-2)}
+.hm-tips b{color:var(--ink);font-weight:600}
+.hm-link{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:18px 20px;border:1px solid var(--rule);border-radius:var(--r);background:var(--panel);color:var(--ink);text-decoration:none}
+.hm-link:hover{border-color:var(--acc-line)}
+.hm-link b{display:block;font-weight:600;margin-bottom:2px}
+.hm-link small{color:var(--ink-3);font-size:13.5px}
