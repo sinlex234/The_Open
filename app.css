@@ -760,3 +760,4 @@ table.t,.mytable,.wm-g table{max-width:100%}
 .hm-link:hover{border-color:var(--acc-line)}
 .hm-link b{display:block;font-weight:600;margin-bottom:2px}
 .hm-link small{color:var(--ink-3);font-size:13.5px}
+.closed-note{margin:0 0 18px;padding:16px 20px 4px}

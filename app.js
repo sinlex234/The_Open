@@ -776,8 +776,14 @@ PAGES.news = () => {
     if (refreshing && fresh && seen.length) { const nb = $('#newBar'); if (nb) { nb.hidden = false; nb.textContent = `${fresh} new ${fresh === 1 ? 'story' : 'stories'} added`; } }
     store.set('newsSeen', d.items.map(i => i.id).slice(0, 150));
   }).catch(() => {});
-  const shut = !showWeekendNews() && !['crypto', 'memes'].includes(f.market) && allShut(f.market === 'all' ? myMarkets() : [f.market]);
-  if (shut) { $('#wireList').innerHTML = `<li class="closed-li">${closedHTML(shut, f.market === 'all' ? (myMarkets().length > 1 ? 'Every market you trade' : `The ${SHUT_NAME[myMarkets()[0]] || ''} market`) : f.market === 'futures' ? 'The stocks and futures market' : 'The forex market')}</li>`; bindWeekend(); return; }
+  const shut = !['crypto', 'memes'].includes(f.market) && allShut(f.market === 'all' ? myMarkets() : [f.market]);
+  if (shut) {
+    const who = f.market === 'all' ? (myMarkets().length > 1 ? 'Your markets are' : `The ${SHUT_NAME[myMarkets()[0]] || ''} market is`) : f.market === 'futures' ? 'The stock and futures market is' : 'The forex market is';
+    const day = new Date(shut).toLocaleDateString('en-US', { timeZone: TZ, weekday: 'long' });
+    const nb = document.createElement('div'); nb.className = 'closed closed-note';
+    nb.innerHTML = `<p class="closed-h"><span class="closed-dot"></span>${esc(who)} closed for the weekend.</p><p>Reopens ${esc(day)} at ${fmtTime(shut)} ET. Prices won’t react to these stories until then, so anything big here can show up as a gap at the open.</p>`;
+    const wl = $('#wireList'); if (wl && !main.querySelector('.closed-note')) wl.before(nb);
+  }
   fill('wireList', 'the news', P, d => {
     let items = d.items.filter(i => f.impact === 'all' || (f.impact === 'high' ? i.impact === 'high' : i.impact !== 'low')).filter(i => !f.topic || i.section === f.topic);
     if (f.mine) items = rankStories(items);
