@@ -2201,7 +2201,7 @@ async function build16(date) {
     const lab = d === "up" ? (sc ? sc.up[0] : "Above forecast") : d === "down" ? (sc ? sc.down[0] : "Below forecast") : d === "inline" ? "In line with forecast" : released ? "Released" : null;
     const text = d === "up" && sc ? sc.up[1] : d === "down" && sc ? sc.down[1] : d === "inline" ? "Close to what markets expected, so the reaction often fades quickly." : "";
     // which way the surprise is good or bad for the event's own currency (green/red like ForexFactory)
-    const flip = sc ? HAWK_KIND[sc.title] ?? 1 : /inventor|claims|unemploy|jobless|deficit/i.test(e.title) ? -1 : 1;
+    const flip = sc ? HAWK_KIND[sc.title] ?? 1 : /inventor|claims|unemploy|jobless|deficit|borrowing/i.test(e.title) ? -1 : 1;
     const ccyDir = d === "up" || d === "down" ? ((d === "up" ? 1 : -1) * flip > 0 ? "good" : "bad") : null;
     const since = released && e.impact !== "Low" ? RES_REACT.map((k) => charts[k] ? reaction(charts[k].bars, e.time, REACT[k]) : null).filter(Boolean) : [];
     return {
