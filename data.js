@@ -2169,7 +2169,7 @@ async function build16(date) {
   });
   const rows = (res.nq && res.nq.data && res.nq.data.rows || []).map((r) => {
     const [hh, mm] = String(r.gmt || "").split(":").map(Number);
-    return { name: decode(r.eventName || "").trim(), ccy: NQ_CCY[String(r.country || "").trim()] || null, mins: isNaN(hh) ? null : hh * 60 + (mm || 0), actual: String(r.actual || "").trim(), consensus: String(r.consensus || "").trim(), previous: String(r.previous || "").trim() };
+    return { name: decode(r.eventName || "").trim(), ccy: NQ_CCY[String(r.country || "").trim()] || null, mins: isNaN(hh) ? null : hh * 60 + (mm || 0), actual: decode(String(r.actual || "")).replace(/\u00a0/g, " ").trim(), consensus: decode(String(r.consensus || "")).replace(/\u00a0/g, " ").trim(), previous: decode(String(r.previous || "")).replace(/\u00a0/g, " ").trim() };
   });
   const evs = (res.cal && res.cal.events || []).filter((e) => ny(e.time).date === today && ["High", "Medium", "Low"].includes(e.impact) && !e.allDay);
   let charts = {};
