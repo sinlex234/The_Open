@@ -345,7 +345,7 @@ async function build() {
     if (seen.has(k)) return false;
     seen.add(k);
     return true;
-  }).map((e) => ({ title: e.title, country: e.country, impact: e.impact, forecast: e.forecast || "", previous: e.previous || "", time: e.time, allDay: /T00:00:00/.test(e.date) && /holiday|meeting|summit|election/i.test(e.title), ...explainEvent(e) })).sort((a, b) => a.time - b.time);
+  }).map((e) => ({ title: e.title, country: e.country, impact: e.impact, forecast: decode(e.forecast || "").replace(/\u00a0/g, " ").trim(), previous: decode(e.previous || "").replace(/\u00a0/g, " ").trim(), time: e.time, allDay: /T00:00:00/.test(e.date) && /holiday|meeting|summit|election/i.test(e.title), ...explainEvent(e) })).sort((a, b) => a.time - b.time);
   if (errors.nextWeek && /404/.test(errors.nextWeek)) delete errors.nextWeek;
   return { events, errors, updated: Date.now() };
 }
