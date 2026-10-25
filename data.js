@@ -131,7 +131,7 @@ async function yahooChartRaw(symbol, { interval = "15m", range = "10d" } = {}) {
   (r.timestamp || []).forEach((ts, i) => {
     const o = q.open[i], h = q.high[i], l = q.low[i], c = q.close[i];
     if ([o, h, l, c].some((v) => v == null || isNaN(v))) return;
-    bars.push({ t: ts * 1e3, o, h, l, c });
+    bars.push({ t: ts * 1e3, o, h, l, c, v: q.volume ? q.volume[i] || 0 : 0 });
   });
   return { meta: r.meta || {}, bars };
 }
@@ -2213,6 +2213,349 @@ async function build16(date) {
   return { events: out, matched: out.filter((x) => x.actual).length, updated: now };
 }
 
+// api/confluences.js: live confluences for each strategy the user picked
+var CF_INST = {
+  NQ: { sym: "NQ=F", short: "NQ", gx: "QQQ", dp: 0, rnd: 100, fut: true }, MNQ: { sym: "NQ=F", short: "NQ", gx: "QQQ", dp: 0, rnd: 100, fut: true },
+  ES: { sym: "ES=F", short: "ES", gx: "SPY", dp: 2, rnd: 25, fut: true }, MES: { sym: "ES=F", short: "ES", gx: "SPY", dp: 2, rnd: 25, fut: true },
+  YM: { sym: "YM=F", short: "YM", dp: 0, rnd: 100, fut: true }, RTY: { sym: "RTY=F", short: "RTY", dp: 1, rnd: 25, fut: true },
+  CL: { sym: "CL=F", short: "Oil", dp: 2, rnd: 1, fut: true }, GC: { sym: "GC=F", short: "Gold", dp: 1, rnd: 25, fut: true },
+  SI: { sym: "SI=F", short: "Silver", dp: 2, rnd: 1, fut: true }, NG: { sym: "NG=F", short: "Gas", dp: 3, rnd: 0.25, fut: true },
+  XAUUSD: { sym: "GC=F", short: "Gold", dp: 1, rnd: 25, fut: true },
+  EURUSD: { sym: "EURUSD=X", short: "EUR/USD", dp: 5, rnd: 0.005, fx: true }, GBPUSD: { sym: "GBPUSD=X", short: "GBP/USD", dp: 5, rnd: 0.005, fx: true },
+  USDJPY: { sym: "USDJPY=X", short: "USD/JPY", dp: 3, rnd: 0.5, fx: true }, AUDUSD: { sym: "AUDUSD=X", short: "AUD/USD", dp: 5, rnd: 0.005, fx: true },
+  USDCAD: { sym: "USDCAD=X", short: "USD/CAD", dp: 5, rnd: 0.005, fx: true }, USDCHF: { sym: "USDCHF=X", short: "USD/CHF", dp: 5, rnd: 0.005, fx: true },
+  NZDUSD: { sym: "NZDUSD=X", short: "NZD/USD", dp: 5, rnd: 0.005, fx: true }, EURGBP: { sym: "EURGBP=X", short: "EUR/GBP", dp: 5, rnd: 0.005, fx: true },
+  BTC: { sym: "BTC-USD", short: "BTC", dp: 0, rnd: 1e3, crypto: true }, ETH: { sym: "ETH-USD", short: "ETH", dp: 1, rnd: 100, crypto: true },
+  SOL: { sym: "SOL-USD", short: "SOL", dp: 2, rnd: 5, crypto: true },
+  SPX: { sym: "^GSPC", short: "S&P 500", gx: "SPY", dp: 2, rnd: 25 }, NDX: { sym: "^NDX", short: "Nasdaq 100", gx: "QQQ", dp: 0, rnd: 100 },
+  SPY: { sym: "SPY", short: "SPY", gx: "SPY", dp: 2, rnd: 5 }, QQQ: { sym: "QQQ", short: "QQQ", gx: "QQQ", dp: 2, rnd: 5 }, IWM: { sym: "IWM", short: "IWM", dp: 2, rnd: 5 }
+};
+var CF_DEFAULT = { futures: "NQ", forex: "EURUSD", crypto: "BTC", options: "SPX", stocks: "SPX", memes: "BTC" };
+var CF_PACK = {
+  orderflow: "orderflow", ict: "ict", pa: "levels", sd: "levels", ta: "levels", charts: "levels", swing: "levels",
+  ind: "indicators", news: "news", trend: "trend", momentum: "trend",
+  buy: "options", sell: "options", spreads: "options", zero: "options", hedge: "options", earnings: "news", fundamentals: "news"
+};
+function cfInst(m, assets) {
+  const id = (assets || []).find((a) => CF_INST[a]) || CF_DEFAULT[m] || "NQ";
+  return { id, ...CF_INST[id] };
+}
+async function cfBars(sym) {
+  const [m1, d1] = await Promise.all([yahooChart(sym, { interval: "1m", range: "5d" }).catch(() => null), yahooChart(sym, { interval: "1d", range: "1y" }).catch(() => null)]);
+  return { m1: m1 ? m1.bars.map((b) => ({ ...b, n: ny(b.t) })) : [], d1: d1 ? d1.bars : [], meta: m1 ? m1.meta : d1 ? d1.meta : {} };
+}
+function cfProfile(bars, step) {
+  const vol = new Map();
+  const useCount = !bars.some((b) => b.v);
+  for (const b of bars) {
+    const lo2 = Math.floor(b.l / step), hi2 = Math.floor(b.h / step), n = hi2 - lo2 + 1;
+    if (n > 4e3) continue;
+    const per = (useCount ? 1 : b.v || 0) / n;
+    for (let k = lo2; k <= hi2; k++) vol.set(k, (vol.get(k) || 0) + per);
+  }
+  if (!vol.size) return null;
+  const ks = [...vol.keys()].sort((a, b) => a - b);
+  const total = ks.reduce((s, k) => s + vol.get(k), 0);
+  let pi = 0;
+  ks.forEach((k, i) => { if (vol.get(k) > vol.get(ks[pi])) pi = i; });
+  let i = pi, j = pi, acc = vol.get(ks[pi]);
+  while (acc < 0.7 * total && (i > 0 || j < ks.length - 1)) {
+    const up = j < ks.length - 1 ? vol.get(ks[j + 1]) : -1, dn = i > 0 ? vol.get(ks[i - 1]) : -1;
+    if (up >= dn) { j++; acc += up; } else { i--; acc += dn; }
+  }
+  const avg = total / ks.length;
+  const lvn = [];
+  for (let x = i; x <= j; x++) if (vol.get(ks[x]) < avg * 0.35) lvn.push(ks[x] * step);
+  return { poc: (ks[pi] + 0.5) * step, vah: (ks[j] + 1) * step, val: ks[i] * step, lvn };
+}
+function cfSessions(bars, inst) {
+  // RTH sessions (9:30-16:00 New York) for index futures/stocks; the full day for FX and crypto
+  const byDay = new Map();
+  for (const b of bars) {
+    const rthOnly = !inst.fx && !inst.crypto;
+    if (rthOnly && (b.n.mins < 570 || b.n.mins >= 960)) continue;
+    if (!byDay.has(b.n.date)) byDay.set(b.n.date, []);
+    byDay.get(b.n.date).push(b);
+  }
+  return [...byDay.entries()].filter(([, bs]) => bs.length > 10).map(([date, bs]) => ({ date, bars: bs }));
+}
+function cfEma(vals, n) {
+  if (vals.length < n) return null;
+  const k = 2 / (n + 1);
+  let e = vals.slice(0, n).reduce((s, v) => s + v, 0) / n;
+  for (let i = n; i < vals.length; i++) e = vals[i] * k + e * (1 - k);
+  return e;
+}
+function cfRsi(vals, n = 14) {
+  if (vals.length <= n) return null;
+  let g = 0, l = 0;
+  for (let i = 1; i <= n; i++) { const d = vals[i] - vals[i - 1]; if (d > 0) g += d; else l -= d; }
+  g /= n; l /= n;
+  for (let i = n + 1; i < vals.length; i++) { const d = vals[i] - vals[i - 1]; g = (g * (n - 1) + Math.max(d, 0)) / n; l = (l * (n - 1) + Math.max(-d, 0)) / n; }
+  return l === 0 ? 100 : 100 - 100 / (1 + g / l);
+}
+var NPDF = (x) => Math.exp(-x * x / 2) / Math.sqrt(2 * Math.PI);
+async function cfGammaRaw(und) {
+  const j = await getJSON(`https://cdn.cboe.com/api/global/delayed_quotes/options/${und}.json`);
+  const d = j.data, now = Date.now();
+  const close = d.close || d.current_price, spot = d.current_price || close;
+  const opts = [];
+  let straddle = null;
+  const mids = new Map();
+  for (const o of d.options || []) {
+    const m = /^[A-Z]+(\d{2})(\d{2})(\d{2})([CP])(\d{8})$/.exec(o.option || "");
+    if (!m) continue;
+    const exp = Date.UTC(2e3 + +m[1], +m[2] - 1, +m[3], 20, 15);
+    const T = (exp - now) / (365 * 864e5);
+    if (T <= 0 || T > 60 / 365) continue;
+    const K = +m[5] / 1e3, cp = m[4];
+    if (o.open_interest > 0 && o.iv > 0) opts.push([cp, K, Math.max(T, 1 / 8760), o.iv, o.open_interest]);
+    const mid = o.bid > 0 && o.ask > 0 ? (o.bid + o.ask) / 2 : null;
+    if (mid != null) { const e = mids.get(exp) || new Map(); const r = e.get(K) || {}; r[cp] = mid; e.set(K, r); mids.set(exp, e); }
+  }
+  const firstExp = [...mids.keys()].sort((a, b) => a - b)[0];
+  if (firstExp) {
+    let best = null;
+    for (const [K, r] of mids.get(firstExp)) if (r.C != null && r.P != null && (!best || Math.abs(K - spot) < Math.abs(best.K - spot))) best = { K, c: r.C, p: r.P };
+    straddle = best;
+  }
+  const gex = (S, per) => {
+    let t = 0;
+    for (const [cp, K, T, iv, oi] of opts) {
+      const v = iv * Math.sqrt(T), d1 = (Math.log(S / K) + (0.04 + iv * iv / 2) * T) / v;
+      let g = NPDF(d1) / (S * v) * oi * 100 * S * S * 0.01;
+      if (cp === "P") g = -g;
+      t += g;
+      if (per) { const r = per.get(K) || [0, 0]; r[cp === "C" ? 0 : 1] += g; per.set(K, r); }
+    }
+    return t;
+  };
+  const per = new Map();
+  gex(close, per);
+  const ks = [...per.keys()];
+  const above = ks.filter((k) => k >= close), below = ks.filter((k) => k <= close);
+  const callWall = above.length ? above.reduce((a, b) => per.get(b)[0] > per.get(a)[0] ? b : a) : null;
+  const putWall = below.length ? below.reduce((a, b) => per.get(b)[1] < per.get(a)[1] ? b : a) : null;
+  let flip = null, prev = null;
+  for (let S = close * 0.9; S <= close * 1.1; S += close * 25e-4) {
+    const g = gex(S);
+    if (prev && prev[1] < 0 !== g < 0) {
+      const f = prev[0] + (S - prev[0]) * -prev[1] / (g - prev[1]);
+      if (flip == null || Math.abs(f - close) < Math.abs(flip - close)) flip = f;
+    }
+    prev = [S, g];
+  }
+  const total = gex(spot);
+  const em = straddle && straddle.c != null && straddle.p != null ? straddle.c + straddle.p : null;
+  return { und, close, spot, callWall, putWall, flip, total, expMove: em, n: opts.length };
+}
+var cfGamma = (und) => memo("gx:" + und, 3e5, () => cfGammaRaw(und));
+function cfNews(cal, res) {
+  const now = Date.now(), today = ny(now).date;
+  const ev = (cal && cal.events || []).filter((e) => ny(e.time).date === today && e.country === "USD" && !e.allDay && (e.impact === "High" || e.impact === "Medium"));
+  const rel = new Map((res && res.events || []).map((r) => [r.key, r]));
+  return ev.map((e) => { const r = rel.get(`${e.country}|${e.title}|${e.time}`); return { title: e.title, name: e.name, time: e.time, impact: e.impact, forecast: e.forecast, previous: e.previous, actual: r && r.actual || "", label: r && r.label || "", ccyDir: r && r.ccyDir || null }; });
+}
+function cfMarketState(inst, now = Date.now()) {
+  const n = ny(now), dow = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(n.dow), m = n.mins;
+  if (inst.crypto) return { open: true, label: "Crypto trades around the clock" };
+  if (inst.fx) {
+    const shut = dow === 6 || dow === 5 && m >= 1020 || dow === 0 && m < 1020;
+    return shut ? { open: false, label: "Forex is closed for the weekend" } : { open: true, label: "Forex is open" };
+  }
+  const shut = dow === 6 || dow === 5 && m >= 1020 || dow === 0 && m < 1080;
+  if (shut) return { open: false, label: "Closed for the weekend. Showing the last session." };
+  if (m >= 1020 && m < 1080) return { open: false, label: "Daily break (5–6 PM). Reopens at 6 PM." };
+  return { open: true, label: m >= 570 && m < 960 ? "US session open" : "Overnight session" };
+}
+function cfWindow(from, to, label) {
+  const m = ny(Date.now()).mins;
+  if (m >= from && m < to) return { status: "go", text: `Inside ${label}, ${Math.round(to - m)} minutes left` };
+  const until = (from - m + 1440) % 1440;
+  return { status: "wait", text: `${label} starts in ${until >= 60 ? Math.floor(until / 60) + "h " : ""}${until % 60}m` };
+}
+function cfNewsCard(news, label = "News filter") {
+  const now = Date.now();
+  const high = news.filter((e) => e.impact === "High");
+  const near = high.find((e) => Math.abs(e.time - now) <= 15 * 6e4);
+  const next = news.filter((e) => e.time > now).sort((a, b) => a.time - b.time)[0];
+  const t = (ms) => new Date(ms).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" });
+  let status = "go", value = "Clear", detail = "No high-impact US news within 15 minutes.";
+  if (near) { status = "stop"; value = "Stand aside"; detail = `${near.name || near.title} at ${t(near.time)}. No trades until 15 minutes after.`; }
+  else if (high.length && high.some((e) => e.time > now)) { const h = high.find((e) => e.time > now); status = "wait"; value = "Red event today"; detail = `${h.name || h.title} at ${t(h.time)}. Stand aside ${t(h.time - 9e5)}–${t(h.time + 9e5)}.`; }
+  else if (next) detail = `Next: ${next.name || next.title} at ${t(next.time)} (medium impact).`;
+  return { key: "news", name: label, status, value, detail, rows: news.map((e) => ({ k: `${t(e.time)} · ${e.name || e.title}`, v: e.actual ? `${e.actual} vs ${e.forecast || "—"}` : e.forecast ? `Fcst ${e.forecast}` : "", tone: e.impact === "High" ? "down" : "", dir: e.ccyDir })) };
+}
+function cfRound(x, step) { return Math.round(x / step) * step; }
+async function build17(q = {}) {
+  const prof = parseProfile(q.p);
+  const want = [];
+  for (const x of prof) for (const s of x.strats) { const pack = CF_PACK[s] || "general"; if (!want.some((w) => w.pack === pack && w.m === x.m)) want.push({ m: x.m, s, pack, assets: x.assets }); }
+  if (!want.length) want.push({ m: (prof[0] || {}).m || "futures", s: "unsure", pack: "general", assets: (prof[0] || {}).assets || [] });
+  const { res } = await settle({ cal: memo("calendar", 6e4, () => build()), rel: build16().catch(() => null) });
+  const news = cfNews(res.cal, res.rel);
+  const packs = [];
+  for (const w of want.slice(0, 8)) {
+    try { packs.push(await cfPack(w, news)); } catch (e) { packs.push({ pack: w.pack, m: w.m, s: w.s, error: String(e.message || e) }); }
+  }
+  return { packs, updated: Date.now() };
+}
+async function cfPack(w, news) {
+  const inst = cfInst(w.m, w.assets);
+  const bars = await cfBars(inst.sym);
+  const price = bars.meta.regularMarketPrice ?? (bars.m1.length ? bars.m1[bars.m1.length - 1].c : bars.d1.length ? bars.d1[bars.d1.length - 1].c : null);
+  if (price == null) throw new Error("No price data for " + inst.short);
+  const state = cfMarketState(inst);
+  const fmt = (x) => x == null ? "—" : Number(x).toLocaleString("en-US", { minimumFractionDigits: inst.dp, maximumFractionDigits: inst.dp });
+  const step = inst.fx ? Math.pow(10, -inst.dp + 1) : inst.crypto ? Math.max(1, Math.pow(10, Math.floor(Math.log10(price)) - 3)) : inst.dp >= 2 ? 0.25 : 1;
+  const sess = cfSessions(bars.m1, inst);
+  const today = ny(Date.now()).date;
+  const done = sess.filter((s) => s.date !== today || !state.open || ny(Date.now()).mins >= 960 && !inst.fx && !inst.crypto);
+  const prior = done.length ? done[done.length - 1] : sess[sess.length - 1];
+  const vp = prior ? cfProfile(prior.bars, step) : null;
+  const pHi = prior ? hi(prior.bars) : null, pLo = prior ? lo(prior.bars) : null;
+  const onBars = prior && !inst.crypto && !inst.fx ? bars.m1.filter((b) => b.t > prior.bars[prior.bars.length - 1].t + 9e5 && (b.n.date !== today || b.n.mins < 570)) : [];
+  const onHi = onBars.length ? hi(onBars) : null, onLo = onBars.length ? lo(onBars) : null;
+  const closes = bars.d1.map((b) => b.c);
+  const ema20 = cfEma(closes, 20), ema50 = cfEma(closes, 50), ema200 = cfEma(closes, 200), rsi = cfRsi(closes.slice(-120));
+  const adr = bars.d1.length > 6 ? bars.d1.slice(-6, -1).reduce((s, b) => s + (b.h - b.l), 0) / 5 : null;
+  const todayBars = bars.m1.filter((b) => b.n.date === today && (inst.fx || inst.crypto || b.n.mins >= 570 && b.n.mins < 960));
+  const usedToday = todayBars.length ? hi(todayBars) - lo(todayBars) : null;
+  const L = [];
+  const add = (name, v, kind) => { if (v != null && isFinite(v)) L.push({ name, price: v, kind }); };
+  const card = (key, name, status, value, detail, extra = {}) => ({ key, name, status, value, detail, ...extra });
+  const near = (lv, pts) => lv != null && Math.abs(price - lv) <= pts;
+  const zone = inst.fx ? Math.pow(10, -inst.dp + 1) * 15 : adr ? adr * 0.03 : price * 4e-4;
+  const base = { pack: w.pack, m: w.m, s: w.s, inst: { id: inst.id, short: inst.short, dp: inst.dp }, price, state, asOf: bars.m1.length ? bars.m1[bars.m1.length - 1].t : Date.now(), session: prior ? prior.date : null };
+  const nCard = cfNewsCard(news);
+
+  if (w.pack === "orderflow" || w.pack === "options") {
+    let g = null;
+    if (inst.gx) { try { g = await cfGamma(inst.gx); } catch (e) { g = null; } }
+    let ratio = null;
+    if (g) {
+      const lastClose = prior && !inst.fx ? prior.bars[prior.bars.length - 1].c : price;
+      ratio = (inst.sym === "SPY" || inst.sym === "QQQ") ? 1 : lastClose / g.close;
+    }
+    const cv = (x) => g && x != null ? x * ratio : null;
+    const flip = cv(g && g.flip), cw = cv(g && g.callWall), pw = cv(g && g.putWall);
+    const regime = g ? (g.total > 0 ? "positive" : "negative") : null;
+    const nearFlip = flip != null && Math.abs(price - flip) <= (adr ? adr * 0.08 : price * 1e-3);
+    add("Call wall", cw, "options"); add("Gamma flip", flip, "options"); add("Put wall", pw, "options");
+    const c1 = g ? card("regime", "Gamma regime", nearFlip ? "wait" : "go", nearFlip ? "Near the flip" : regime === "positive" ? "Positive gamma" : "Negative gamma",
+      nearFlip ? "Price is close to the gamma flip, so the regime could switch either way. Half size, or wait until it settles on one side."
+        : w.pack === "options" ? (regime === "positive" ? "Dealers dampen moves: ranges are more likely, which suits selling premium inside the walls." : "Dealers add to moves: bigger swings are more likely, which suits buying options over selling them.")
+        : regime === "positive" ? "Dealers dampen moves: expect a range. Playbook: Setup A, fade the edges of value and the walls, target the POC."
+          : "Dealers add to moves: expect a trend. Playbook: Setup B, trade breaks and pullbacks with the move. Never fade.", { tone: nearFlip ? "" : regime === "positive" ? "up" : "down" })
+      : card("regime", "Gamma regime", "info", "Not available", `Gamma data covers Nasdaq and S&P products. Not available for ${inst.short}.`);
+    if (w.pack === "options") {
+      const vix = await yahooChart("^VIX", { interval: "1d", range: "1mo" }).catch(() => null);
+      const vix9 = await yahooChart("^VIX9D", { interval: "1d", range: "5d" }).catch(() => null);
+      const v = vix && vix.meta.regularMarketPrice, v9 = vix9 && vix9.meta.regularMarketPrice;
+      const em = g && g.expMove ? g.expMove * ratio : null;
+      if (em != null) { add("Expected move high", (inst.sym === "SPY" || inst.sym === "QQQ" ? g.spot : price) + em, "options"); add("Expected move low", (inst.sym === "SPY" || inst.sym === "QQQ" ? g.spot : price) - em, "options"); }
+      const cards = [c1,
+        card("walls", "Options levels", g ? (near(cw, zone * 2) || near(pw, zone * 2) ? "go" : "wait") : "info", g ? `Call ${fmt(cw)} · Put ${fmt(pw)}` : "—", g ? `Gamma flip ${fmt(flip)}. Short premium is safest inside the walls on positive gamma days.` : "No options data right now."),
+        card("em", "Expected move", em != null ? "info" : "info", em != null ? `±${fmt(em)}` : "—", em != null ? `What the nearest-expiry straddle prices in. Range ${fmt(price - em)} to ${fmt(price + em)}.` : "Couldn't price the straddle right now."),
+        card("vol", "Volatility", v == null ? "info" : v < 15 ? "go" : v > 25 ? "stop" : "wait", v == null ? "—" : `VIX ${v.toFixed(1)}`, v == null ? "" : `${v9 != null ? (v9 > v ? "Short-term fear above longer-term: stressed, expect big swings. " : "Normal term structure. ") : ""}${v < 15 ? "Calm market: options are cheap, premium sellers earn less." : v > 25 ? "High fear: options are expensive, moves are big." : "Moderate volatility."}`),
+        nCard];
+      return { ...base, title: "Options", cards, levels: L, fmtNote: "Gamma and the expected move come from delayed CBOE options data." };
+    }
+    add("Value area high", vp && vp.vah, "auction"); add("POC", vp && vp.poc, "auction"); add("Value area low", vp && vp.val, "auction");
+    add("Overnight high", onHi, "auction"); add("Overnight low", onLo, "auction");
+    const opt = L.filter((x) => x.kind === "options"), auc = L.filter((x) => x.kind === "auction");
+    const aplus = [];
+    for (const a of opt) for (const b of auc) if (Math.abs(a.price - b.price) <= zone * 2) aplus.push({ price: (a.price + b.price) / 2, name: `${a.name} + ${b.name}` });
+    aplus.forEach((x) => add("A+ spot", x.price, "aplus"));
+    const nearest = L.filter((x) => x.kind !== "aplus").sort((a, b) => Math.abs(a.price - price) - Math.abs(b.price - price))[0];
+    const atLevel = nearest && Math.abs(nearest.price - price) <= zone;
+    const insideVA = vp && price <= vp.vah && price >= vp.val;
+    const win = cfWindow(575, 690, "your window (9:35–11:30 AM)");
+    const c2 = card("options", "Options levels", g ? (opt.some((x) => near(x.price, zone)) ? "go" : "wait") : "info", g ? `Call ${fmt(cw)} · Flip ${fmt(flip)} · Put ${fmt(pw)}` : "—", g ? `Calculated from ${inst.gx} options and converted to ${inst.short}. Treat each as a zone.` : "No options data for this market.");
+    const c3 = card("auction", "Auction levels", auc.some((x) => near(x.price, zone)) ? "go" : "wait", vp ? `VAH ${fmt(vp.vah)} · POC ${fmt(vp.poc)} · VAL ${fmt(vp.val)}` : "—", vp ? `From the ${prior.date} session. ${insideVA ? "Price is inside yesterday's value: range conditions." : "Price is outside yesterday's value: watch for acceptance (trend) or a return inside (failed move)."}` : "No volume data yet.");
+    const c4 = { ...nCard, key: "timing", name: "Timing filter", status: !state.open ? "stop" : nCard.status === "stop" ? "stop" : win.status === "go" ? nCard.status : "wait", value: !state.open ? "Market closed" : nCard.status === "stop" ? "Stand aside" : win.status === "go" ? "In your window" : "Outside window", detail: !state.open ? state.label : `${win.text}. ${nCard.detail}` };
+    const c5 = card("trigger", "Order flow trigger", !state.open ? "stop" : atLevel && win.status === "go" ? "go" : "wait", atLevel ? `At ${nearest.name}` : nearest ? `${fmt(Math.abs(nearest.price - price))} from ${nearest.name}` : "—", !state.open ? "Market closed. Triggers only count inside your window." : atLevel ? "Price is at a level. Watch the footprint for absorption, delta divergence or stacked imbalances before entering. No trigger, no trade." : "Wait for price to reach a level. Entries only happen at a level with a footprint trigger.");
+    const c6 = card("flow", "Options flow", "info", "Tie-breaker", "Only used to choose between two valid setups. Added after 50 logged trades.");
+    const ready = [c1, c2, c3, c4, c5].filter((c) => c.status === "go").length;
+    return { ...base, title: "Order flow and volume", regime, setup: regime === "positive" && !nearFlip ? "Setup A" : regime === "negative" && !nearFlip ? "Setup B" : null, ready, of: 5, aplus, cards: [c1, c2, c3, c4, c5, c6], levels: L, fmtNote: "Gamma is calculated from delayed CBOE options data. Value area comes from the last full session." };
+  }
+
+  if (w.pack === "ict") {
+    const lv = computeLevels({ meta: bars.meta, bars: bars.m1.length ? bars.m1 : [] }, inst.fx || inst.crypto ? 17 : 18) || {};
+    add("Prior day high", lv.prevDay && lv.prevDay.high, "liquidity"); add("Prior day low", lv.prevDay && lv.prevDay.low, "liquidity");
+    add("Asia high", lv.asia && lv.asia.high, "liquidity"); add("Asia low", lv.asia && lv.asia.low, "liquidity");
+    add("London high", lv.london && lv.london.high, "liquidity"); add("London low", lv.london && lv.london.low, "liquidity");
+    add("Midnight open", lv.midnightOpen, "open"); add("Week high", lv.week && lv.week.high, "liquidity"); add("Week low", lv.week && lv.week.low, "liquidity");
+    const m = ny(Date.now()).mins;
+    const kz = m >= 1200 ? ["Asia killzone", 1200, 1440] : m >= 120 && m < 300 ? ["London killzone", 120, 300] : m >= 420 && m < 600 ? ["New York AM killzone", 420, 600] : m >= 810 && m < 960 ? ["New York PM session", 810, 960] : null;
+    const nextKz = [[120, "London killzone (2 AM)"], [420, "New York AM killzone (7 AM)"], [810, "New York PM (1:30 PM)"], [1200, "Asia killzone (8 PM)"]].find(([t]) => t > m) || [120, "London killzone (2 AM)"];
+    const mid = lv.midnightOpen;
+    const prem = mid != null ? (price > mid ? "premium" : "discount") : null;
+    const pr = lv.prevDay ? (price - lv.prevDay.low) / Math.max(1e-9, lv.prevDay.high - lv.prevDay.low) : null;
+    const swept = [];
+    if (lv.prevDay && lv.today) { if (lv.today.high > lv.prevDay.high) swept.push("prior day high"); if (lv.today.low < lv.prevDay.low) swept.push("prior day low"); }
+    if (lv.asia && lv.today && lv.london) { if (lv.london.high > lv.asia.high) swept.push("Asia high (in London)"); if (lv.london.low < lv.asia.low) swept.push("Asia low (in London)"); }
+    const liq = L.filter((x) => x.kind === "liquidity");
+    const nearest = liq.sort((a, b) => Math.abs(a.price - price) - Math.abs(b.price - price))[0];
+    const cards = [
+      card("kz", "Killzone", !state.open ? "stop" : kz ? "go" : "wait", !state.open ? "Market closed" : kz ? kz[0] : "Between killzones", !state.open ? state.label : kz ? `${Math.round(kz[2] - m)} minutes left in the ${kz[0]}.` : `Next: ${nextKz[1]}.`),
+      card("bias", "Premium or discount", mid != null ? "info" : "info", prem ? `In ${prem}` : "—", mid != null ? `Price is ${fmt(Math.abs(price - mid))} ${price > mid ? "above" : "below"} the midnight open (${fmt(mid)}). ${pr != null ? `It sits at ${Math.round(pr * 100)}% of yesterday's range.` : ""} Longs favor discount, shorts favor premium.` : ""),
+      card("liq", "Liquidity", nearest && near(nearest.price, zone) ? "go" : "wait", nearest ? `${fmt(Math.abs(nearest.price - price))} from ${nearest.name}` : "—", `Already taken today: ${swept.length ? swept.join(", ") : "nothing yet"}. Untaken highs and lows are the targets; a sweep followed by displacement is the setup.`),
+      card("ny", "New York open", "info", lv.open930 != null ? `9:30 open ${fmt(lv.open930)}` : "Not yet", lv.open930 != null ? `Price is ${price >= lv.open930 ? "above" : "below"} the New York open.` : "The 9:30 AM open price becomes a reference once the session starts."),
+      nCard];
+    return { ...base, title: "ICT / smart money", ready: cards.filter((c) => c.status === "go").length, of: 4, cards, levels: L, fmtNote: "Levels from the last 5 days of 1-minute data, New York time." };
+  }
+
+  if (w.pack === "indicators") {
+    const vb = todayBars.length ? todayBars : prior ? prior.bars : [];
+    let pv = 0, vv = 0;
+    for (const b of vb) { const tp = (b.h + b.l + b.c) / 3, v = b.v || 1; pv += tp * v; vv += v; }
+    const vwap = vv ? pv / vv : null;
+    add("VWAP", vwap, "ind"); add("20-day EMA", ema20, "ind"); add("50-day EMA", ema50, "ind"); add("200-day EMA", ema200, "ind");
+    const stack = ema20 && ema50 && ema200 ? (ema20 > ema50 && ema50 > ema200 ? "up" : ema20 < ema50 && ema50 < ema200 ? "down" : "mixed") : null;
+    const cards = [
+      card("vwap", "VWAP", vwap == null ? "info" : "info", vwap == null ? "—" : `${price >= vwap ? "Above" : "Below"} VWAP`, vwap == null ? "" : `VWAP ${fmt(vwap)}, ${fmt(Math.abs(price - vwap))} away. Above VWAP, buyers are in control for the session.`, { tone: vwap == null ? "" : price >= vwap ? "up" : "down" }),
+      card("ema", "Moving averages", stack === "mixed" ? "wait" : "go", stack === "up" ? "Stacked up" : stack === "down" ? "Stacked down" : stack ? "Mixed" : "—", ema20 ? `20 EMA ${fmt(ema20)} · 50 EMA ${fmt(ema50)} · 200 EMA ${fmt(ema200)} (daily). ${stack === "mixed" ? "Mixed stack: no clean trend." : "Clean trend: trade in its direction."}` : "", { tone: stack === "up" ? "up" : stack === "down" ? "down" : "" }),
+      card("rsi", "RSI (daily)", rsi == null ? "info" : rsi > 70 || rsi < 30 ? "wait" : "go", rsi == null ? "—" : rsi.toFixed(0), rsi == null ? "" : rsi > 70 ? "Overbought: chasing longs is risky; wait for a pullback." : rsi < 30 ? "Oversold: chasing shorts is risky; wait for a bounce." : "Neutral: no stretch either way."),
+      card("adr", "Range used today", usedToday != null && adr ? (usedToday > adr * 0.9 ? "wait" : "go") : "info", usedToday != null && adr ? `${Math.round(usedToday / adr * 100)}% of average` : "—", adr ? `Average daily range ${fmt(adr)}. Late in the range, new trends are less likely.` : ""),
+      nCard];
+    return { ...base, title: "Indicators", ready: cards.filter((c) => c.status === "go").length, of: 5, cards, levels: L, fmtNote: "VWAP is for today's session; moving averages and RSI use daily closes." };
+  }
+
+  if (w.pack === "news") {
+    const now = Date.now();
+    const nxt = news.filter((e) => e.time > now).sort((a, b) => a.time - b.time)[0];
+    const rel = news.filter((e) => e.actual);
+    const t = (ms) => new Date(ms).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" });
+    const mins = nxt ? Math.round((nxt.time - now) / 6e4) : null;
+    const cards = [
+      card("next", "Next release", nxt ? (mins <= 15 ? "go" : "wait") : "info", nxt ? `${nxt.name || nxt.title} in ${mins >= 60 ? Math.floor(mins / 60) + "h " : ""}${mins % 60}m` : "Nothing left today", nxt ? `${t(nxt.time)} · ${nxt.impact} impact · forecast ${nxt.forecast || "—"}, previous ${nxt.previous || "—"}.` : "No more medium- or high-impact US releases today."),
+      card("results", "Released today", rel.length ? "go" : "info", rel.length ? `${rel.length} out` : "None yet", rel.map((e) => `${e.name || e.title}: ${e.actual} vs ${e.forecast || "—"}${e.label ? ` (${e.label})` : ""}`).join(" · ") || "Results appear here the moment they come out."),
+      card("range", "Room to move", usedToday != null && adr ? (usedToday > adr * 0.9 ? "wait" : "go") : "info", usedToday != null && adr ? `${Math.round(usedToday / adr * 100)}% of average range used` : "—", adr ? `Average daily range ${fmt(adr)}. A big surprise has more room to run when little of the range is used.` : ""),
+      { ...nCard, name: "Today's calendar", status: "info", value: `${news.length} events` }];
+    add("Prior day high", pHi, "liquidity"); add("Prior day low", pLo, "liquidity");
+    return { ...base, title: "Trading the news", ready: null, cards, levels: L, fmtNote: "US medium- and high-impact releases, New York time." };
+  }
+
+  // levels / trend / general
+  add("Prior day high", pHi, "liquidity"); add("Prior day low", pLo, "liquidity");
+  const d1 = bars.d1;
+  const wk = d1.slice(-5);
+  if (wk.length) { add("5-day high", Math.max(...wk.map((b) => b.h)), "liquidity"); add("5-day low", Math.min(...wk.map((b) => b.l)), "liquidity"); }
+  const r20 = d1.slice(-21, -1);
+  if (w.pack === "trend") { if (r20.length) { add("20-day high", Math.max(...r20.map((b) => b.h)), "liquidity"); add("20-day low", Math.min(...r20.map((b) => b.l)), "liquidity"); } add("20-day EMA", ema20, "ind"); add("50-day EMA", ema50, "ind"); }
+  const rnd = inst.rnd || 100;
+  add("Round number", cfRound(price, rnd) === price ? price + rnd : cfRound(price, rnd), "round");
+  const nearest = L.slice().sort((a, b) => Math.abs(a.price - price) - Math.abs(b.price - price))[0];
+  const trend = ema20 && ema50 ? price > ema20 && ema20 > ema50 ? "up" : price < ema20 && ema20 < ema50 ? "down" : "sideways" : null;
+  const cards = [
+    card("trend", "Trend", trend === "sideways" ? "wait" : trend ? "go" : "info", trend ? (trend === "up" ? "Uptrend" : trend === "down" ? "Downtrend" : "Sideways") : "—", ema20 ? `Price vs 20-day EMA (${fmt(ema20)}) and 50-day EMA (${fmt(ema50)}). ${trend === "sideways" ? "No clean direction: favor ranges and smaller size." : "Trade with the trend; pullbacks to the 20-day are the cleaner entries."}` : "", { tone: trend === "up" ? "up" : trend === "down" ? "down" : "" }),
+    card("level", "Key level", nearest && near(nearest.price, zone) ? "go" : "wait", nearest ? (near(nearest.price, zone) ? `At ${nearest.name}` : `${fmt(Math.abs(nearest.price - price))} from ${nearest.name}`) : "—", "Prior day and multi-day highs and lows, plus the nearest round number. Reactions are most likely at these prices."),
+    card("adr", "Range used today", usedToday != null && adr ? (usedToday > adr * 0.9 ? "wait" : "go") : "info", usedToday != null && adr ? `${Math.round(usedToday / adr * 100)}% of average` : "—", adr ? `Average daily range ${fmt(adr)}. Above 90%, fresh moves are less likely.` : ""),
+    nCard];
+  return { ...base, title: w.pack === "trend" ? "Trend following" : w.pack === "levels" ? "Price levels" : "Key levels", ready: cards.filter((c) => c.status === "go").length, of: 4, cards, levels: L, fmtNote: "Levels from daily and 1-minute data." };
+}
+
 // api/_lib/router.js
 var ROUTES = {
   calendar: [() => build(), 900],
@@ -2229,6 +2572,7 @@ var ROUTES = {
   world: [() => build13(), 120],
   ticks: [(q) => build15(q), 2],
   results: [(q) => build16(q.date), 5],
+  confluences: [(q) => build17(q), 30],
   memedesk: [(q) => build14(q), hasAI() ? 600 : 180],
   explain: [(q) => build12(q), 86400]
 };

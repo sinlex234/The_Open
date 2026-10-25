@@ -2,7 +2,7 @@
 import {
   initMe, me, myMarkets, myAssets, isBeginner, isLearning, depth, hasStrat, levelTrader, intraday, stratsFor,
   forYouEvent, forYouHeadline, forYouStrength, relevance, greeting, windowStatus, startAlerts, openAlerts, editSetup,
-  profileQuery, marketLabel, myStruggles, isProp, newsRestricted, notify,
+  profileQuery, marketLabel, myStruggles, isProp, newsRestricted, notify, STRAT_LABELS,
 } from './me.js';
 import { GLOSSARY } from './glossary.js';
 
@@ -816,6 +816,48 @@ PAGES.markets = () => {
   fill('sectors', 'sectors', mv, x => sectorsHTML(x.sectors));
 };
 
+// ---------- Confluences: the user's strategy checklist, live ----------
+const CF_STATUS = { go: ['Lined up', 'up'], wait: ['Not yet', 'warn'], stop: ['Stand aside', 'down'], info: ['Info', ''] };
+const CF_KIND = { options: 'Options', auction: 'Auction', aplus: 'A+ spot', liquidity: 'Liquidity', open: 'Open', ind: 'Indicator', round: 'Round number' };
+function cfLadder(pk) {
+  const dp = pk.inst.dp, f = v => num(v, dp);
+  const rows = [...pk.levels].sort((a, b) => b.price - a.price);
+  let placed = false, h = '';
+  for (const r of rows) {
+    if (!placed && r.price < pk.price) { h += `<tr class="cf-now"><td>Price now</td><td>${f(pk.price)}</td><td></td><td></td></tr>`; placed = true; }
+    const d = r.price - pk.price;
+    h += `<tr class="${r.kind === 'aplus' ? 'cf-aplus' : ''}"><td>${esc(r.name)}</td><td>${f(r.price)}</td><td class="${d >= 0 ? 'up' : 'down'}">${d >= 0 ? '+' : '−'}${f(Math.abs(d))}</td><td><span class="pill">${esc(CF_KIND[r.kind] || r.kind)}</span></td></tr>`;
+  }
+  if (!placed) h += `<tr class="cf-now"><td>Price now</td><td>${f(pk.price)}</td><td></td><td></td></tr>`;
+  return `<table class="cf-ladder"><thead><tr><th>Level</th><th>Price</th><th>From now</th><th>Type</th></tr></thead><tbody>${h}</tbody></table>`;
+}
+function cfPackHTML(pk) {
+  if (pk.error) return `<section class="cf"><p class="empty">Couldn't load ${esc(pk.title || 'this strategy')} right now (${esc(pk.error)}).</p></section>`;
+  const mkName = marketLabel(pk.m);
+  const sum = pk.ready != null ? `<div class="cf-score"><b>${pk.ready}</b><span>of ${pk.of} lined up</span></div>` : '';
+  const tags = [pk.regime ? `<span class="pill ${pk.regime === 'positive' ? 'up' : 'down'}">${pk.regime === 'positive' ? 'Positive' : 'Negative'} gamma</span>` : '', pk.setup ? `<span class="pill acc">${esc(pk.setup)}</span>` : '', `<span class="pill">${esc(pk.state.label)}</span>`].join('');
+  return `<section class="cf">
+    <div class="cf-head"><div><p class="kicker-sm">${esc(mkName)} · ${esc(STRAT_LABELS[pk.s] || pk.s)}</p><h2>${esc(pk.title)} <span class="cf-inst">${esc(pk.inst.short)} ${num(pk.price, pk.inst.dp)}</span></h2><div class="cf-tags">${tags}</div></div>${sum}</div>
+    <ol class="cf-list">${pk.cards.map((c, i) => { const [lab, cls] = CF_STATUS[c.status] || CF_STATUS.info; return `<li class="cf-card ${c.status}">
+      <span class="cf-n">${i + 1}</span>
+      <div class="cf-body"><div class="cf-top"><h3>${esc(c.name)}</h3><span class="cf-st ${cls}">${lab}</span></div>
+      <p class="cf-val ${c.tone || ''}">${esc(c.value || '')}</p>${c.detail ? `<p class="cf-detail">${esc(c.detail)}</p>` : ''}
+      ${c.rows && c.rows.length ? `<ul class="cf-rows">${c.rows.map(r => `<li><span>${esc(r.k)}</span><span class="${r.dir === 'good' ? 'up' : r.dir === 'bad' ? 'down' : ''}">${esc(r.v)}</span></li>`).join('')}</ul>` : ''}</div></li>`; }).join('')}</ol>
+    ${pk.levels.length ? `<h3 class="cf-sub">Levels to watch</h3>${cfLadder(pk)}` : ''}
+    <p class="small faint">${esc(pk.fmtNote || '')} Updated ${fmtTime(pk.asOf)}. Education, not financial advice.</p>
+  </section>`;
+}
+PAGES.confluences = () => {
+  layout(`<h1 class="page-h">Confluences</h1>
+    <p class="page-intro">Your strategy's checklist, live. Each confluence turns green when it lines up, so you can see at a glance whether there's a trade, and where.</p>
+    <div id="cfList">${skel(4)}</div>`);
+  fill('cfList', 'your confluences', api('confluences?' + profileQuery(), 30e3), d => {
+    const packs = d.packs || [];
+    if (!packs.length) return '<p class="empty">Pick a strategy in your setup to see its confluences.</p>';
+    return packs.map(cfPackHTML).join('') + `<div class="brief-actions"><button type="button" data-edit>Change strategies</button></div>`;
+  }).then(() => main.querySelectorAll('[data-edit]').forEach(b => b.onclick = editSetup));
+};
+
 // ---------- Heatmaps ----------
 const HM_TF = [['d', 'Today'], ['w', 'Week'], ['m', 'Month'], ['y', 'This year']];
 const HM_COLOR = { d: 'change', w: 'Perf.W', m: 'Perf.1M', y: 'Perf.YTD' };
@@ -1259,7 +1301,7 @@ addEventListener('popstate', () => { if (!started) return; exitFs(); route(); })
 function orderTabs() {
   const nav = $('#tabs'), mk = myMarkets();
   const links = [...nav.querySelectorAll('a')];
-  const fixed = ['/', '/news', '/markets', '/heatmaps'].map(h => links.find(a => a.getAttribute('href') === h));
+  const fixed = ['/', '/confluences', '/news', '/markets', '/heatmaps'].map(h => links.find(a => a.getAttribute('href') === h));
   const mine = links.filter(a => a.dataset.m && a.dataset.m.split(' ').some(m => mk.includes(m)));
   const rest = links.filter(a => !fixed.includes(a) && !mine.includes(a));
   links.forEach(a => a.classList.toggle('mine', mine.includes(a)));

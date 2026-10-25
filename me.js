@@ -113,6 +113,7 @@ const STRATS = {
 };
 const STRAT_SHORT = Object.fromEntries(Object.values(STRATS).flat().map(o => [o.id, o.label]));
 STRAT_SHORT.ict = 'ICT'; STRAT_SHORT.pa = 'Price action'; STRAT_SHORT.unsure = 'Still deciding';
+export const STRAT_LABELS = STRAT_SHORT;
 const NEWS_EVENTS = {
   base: [opt('cpi', 'Inflation (CPI)'), opt('nfp', 'Jobs report (NFP)'), opt('fomc', 'Fed decisions and speeches'), opt('gdp', 'GDP'), opt('retail', 'Retail sales'), opt('pmi', 'Business surveys (PMI, ISM)'), opt('claims', 'Weekly jobless claims')],
   forex: [opt('cb', 'Other central banks (ECB, BoE, BoJ…)')],
