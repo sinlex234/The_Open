@@ -39,6 +39,13 @@
       "dest": "/data.js"
     },
     {
+      "src": "/confluences/?",
+      "status": 308,
+      "headers": {
+        "Location": "/"
+      }
+    },
+    {
       "src": "/(today|news|markets|futures|forex|crypto|memes|memecoins|options|calendar|economy|earnings|glossary|heatmaps|movers)/?",
       "dest": "/index.html"
     },
