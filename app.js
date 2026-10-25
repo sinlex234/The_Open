@@ -816,6 +816,201 @@ PAGES.markets = () => {
   fill('sectors', 'sectors', mv, x => sectorsHTML(x.sectors));
 };
 
+// ---------- Confluence map: see the levels, GEX, volume profile and order flow ----------
+const MAP = { el: null, timer: null, key: null, tab: 'map' };
+const KIND_CLS = { options: 'k-opt', auction: 'k-auc', aplus: 'k-aplus', liquidity: 'k-liq', open: 'k-open', ind: 'k-ind', round: 'k-round' };
+const tFmt = (t, tf) => new Date(t).toLocaleString('en-US', tf === '1d' ? { timeZone: TZ, month: 'short', day: 'numeric' } : { timeZone: TZ, hour: 'numeric', minute: '2-digit' });
+function svgEl(w, h, inner, cls = '') { return `<svg class="mapsvg ${cls}" viewBox="0 0 ${w} ${h}" width="100%" preserveAspectRatio="none" style="height:${h}px">${inner}</svg>`; }
+function mapMain(d, W) {
+  const bars = d.chart.bars, dp = d.inst.dp;
+  const phone = W < 640;
+  const H = phone ? 340 : 460, padR = 64, padB = 22, padT = 8;
+  const sideP = d.profile ? (phone ? 46 : 84) : 0, sideG = d.gex ? (phone ? 64 : 120) : 0;
+  const CW = Math.max(200, W - sideP - sideG - padR);
+  let lo2 = Math.min(...bars.map(b => b[3])), hi2 = Math.max(...bars.map(b => b[2]));
+  const span0 = hi2 - lo2 || 1;
+  const inView = (p) => MAP.wide || (p >= lo2 - span0 * 0.6 && p <= hi2 + span0 * 0.6);
+  const lv = d.levels.filter(l => inView(l.price));
+  const extra = [...lv.map(l => l.price)];
+  if (d.gex) [d.gex.flip, d.gex.callWall, d.gex.putWall].forEach(p => p != null && inView(p) && extra.push(p));
+  lo2 = Math.min(lo2, ...extra); hi2 = Math.max(hi2, ...extra);
+  const pad = (hi2 - lo2) * 0.04; lo2 -= pad; hi2 += pad;
+  const y = p => padT + (hi2 - p) / (hi2 - lo2) * (H - padT - padB);
+  const n = bars.length, bw = CW / n;
+  const x = i => i * bw + bw / 2;
+  const t0 = bars[0][0], tN = bars[n - 1][0];
+  const xt = t => n < 2 ? 0 : (t - t0) / (tN - t0) * (CW - bw) + bw / 2;
+  let g = '';
+  // sessions and events
+  (d.chart.sessions || []).forEach(s => { if (s.to < t0 || s.from > tN) return; const a = xt(Math.max(s.from, t0)), b = xt(Math.min(s.to, tN)); g += `<rect class="m-sess" x="${a}" y="${padT}" width="${Math.max(1, b - a)}" height="${H - padT - padB}"/><text class="m-sess-t" x="${a + 4}" y="${padT + 12}">${esc(s.name)}</text>`; });
+  if (d.profile && d.profile.vah && d.profile.val) g += `<rect class="m-va" x="0" y="${y(d.profile.vah)}" width="${CW}" height="${Math.max(1, y(d.profile.val) - y(d.profile.vah))}"/>`;
+  if (d.gex && d.gex.expMove && d.pack === 'options') { const c = d.price; g += `<rect class="m-em" x="0" y="${y(c + d.gex.expMove)}" width="${CW}" height="${y(c - d.gex.expMove) - y(c + d.gex.expMove)}"/>`; }
+  (d.chart.events || []).forEach(e => { if (e.t < t0 || e.t > tN + 36e5) return; const xx = Math.min(CW - 2, xt(e.t)); g += `<line class="m-ev ${e.impact === 'High' ? 'hi' : ''}" x1="${xx}" x2="${xx}" y1="${padT}" y2="${H - padB}"/><text class="m-ev-t" x="${xx + 3}" y="${H - padB - 6}">${esc(e.name)}${e.actual ? ' ' + esc(e.actual) : ''}</text>`; });
+  // grid + price axis
+  const ticks = 6;
+  for (let i = 0; i <= ticks; i++) { const p = lo2 + (hi2 - lo2) * i / ticks; g += `<line class="m-grid" x1="0" x2="${CW}" y1="${y(p)}" y2="${y(p)}"/><text class="m-ax" x="${CW + sideP + sideG + 6}" y="${y(p) + 4}">${num(p, dp)}</text>`; }
+  // candles
+  bars.forEach((b, i) => { const up = b[4] >= b[1], cls = up ? 'm-up' : 'm-dn'; const top = y(Math.max(b[1], b[4])), bot = y(Math.min(b[1], b[4])); g += `<line class="${cls}" x1="${x(i)}" x2="${x(i)}" y1="${y(b[2])}" y2="${y(b[3])}"/><rect class="${cls}" x="${x(i) - Math.max(0.6, bw * 0.32)}" y="${top}" width="${Math.max(1.2, bw * 0.64)}" height="${Math.max(1, bot - top)}"/>`; });
+  // indicator lines
+  (d.chart.lines || []).forEach(L => {
+    let pts = [];
+    if (L.series) pts = L.series.filter(([t]) => t >= t0).map(([t, v]) => `${xt(t)},${y(v)}`);
+    else if (L.pts) pts = L.pts.map((v, i) => v == null ? null : `${x(i)},${y(v)}`).filter(Boolean);
+    if (pts.length > 1) g += `<polyline class="m-line ${L.color || ''}" points="${pts.join(' ')}"/>`;
+  });
+  // levels
+  const used = [];
+  lv.forEach(l => {
+    const yy = y(l.price); let ly = yy - 3; while (used.some(u => Math.abs(u - ly) < 11)) ly -= 11; used.push(ly);
+    g += `<line class="m-lv ${KIND_CLS[l.kind] || ''}" x1="0" x2="${CW}" y1="${yy}" y2="${yy}"/><text class="m-lv-t ${KIND_CLS[l.kind] || ''}" x="${CW - 4}" y="${ly}" text-anchor="end">${esc(l.name)} ${num(l.price, dp)}</text>`;
+  });
+  // price now
+  g += `<line class="m-now" x1="0" x2="${CW + sideP + sideG}" y1="${y(d.price)}" y2="${y(d.price)}"/><rect class="m-now-b" x="${CW + sideP + sideG + 2}" y="${y(d.price) - 9}" width="${padR - 4}" height="18" rx="3"/><text class="m-now-t" x="${CW + sideP + sideG + 6}" y="${y(d.price) + 4}">${num(d.price, dp)}</text>`;
+  // volume profile panel
+  if (d.profile) {
+    const bins = d.profile.bins.filter(([p]) => p >= lo2 && p <= hi2);
+    const mx = Math.max(...bins.map(b => b[1]), 1), step = (d.profile.bins[1] ? d.profile.bins[1][0] - d.profile.bins[0][0] : 1);
+    const hgt = Math.max(1, Math.abs(y(0) - y(step)) * 0.9);
+    g += `<line class="m-sep" x1="${CW}" x2="${CW}" y1="${padT}" y2="${H - padB}"/>`;
+    bins.forEach(([p, v]) => { const wv = v / mx * (sideP - 6); const poc = Math.abs(p + step / 2 - d.profile.poc) < step; const inVA = p >= d.profile.val && p <= d.profile.vah; g += `<rect class="m-vp ${poc ? 'poc' : inVA ? 'va' : ''}" x="${CW + 3}" y="${y(p + step)}" width="${wv}" height="${hgt}"/>`; });
+    g += `<text class="m-panel-t" x="${CW + 4}" y="${H - 6}">Volume</text>`;
+  }
+  // GEX panel
+  if (d.gex) {
+    const gx0 = CW + sideP, mid = gx0 + sideG / 2;
+    const st = d.gex.strikes.filter(([p]) => p >= lo2 && p <= hi2);
+    const mx = Math.max(...st.map(([, c, p]) => Math.max(Math.abs(c), Math.abs(p))), 1);
+    const sp = st.length > 1 ? Math.abs(y(st[0][0]) - y(st[1][0])) : 4;
+    const hh = Math.max(1, Math.min(6, sp * 0.8));
+    g += `<line class="m-sep" x1="${gx0}" x2="${gx0}" y1="${padT}" y2="${H - padB}"/><line class="m-grid" x1="${mid}" x2="${mid}" y1="${padT}" y2="${H - padB}"/>`;
+    st.forEach(([p, c, pu]) => { const wc = c / mx * (sideG / 2 - 4), wp = Math.abs(pu) / mx * (sideG / 2 - 4); g += `<rect class="m-gc" x="${mid}" y="${y(p) - hh / 2}" width="${wc}" height="${hh}"/><rect class="m-gp" x="${mid - wp}" y="${y(p) - hh / 2}" width="${wp}" height="${hh}"/>`; });
+    if (d.gex.flip != null && d.gex.flip >= lo2 && d.gex.flip <= hi2) g += `<line class="m-flip" x1="${gx0}" x2="${gx0 + sideG}" y1="${y(d.gex.flip)}" y2="${y(d.gex.flip)}"/>`;
+    g += `<text class="m-panel-t" x="${gx0 + 4}" y="${H - 6}">GEX: puts ◂ ▸ calls</text>`;
+  }
+  // time axis
+  const every = Math.max(1, Math.round(n / (phone ? 4 : 8)));
+  for (let i = 0; i < n; i += every) g += `<text class="m-ax" x="${x(i)}" y="${H - 6}" text-anchor="middle">${tFmt(bars[i][0], d.chart.tf)}</text>`;
+  const off = d.levels.filter(l => !inView(l.price));
+  return { svg: svgEl(W, H, g, 'main'), x, xt, CW, n, bw, off, t0, tN };
+}
+function mapFlow(d, W, geo) {
+  const f = d.flow; if (!f) return '';
+  const H = 150, mid = 75;
+  if (f.real) {
+    const bars = f.bars; if (!bars.length) return '';
+    const n = bars.length, bw = (geo.CW) / n;
+    const mx = Math.max(...bars.map(b => Math.max(b.buy, b.sell)), 1e-9);
+    const cv = bars.map(b => b.cvd), cmin = Math.min(...cv), cmax = Math.max(...cv);
+    let g = `<line class="m-grid" x1="0" x2="${geo.CW}" y1="${mid}" y2="${mid}"/>`;
+    bars.forEach((b, i) => { const xb = i * bw; const hb = b.buy / mx * (mid - 12), hs = b.sell / mx * (mid - 12); g += `<rect class="m-gc" x="${xb + bw * 0.15}" y="${mid - hb}" width="${bw * 0.7}" height="${hb}"/><rect class="m-gp" x="${xb + bw * 0.15}" y="${mid}" width="${bw * 0.7}" height="${hs}"/>`; });
+    const yc = v => 10 + (cmax - v) / ((cmax - cmin) || 1) * (H - 30);
+    g += `<polyline class="m-line acc" points="${bars.map((b, i) => `${i * bw + bw / 2},${yc(b.cvd)}`).join(' ')}"/>`;
+    g += `<text class="m-panel-t" x="4" y="12">Real buys ▲ / sells ▼ per minute, line = cumulative delta</text><text class="m-ax" x="4" y="${H - 4}">${tFmt(bars[0].t)}</text><text class="m-ax" x="${geo.CW - 4}" y="${H - 4}" text-anchor="end">${tFmt(bars[n - 1].t)}</text>`;
+    return svgEl(W, H, g);
+  }
+  if (!f.bars || !f.bars.length) return `<p class="small faint">${esc(f.source || '')}</p>`;
+  const bars = f.bars.filter(b => b.t >= geo.t0);
+  const mx = Math.max(...bars.map(b => Math.abs(b.delta)), 1e-9);
+  const cv = bars.map(b => b.cvd), cmin = Math.min(...cv), cmax = Math.max(...cv);
+  const yc = v => 10 + (cmax - v) / ((cmax - cmin) || 1) * (H - 30);
+  let g = `<line class="m-grid" x1="0" x2="${geo.CW}" y1="${mid}" y2="${mid}"/>`;
+  bars.forEach(b => { const xx = geo.xt(b.t), hh = Math.abs(b.delta) / mx * (mid - 12); g += `<rect class="${b.delta >= 0 ? 'm-gc' : 'm-gp'}" x="${xx - geo.bw * 0.32}" y="${b.delta >= 0 ? mid - hh : mid}" width="${Math.max(1, geo.bw * 0.64)}" height="${hh}"/>`; });
+  g += `<polyline class="m-line acc" points="${bars.map(b => `${geo.xt(b.t)},${yc(b.cvd)}`).join(' ')}"/>`;
+  g += `<text class="m-panel-t" x="4" y="12">Delta per 5 minutes (estimated), line = cumulative delta</text>`;
+  return svgEl(W, H, g);
+}
+function mapFootprint(d) {
+  const f = d.flow; if (!f || !f.real) return '';
+  const cols = f.bars.slice(-8);
+  const all = [...new Set(cols.flatMap(c => c.rows.map(r => r[0])))].sort((a, b) => b - a);
+  const ci = all.reduce((best, p, i) => Math.abs(p - d.price) < Math.abs(all[best] - d.price) ? i : best, 0);
+  const prices = all.slice(Math.max(0, ci - 12), ci + 12);
+  const dp = d.inst.dp, q = v => v >= 10 ? v.toFixed(0) : v >= 1 ? v.toFixed(1) : v.toFixed(2);
+  return `<div class="fp-wrap"><table class="fp"><thead><tr><th>Price</th>${cols.map(c => `<th>${tFmt(c.t)}</th>`).join('')}</tr></thead><tbody>${prices.map(p => `<tr><td>${num(p, dp)}</td>${cols.map(c => { const r = c.rows.find(x => x[0] === p); if (!r) return '<td></td>'; const [s, b] = r; const cls = b > s * 3 ? 'buyimb' : s > b * 3 ? 'sellimb' : ''; return `<td class="${cls}"><span class="down">${q(s)}</span> × <span class="up">${q(b)}</span></td>`; }).join('')}</tr>`).join('')}</tbody></table></div>`;
+}
+function mapRsi(d, W) {
+  if (!d.rsi || !d.rsi.length) return '';
+  const H = 110, n = d.rsi.length, x = i => i / (n - 1) * (W - 70), y = v => 8 + (100 - v) / 100 * (H - 24);
+  let g = `<rect class="m-va" x="0" y="${y(70)}" width="${W - 70}" height="${y(30) - y(70)}"/><line class="m-grid" x1="0" x2="${W - 70}" y1="${y(70)}" y2="${y(70)}"/><line class="m-grid" x1="0" x2="${W - 70}" y1="${y(30)}" y2="${y(30)}"/><text class="m-ax" x="${W - 64}" y="${y(70) + 4}">70</text><text class="m-ax" x="${W - 64}" y="${y(30) + 4}">30</text>`;
+  g += `<polyline class="m-line acc" points="${d.rsi.map(([, v], i) => `${x(i)},${y(v)}`).join(' ')}"/><text class="m-panel-t" x="4" y="${H - 4}">Daily RSI, last 60 days</text>`;
+  return svgEl(W, H, g);
+}
+function mapLegend(d, off) {
+  const items = [['k-opt', 'Options levels'], ['k-auc', 'Auction levels'], ['k-aplus', 'A+ spots'], ['k-liq', 'Liquidity'], ['k-ind', 'Indicators'], ['k-round', 'Round numbers']].filter(([k]) => d.levels.some(l => KIND_CLS[l.kind] === k));
+  return `<div class="map-legend">${items.map(([k, t]) => `<span><i class="${k}"></i>${t}</span>`).join('')}${d.profile ? '<span><i class="m-va-i"></i>Yesterday\'s value area</span>' : ''}${(d.chart.sessions || []).length ? '<span><i class="m-sess-i"></i>Sessions</span>' : ''}</div>${off.length ? `<p class="small faint">Off the chart: ${off.map(l => `${esc(l.name)} ${num(l.price, d.inst.dp)}`).join(' · ')}</p>` : ''}`;
+}
+function mapHTML(d) {
+  const W = Math.min(1180, ((MAP.el.querySelector('.map-body') || {}).clientWidth || innerWidth) - 36);
+  const geo = mapMain(d, W);
+  const flow = mapFlow(d, W, geo);
+  const gexTxt = d.gex ? `<p class="small">Gamma: <b class="${d.gex.regime === 'positive' ? 'up' : 'down'}">${d.gex.regime}</b> · flip ${num(d.gex.flip, d.inst.dp)} · call wall ${num(d.gex.callWall, d.inst.dp)} · put wall ${num(d.gex.putWall, d.inst.dp)}${d.gex.expMove ? ` · expected move ±${num(d.gex.expMove, d.inst.dp)}` : ''} <span class="faint">(from ${esc(d.gex.und)} options, converted)</span></p>` : '';
+  return `${gexTxt}<div class="map-zoom"><span class="small faint">Zoom</span><button type="button" data-zoom="0" aria-pressed="${!MAP.wide}">Price action</button><button type="button" data-zoom="1" aria-pressed="${!!MAP.wide}">All levels</button></div>${geo.svg}${mapLegend(d, geo.off)}
+    ${flow ? `<h4 class="map-h">Order flow</h4>${flow}<p class="small faint">${esc(d.flow.source || '')}${d.flow.real ? ` · ${d.flow.trades.toLocaleString()} trades` : ''}</p>` : ''}
+    ${d.flow && d.flow.real ? `<h4 class="map-h">Footprint, last 8 minutes <span class="faint">(sold × bought per price)</span></h4>${mapFootprint(d)}` : ''}
+    ${d.rsi ? `<h4 class="map-h">RSI</h4>${mapRsi(d, W)}` : ''}`;
+}
+function histHTML(h) {
+  if (h.note) return `<p class="empty">${esc(h.note)}</p>`;
+  return `<p class="small faint">${h.period ? `${esc(h.period)} · ${h.days} trading days of 5-minute data` : 'Daily data'}. Past behavior, not a promise.</p>
+    <div class="hist-grid">${h.stats.map(s => `<div class="hist-c"><b>${esc(s.value)}</b><h5>${esc(s.name)}</h5><small>${esc(s.n)}</small>${s.detail ? `<p>${esc(s.detail)}</p>` : ''}</div>`).join('')}</div>`;
+}
+function lineChart(series, W, H, opts = {}) {
+  const all = series.flatMap(s => s.pts.map(p => p[1])).concat(opts.band ? opts.band.flatMap(b => [b[1], b[3]]) : []).concat([0]);
+  const mn = Math.min(...all), mx = Math.max(...all);
+  const n = Math.max(...series.map(s => s.pts.length), opts.band ? opts.band.length : 0);
+  const xmax = opts.xmax || n - 1;
+  const x = i => 4 + i / (xmax || 1) * (W - 60), y = v => 8 + (mx - v) / ((mx - mn) || 1) * (H - 26);
+  let g = `<line class="m-grid" x1="0" x2="${W - 56}" y1="${y(0)}" y2="${y(0)}"/><text class="m-ax" x="${W - 52}" y="${y(0) + 4}">0R</text><text class="m-ax" x="${W - 52}" y="${y(mx) + 8}">${mx.toFixed(0)}R</text><text class="m-ax" x="${W - 52}" y="${y(mn)}">${mn.toFixed(0)}R</text>`;
+  if (opts.band) g += `<polygon class="m-band" points="${opts.band.map(b => `${x(b[0])},${y(b[3])}`).concat([...opts.band].reverse().map(b => `${x(b[0])},${y(b[1])}`)).join(' ')}"/>` + `<polyline class="m-line acc thick" points="${opts.band.map(b => `${x(b[0])},${y(b[2])}`).join(' ')}"/>`;
+  series.forEach(s => { g += `<polyline class="m-line ${s.cls || ''}" points="${s.pts.map(([i, v]) => `${x(i)},${y(v)}`).join(' ')}"/>`; });
+  if (opts.label) g += `<text class="m-panel-t" x="6" y="${H - 4}">${esc(opts.label)}</text>`;
+  return svgEl(W, H, g);
+}
+function btHTML(h) {
+  const b = h.backtest;
+  if (!b) return `<p class="empty">${h.note ? esc(h.note) : 'A backtest is available for futures and index strategies with mechanical rules (order flow, price levels, ICT). This strategy shows its history stats instead.'}</p>`;
+  const W = Math.min(1180, ((MAP.el.querySelector('.map-body') || {}).clientWidth || 640) - 36);
+  const a = b.all, pc = v => v == null ? '—' : Math.round(v * 100) + '%', r = v => v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(2) + 'R';
+  const mc = b.monteCarlo;
+  const small = a.n < 30;
+  return `<div class="bt-sum">${[['Trades', a.n], ['Win rate', pc(a.winRate)], ['Expectancy', r(a.expectancy)], ['Total', r(a.totalR)], ['Max drawdown', r(a.maxDD)], ['Worst losing streak', a.worstStreak], ['Profit factor', a.profitFactor == null ? '—' : a.profitFactor.toFixed(2)]].map(([k, v]) => `<div><small>${k}</small><b>${v}</b></div>`).join('')}</div>
+    ${small ? `<p class="small warnline">Only ${a.n} trades: too few to trust. Treat these as a first look.</p>` : ''}
+    <table class="cf-ladder"><thead><tr><th>Setup</th><th>Trades</th><th>Win rate</th><th>Expectancy</th><th>Total</th></tr></thead><tbody>${Object.entries(b.by).map(([k, s]) => `<tr><td>${esc(k)}</td><td>${s.n}</td><td>${pc(s.winRate)}</td><td class="${(s.expectancy || 0) >= 0 ? 'up' : 'down'}">${r(s.expectancy)}</td><td>${r(s.totalR)}</td></tr>`).join('')}</tbody></table>
+    <h4 class="map-h">Equity curve <span class="faint">(R = multiples of the risk on each trade)</span></h4>
+    ${lineChart([{ pts: b.equity.map(([, v], i) => [i, v]), cls: 'acc' }], W, 200, { label: `${b.equity.length} trades in order` })}
+    ${mc ? `<h4 class="map-h">Monte Carlo: ${mc.sims.toLocaleString()} shuffled versions of the next ${mc.nTrades} trades</h4>
+    <p class="small">Each run draws ${mc.nTrades} trades at random from the backtest results, to show the range of outcomes luck alone can produce with the same edge.</p>
+    ${lineChart(mc.samples.map(p => ({ pts: p.map((v, i) => [i, v]), cls: 'faint-line' })), W, 240, { band: mc.band, xmax: mc.nTrades, label: 'Shaded: middle 90% of outcomes · bold: typical path' })}
+    <div class="bt-sum">${[['Typical result', r(mc.final.p50)], ['Bad case (5th pct)', r(mc.final.p5)], ['Good case (95th pct)', r(mc.final.p95)], ['Chance of being down after ' + mc.nTrades, pc(mc.pLoss)], ['Typical drawdown', r(mc.maxDD.p50)], ['Bad drawdown (5th pct)', r(mc.maxDD.p5)], ['Losing streak to expect', mc.worstStreak.p95]].map(([k, v]) => `<div><small>${k}</small><b>${v}</b></div>`).join('')}</div>` : ''}
+    <h4 class="map-h">Rules tested</h4><p class="small">${esc(b.rules)} Costs: ${esc(b.costs)}.</p><p class="small faint">${esc(b.limits)}</p>
+    <h4 class="map-h">Recent trades</h4>
+    <div class="fp-wrap"><table class="cf-ladder"><thead><tr><th>Date</th><th>Setup</th><th>Side</th><th>Entry</th><th>Stop</th><th>Exit</th><th>Result</th></tr></thead><tbody>${b.trades.map(t => `<tr><td>${esc(t.date)}</td><td>${esc(t.setup)}</td><td>${esc(t.side)}</td><td>${num(t.entry, h.inst.dp)}</td><td>${num(t.stop, h.inst.dp)}</td><td>${num(t.exit, h.inst.dp)} <span class="faint">${esc(t.why)}</span></td><td class="${t.r >= 0 ? 'up' : 'down'}">${r(t.r)}</td></tr>`).join('')}</tbody></table></div>`;
+}
+function bindZoom() { MAP.el.querySelectorAll('[data-zoom]').forEach(b => b.onclick = () => { MAP.wide = b.dataset.zoom === '1'; if (MAP.last) { MAP.el.querySelector('.map-body').innerHTML = mapHTML(MAP.last); bindZoom(); } }); }
+function closeMap() { clearInterval(MAP.timer); if (MAP.el) MAP.el.remove(); MAP.el = null; document.body.classList.remove('noscroll'); removeEventListener('keydown', mapKey); }
+function mapKey(e) { if (e.key === 'Escape') closeMap(); }
+function openMap(pack, m, title) {
+  closeMap();
+  MAP.tab = 'map'; MAP.q = `${profileQuery().split('&')[0]}&pack=${pack}&m=${m}`;
+  const el = document.createElement('div'); el.className = 'mapov'; el.setAttribute('role', 'dialog'); el.setAttribute('aria-label', title + ' map');
+  el.innerHTML = `<div class="map-panel"><div class="map-top"><h2>${esc(title)}</h2><div class="map-tabs" role="tablist"><button data-t="map" aria-pressed="true">Map</button><button data-t="hist" aria-pressed="false">History</button><button data-t="bt" aria-pressed="false">Backtest</button></div><button class="x map-x" aria-label="Close">×</button></div><div class="map-body"><div class="skel">${skel(3)}</div></div></div>`;
+  document.body.appendChild(el); document.body.classList.add('noscroll'); MAP.el = el;
+  el.querySelector('.map-x').onclick = closeMap; el.onclick = e => { if (e.target === el) closeMap(); };
+  addEventListener('keydown', mapKey);
+  el.querySelectorAll('[data-t]').forEach(b => b.onclick = () => { MAP.tab = b.dataset.t; el.querySelectorAll('[data-t]').forEach(x => x.setAttribute('aria-pressed', x === b)); renderMap(); });
+  renderMap();
+  MAP.timer = setInterval(() => { if (MAP.tab === 'map' && document.visibilityState === 'visible') renderMap(true); }, 20000);
+}
+async function renderMap(quiet) {
+  const body = MAP.el && MAP.el.querySelector('.map-body'); if (!body) return;
+  const tab = MAP.tab;
+  if (!quiet) body.innerHTML = `<div class="skel">${skel(3)}</div>`;
+  try {
+    if (tab === 'map') { const d = await fetch('/api/data?fn=cfmap&' + MAP.q, { cache: 'no-store' }).then(r => r.json()); if (d.error) throw new Error(d.error); MAP.last = d; if (MAP.tab === 'map') { body.innerHTML = mapHTML(d); bindZoom(); } }
+    else { const h = await api('cfhist&' + MAP.q, 30 * 60e3); if (h.error) throw new Error(h.error); if (MAP.tab === tab) body.innerHTML = tab === 'hist' ? histHTML(h) : btHTML(h); }
+  } catch (e) { if (!quiet) body.innerHTML = `<p class="empty">Couldn't load this right now (${esc(e.message)}).</p>`; }
+}
+
 // ---------- Confluences: the user's strategy checklist, live ----------
 const CF_STATUS = { go: ['Lined up', 'up'], wait: ['Not yet', 'warn'], stop: ['Stand aside', 'down'], info: ['Info', ''] };
 const CF_KIND = { options: 'Options', auction: 'Auction', aplus: 'A+ spot', liquidity: 'Liquidity', open: 'Open', ind: 'Indicator', round: 'Round number' };
@@ -834,7 +1029,7 @@ function cfLadder(pk) {
 function cfPackHTML(pk) {
   if (pk.error) return `<section class="cf"><p class="empty">Couldn't load ${esc(pk.title || 'this strategy')} right now (${esc(pk.error)}).</p></section>`;
   const mkName = marketLabel(pk.m);
-  const sum = pk.ready != null ? `<div class="cf-score"><b>${pk.ready}</b><span>of ${pk.of} lined up</span></div>` : '';
+  const sum = `<div class="cf-side">${pk.ready != null ? `<div class="cf-score"><b>${pk.ready}</b><span>of ${pk.of} lined up</span></div>` : ''}<button type="button" class="btn-view" data-map="${esc(pk.pack)}" data-m="${esc(pk.m)}" data-title="${esc(pk.title + ' · ' + pk.inst.short)}">View map</button></div>`;
   const tags = [pk.regime ? `<span class="pill ${pk.regime === 'positive' ? 'up' : 'down'}">${pk.regime === 'positive' ? 'Positive' : 'Negative'} gamma</span>` : '', pk.setup ? `<span class="pill acc">${esc(pk.setup)}</span>` : '', `<span class="pill">${esc(pk.state.label)}</span>`].join('');
   return `<section class="cf">
     <div class="cf-head"><div><p class="kicker-sm">${esc(mkName)} · ${esc(STRAT_LABELS[pk.s] || pk.s)}</p><h2>${esc(pk.title)} <span class="cf-inst">${esc(pk.inst.short)} ${num(pk.price, pk.inst.dp)}</span></h2><div class="cf-tags">${tags}</div></div>${sum}</div>
@@ -855,7 +1050,7 @@ PAGES.confluences = () => {
     const packs = d.packs || [];
     if (!packs.length) return '<p class="empty">Pick a strategy in your setup to see its confluences.</p>';
     return packs.map(cfPackHTML).join('') + `<div class="brief-actions"><button type="button" data-edit>Change strategies</button></div>`;
-  }).then(() => main.querySelectorAll('[data-edit]').forEach(b => b.onclick = editSetup));
+  }).then(() => { main.querySelectorAll('[data-edit]').forEach(b => b.onclick = editSetup); main.querySelectorAll('[data-map]').forEach(b => b.onclick = () => openMap(b.dataset.map, b.dataset.m, b.dataset.title)); });
 };
 
 // ---------- Heatmaps ----------

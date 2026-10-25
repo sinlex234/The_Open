@@ -2266,7 +2266,7 @@ function cfProfile(bars, step) {
   const avg = total / ks.length;
   const lvn = [];
   for (let x = i; x <= j; x++) if (vol.get(ks[x]) < avg * 0.35) lvn.push(ks[x] * step);
-  return { poc: (ks[pi] + 0.5) * step, vah: (ks[j] + 1) * step, val: ks[i] * step, lvn };
+  return { poc: (ks[pi] + 0.5) * step, vah: (ks[j] + 1) * step, val: ks[i] * step, lvn, step, bins: ks.map((k) => [k * step, vol.get(k)]) };
 }
 function cfSessions(bars, inst) {
   // RTH sessions (9:30-16:00 New York) for index futures/stocks; the full day for FX and crypto
@@ -2347,7 +2347,8 @@ async function cfGammaRaw(und) {
   }
   const total = gex(spot);
   const em = straddle && straddle.c != null && straddle.p != null ? straddle.c + straddle.p : null;
-  return { und, close, spot, callWall, putWall, flip, total, expMove: em, n: opts.length };
+  const strikes = ks.filter((k) => Math.abs(k - close) / close <= 0.07).sort((a, b) => a - b).map((k) => [k, per.get(k)[0], per.get(k)[1]]);
+  return { und, close, spot, callWall, putWall, flip, total, expMove: em, n: opts.length, strikes };
 }
 var cfGamma = (und) => memo("gx:" + und, 3e5, () => cfGammaRaw(und));
 function cfNews(cal, res) {
@@ -2407,7 +2408,7 @@ async function cfPack(w, news) {
   if (price == null) throw new Error("No price data for " + inst.short);
   const state = cfMarketState(inst);
   const fmt = (x) => x == null ? "—" : Number(x).toLocaleString("en-US", { minimumFractionDigits: inst.dp, maximumFractionDigits: inst.dp });
-  const step = inst.fx ? Math.pow(10, -inst.dp + 1) : inst.crypto ? Math.max(1, Math.pow(10, Math.floor(Math.log10(price)) - 3)) : inst.dp >= 2 ? 0.25 : 1;
+  const step = inst.fx ? Math.pow(10, -inst.dp + 1) : inst.crypto ? Math.pow(10, Math.floor(Math.log10(price)) - 4) * 2.5 : inst.dp >= 2 ? 0.25 : 1;
   const sess = cfSessions(bars.m1, inst);
   const today = ny(Date.now()).date;
   const done = sess.filter((s) => s.date !== today || !state.open || ny(Date.now()).mins >= 960 && !inst.fx && !inst.crypto);
@@ -2427,6 +2428,8 @@ async function cfPack(w, news) {
   const near = (lv, pts) => lv != null && Math.abs(price - lv) <= pts;
   const zone = inst.fx ? Math.pow(10, -inst.dp + 1) * 15 : adr ? adr * 0.03 : price * 4e-4;
   const base = { pack: w.pack, m: w.m, s: w.s, inst: { id: inst.id, short: inst.short, dp: inst.dp }, price, state, asOf: bars.m1.length ? bars.m1[bars.m1.length - 1].t : Date.now(), session: prior ? prior.date : null };
+  const X = { inst, bars, vp, prior, step, adr, onHi, onLo };
+  if (w.capture) w.capture.x = X;
   const nCard = cfNewsCard(news);
 
   if (w.pack === "orderflow" || w.pack === "options") {
@@ -2438,6 +2441,7 @@ async function cfPack(w, news) {
       ratio = (inst.sym === "SPY" || inst.sym === "QQQ") ? 1 : lastClose / g.close;
     }
     const cv = (x) => g && x != null ? x * ratio : null;
+    X.g = g; X.ratio = ratio;
     const flip = cv(g && g.flip), cw = cv(g && g.callWall), pw = cv(g && g.putWall);
     const regime = g ? (g.total > 0 ? "positive" : "negative") : null;
     const nearFlip = flip != null && Math.abs(price - flip) <= (adr ? adr * 0.08 : price * 1e-3);
@@ -2556,6 +2560,344 @@ async function cfPack(w, news) {
   return { ...base, title: w.pack === "trend" ? "Trend following" : w.pack === "levels" ? "Price levels" : "Key levels", ready: cards.filter((c) => c.status === "go").length, of: 4, cards, levels: L, fmtNote: "Levels from daily and 1-minute data." };
 }
 
+// api/cfmap.js: the "View" map for each strategy, plus history, backtest and Monte Carlo
+var CB_PRODUCT = { "BTC-USD": "BTC-USD", "ETH-USD": "ETH-USD", "SOL-USD": "SOL-USD" };
+function cfFind(q) {
+  const prof = parseProfile(q.p);
+  const pack = String(q.pack || ""), m = String(q.m || "");
+  for (const x of prof) for (const s of x.strats) if ((CF_PACK[s] || "general") === pack && (!m || x.m === m)) return { m: x.m, s, pack, assets: x.assets };
+  const x = prof.find((y) => y.m === m) || prof[0] || { m: "futures", assets: [] };
+  return { m: x.m, s: "unsure", pack: pack || "general", assets: x.assets };
+}
+async function cbTrades(product, pages = 5) {
+  const all = [];
+  let after = null;
+  for (let i = 0; i < pages; i++) {
+    const url = `https://api.exchange.coinbase.com/products/${product}/trades?limit=1000${after ? "&after=" + after : ""}`;
+    const page = await getJSON(url);
+    if (!Array.isArray(page) || !page.length) break;
+    all.push(...page);
+    after = page[page.length - 1].trade_id;
+  }
+  return all.map((t) => ({ t: Date.parse(t.time), p: +t.price, q: +t.size, buy: t.side === "sell" })).filter((t) => isFinite(t.p)).sort((a, b) => a.t - b.t);
+}
+function cfAgg(m1, mins) {
+  const out = [];
+  for (const b of m1) {
+    const k = Math.floor(b.t / (mins * 6e4)) * mins * 6e4;
+    const last = out[out.length - 1];
+    const rng = Math.max(b.h - b.l, 1e-9);
+    const est = (b.v || 0) * Math.max(-1, Math.min(1, (b.c - b.o) / rng));
+    if (last && last.t === k) { last.h = Math.max(last.h, b.h); last.l = Math.min(last.l, b.l); last.c = b.c; last.v += b.v || 0; last.d += est; }
+    else out.push({ t: k, o: b.o, h: b.h, l: b.l, c: b.c, v: b.v || 0, d: est });
+  }
+  return out;
+}
+async function build18(q = {}) {
+  const w = cfFind(q);
+  w.capture = {};
+  const { res } = await settle({ cal: memo("calendar", 6e4, () => build()), rel: build16().catch(() => null) });
+  const news = cfNews(res.cal, res.rel);
+  const pk = await cfPack(w, news);
+  const X = w.capture.x;
+  const inst = X.inst;
+  const out = { pack: w.pack, m: w.m, s: w.s, title: pk.title, inst: pk.inst, price: pk.price, state: pk.state, levels: pk.levels, regime: pk.regime || null, setup: pk.setup || null, updated: Date.now() };
+  const daily = w.pack === "trend" || w.pack === "levels" && !X.bars.m1.length;
+  if (daily) {
+    const d = X.bars.d1.slice(-130);
+    const closes = X.bars.d1.map((b) => b.c);
+    const emaSeries = (n) => { const k = 2 / (n + 1); let e = null; const s = []; closes.forEach((c, i) => { e = i < n ? (i === n - 1 ? closes.slice(0, n).reduce((a, b) => a + b, 0) / n : null) : c * k + e * (1 - k); s.push(e); }); return s.slice(-130); };
+    out.chart = { tf: "1d", bars: d.map((b) => [b.t, b.o, b.h, b.l, b.c, b.v || 0]), lines: [{ name: "20-day EMA", pts: emaSeries(20), color: "acc" }, { name: "50-day EMA", pts: emaSeries(50), color: "amber" }] };
+    return out;
+  }
+  // intraday: from the prior session's 9:30 (or the last 36 hours for FX and crypto)
+  const startT = X.prior && !inst.fx && !inst.crypto ? X.prior.bars[0].t : Date.now() - 36 * 36e5;
+  const m1 = X.bars.m1.filter((b) => b.t >= startT);
+  const bars = cfAgg(m1, 5);
+  out.chart = { tf: "5m", bars: bars.map((b) => [b.t, b.o, b.h, b.l, b.c, b.v, b.d]) };
+  // sessions to shade
+  const days = [...new Set(m1.map((b) => b.n.date))];
+  const at = (date, mins) => { const b = m1.find((x) => x.n.date === date && x.n.mins >= mins); return b ? b.t : null; };
+  const endAt = (date, mins) => { const bs = m1.filter((x) => x.n.date === date && x.n.mins < mins); return bs.length ? bs[bs.length - 1].t : null; };
+  out.chart.sessions = [];
+  for (const d of days) {
+    const add = (name, a, b) => { const f = at(d, a), t = endAt(d, b); if (f && t && t > f) out.chart.sessions.push({ name, from: f, to: t }); };
+    if (w.pack === "ict") { add("Asia", 1200, 1440); add("London", 120, 300); add("New York AM", 570, 660); }
+    else if (!inst.fx && !inst.crypto) add(w.pack === "orderflow" ? "Your window" : "US session", w.pack === "orderflow" ? 575 : 570, w.pack === "orderflow" ? 690 : 960);
+  }
+  out.chart.events = news.map((e) => ({ t: e.time, name: e.name || e.title, impact: e.impact, actual: e.actual }));
+  if (X.vp) out.profile = { session: X.prior && X.prior.date, poc: X.vp.poc, vah: X.vp.vah, val: X.vp.val, bins: X.vp.bins };
+  if (w.pack === "indicators") {
+    const today = m1.filter((b) => b.n.date === ny(Date.now()).date && (inst.fx || inst.crypto || b.n.mins >= 570));
+    const src = today.length ? today : X.prior ? X.prior.bars : [];
+    let pv = 0, vv = 0;
+    const vw = [];
+    for (const b of src) { const tp = (b.h + b.l + b.c) / 3, v = b.v || 1; pv += tp * v; vv += v; if (b.n.mi % 5 === 4 || b === src[src.length - 1]) vw.push([b.t, pv / vv]); }
+    out.chart.lines = [{ name: "VWAP", series: vw, color: "acc" }];
+    const closes = X.bars.d1.map((b) => b.c), rs = [];
+    for (let i = 60; i <= closes.length; i++) rs.push([X.bars.d1[i - 1].t, cfRsi(closes.slice(Math.max(0, i - 120), i))]);
+    out.rsi = rs.slice(-60);
+  }
+  if ((w.pack === "orderflow" || w.pack === "options") && X.g) {
+    const r = X.ratio || 1;
+    out.gex = { und: X.g.und, regime: X.g.total > 0 ? "positive" : "negative", flip: X.g.flip != null ? X.g.flip * r : null, callWall: X.g.callWall * r, putWall: X.g.putWall * r, strikes: X.g.strikes.map(([k, c, p]) => [k * r, c, p]), expMove: X.g.expMove != null ? X.g.expMove * r : null };
+  }
+  if (w.pack === "orderflow" || w.pack === "options" || w.pack === "ict" || w.pack === "general" || w.pack === "levels") {
+    if (inst.crypto && CB_PRODUCT[inst.sym]) {
+      try {
+        const tr = await memo("cbt:" + inst.sym, 15e3, () => cbTrades(inst.sym));
+        const bucket = (X.step || 1) / 4;
+        const mins = new Map();
+        for (const t of tr) {
+          const k = Math.floor(t.t / 6e4) * 6e4;
+          const m = mins.get(k) || { t: k, buy: 0, sell: 0, rows: new Map() };
+          if (t.buy) m.buy += t.q; else m.sell += t.q;
+          const pb = Math.floor(t.p / bucket) * bucket;
+          const r = m.rows.get(pb) || [0, 0];
+          r[t.buy ? 1 : 0] += t.q;
+          m.rows.set(pb, r);
+          mins.set(k, m);
+        }
+        const list = [...mins.values()].sort((a, b) => a.t - b.t).slice(-30);
+        let cvd = 0;
+        out.flow = { real: true, source: "Coinbase trades (real buyer and seller side)", bucket, bars: list.map((m) => { cvd += m.buy - m.sell; return { t: m.t, buy: m.buy, sell: m.sell, cvd, rows: [...m.rows.entries()].sort((a, b) => b[0] - a[0]).map(([p, [s2, b2]]) => [p, s2, b2]) }; }), trades: tr.length };
+      } catch (e) { out.flow = { real: false, error: "Coinbase trades unavailable right now" }; }
+    } else {
+      let cvd = 0;
+      out.flow = { real: false, source: inst.fx ? "Forex has no central volume, so delta can't be measured." : "Estimated from 1-minute candles (real futures order flow needs paid exchange data).", bars: bars.map((b) => { cvd += b.d; return { t: b.t, delta: b.d, cvd }; }), estimated: !inst.fx };
+    }
+  }
+  return out;
+}
+
+// ---------- history: stats, backtest, Monte Carlo ----------
+function cfDays(bars5) {
+  const by = new Map();
+  for (const b of bars5) {
+    const n = ny(b.t);
+    if (!by.has(n.date)) by.set(n.date, []);
+    by.get(n.date).push({ ...b, n });
+  }
+  return [...by.entries()].map(([date, bs]) => ({ date, all: bs, rth: bs.filter((b) => b.n.mins >= 570 && b.n.mins < 960) })).filter((d) => d.rth.length > 20);
+}
+function cfRunTrade(bars, i0, side, entry, stop, target, cost) {
+  const risk = Math.abs(entry - stop);
+  if (!(risk > 0)) return null;
+  for (let i = i0 + 1; i < bars.length; i++) {
+    const b = bars[i];
+    if (b.n.mins >= 955) return { exit: b.c, why: "time", r: (side * (b.c - entry) - cost) / risk, i };
+    const hitStop = side > 0 ? b.l <= stop : b.h >= stop;
+    const hitTgt = side > 0 ? b.h >= target : b.l <= target;
+    if (hitStop) return { exit: stop, why: "stop", r: (-risk - cost) / risk, i };
+    if (hitTgt) return { exit: target, why: "target", r: (Math.abs(target - entry) - cost) / risk, i };
+  }
+  const last = bars[bars.length - 1];
+  return { exit: last.c, why: "time", r: (side * (last.c - entry) - cost) / risk, i: bars.length - 1 };
+}
+function cfSummary(trades) {
+  const rs = trades.map((t) => t.r);
+  const wins = rs.filter((r) => r > 0), losses = rs.filter((r) => r <= 0);
+  let eq = 0, peak = 0, dd = 0, streak = 0, worst = 0;
+  for (const r of rs) { eq += r; peak = Math.max(peak, eq); dd = Math.min(dd, eq - peak); streak = r <= 0 ? streak + 1 : 0; worst = Math.max(worst, streak); }
+  const sum = (a) => a.reduce((x, y) => x + y, 0);
+  return { n: rs.length, winRate: rs.length ? wins.length / rs.length : null, avgWin: wins.length ? sum(wins) / wins.length : null, avgLoss: losses.length ? sum(losses) / losses.length : null, expectancy: rs.length ? sum(rs) / rs.length : null, totalR: sum(rs), maxDD: dd, worstStreak: worst, profitFactor: losses.length && sum(losses) !== 0 ? sum(wins) / -sum(losses) : null };
+}
+function cfMonteCarlo(rs, nTrades = 100, sims = 3e3) {
+  if (rs.length < 5) return null;
+  let seed = 12345;
+  const rnd = () => (seed = seed * 16807 % 2147483647) / 2147483647;
+  const finals = [], dds = [], streaks = [];
+  const pathsAt = Array.from({ length: nTrades + 1 }, () => []);
+  const samples = [];
+  for (let s = 0; s < sims; s++) {
+    let eq = 0, peak = 0, dd = 0, st = 0, worst = 0;
+    const path = [0];
+    pathsAt[0].push(0);
+    for (let i = 1; i <= nTrades; i++) {
+      const r = rs[Math.floor(rnd() * rs.length)];
+      eq += r; peak = Math.max(peak, eq); dd = Math.min(dd, eq - peak);
+      st = r <= 0 ? st + 1 : 0; worst = Math.max(worst, st);
+      pathsAt[i].push(eq);
+      if (s < 12) path.push(eq);
+    }
+    finals.push(eq); dds.push(dd); streaks.push(worst);
+    if (s < 12) samples.push(path);
+  }
+  const pct = (a, p) => { const b = [...a].sort((x, y) => x - y); return b[Math.min(b.length - 1, Math.floor(p * b.length))]; };
+  return {
+    sims, nTrades,
+    final: { p5: pct(finals, 0.05), p50: pct(finals, 0.5), p95: pct(finals, 0.95) },
+    maxDD: { p50: pct(dds, 0.5), p5: pct(dds, 0.05) },
+    worstStreak: { p50: pct(streaks, 0.5), p95: pct(streaks, 0.95) },
+    pLoss: finals.filter((f) => f < 0).length / sims,
+    band: pathsAt.filter((_, i) => i % 5 === 0 || i === nTrades).map((a, j) => [Math.min(j * 5, nTrades), pct(a, 0.05), pct(a, 0.5), pct(a, 0.95)]),
+    samples
+  };
+}
+async function build19(q = {}) {
+  const w = cfFind(q);
+  const inst = cfInst(w.m, w.assets);
+  const out = { pack: w.pack, inst: { id: inst.id, short: inst.short, dp: inst.dp }, stats: [], updated: Date.now() };
+  const pctTxt = (a, b) => b ? `${Math.round(a / b * 100)}%` : "—";
+  if (w.pack === "trend" || w.pack === "options") {
+    const d1 = (await yahooChart(inst.sym, { interval: "1d", range: "2y" })).bars;
+    if (w.pack === "trend") {
+      let up = 0, upOk = 0, dn = 0, dnOk = 0;
+      for (let i = 21; i < d1.length - 5; i++) {
+        const hi20 = Math.max(...d1.slice(i - 20, i).map((b) => b.h)), lo20 = Math.min(...d1.slice(i - 20, i).map((b) => b.l));
+        if (d1[i].c > hi20) { up++; if (d1[i + 5].c > d1[i].c) upOk++; }
+        if (d1[i].c < lo20) { dn++; if (d1[i + 5].c < d1[i].c) dnOk++; }
+      }
+      out.stats.push({ name: "20-day breakouts up that kept going", value: pctTxt(upOk, up), n: `${upOk} of ${up} breakouts, 2 years`, detail: "Close above the 20-day high, then a higher close 5 days later." });
+      out.stats.push({ name: "20-day breakdowns that kept going", value: pctTxt(dnOk, dn), n: `${dnOk} of ${dn} breakdowns, 2 years`, detail: "Close below the 20-day low, then a lower close 5 days later." });
+    } else {
+      const vix = (await yahooChart("^VIX", { interval: "1d", range: "2y" })).bars;
+      const vByDay = new Map(vix.map((b) => [ny(b.t).date, b.c]));
+      let n = 0, inside = 0;
+      for (let i = 1; i < d1.length; i++) {
+        const v = vByDay.get(ny(d1[i - 1].t).date);
+        if (!v) continue;
+        const em = d1[i - 1].c * v / 100 / Math.sqrt(252);
+        n++; if (Math.abs(d1[i].c - d1[i - 1].c) <= em) inside++;
+      }
+      out.stats.push({ name: "Days that closed inside the expected move", value: pctTxt(inside, n), n: `${inside} of ${n} days, 2 years`, detail: "Expected move from the prior day's VIX. Around 68% is what options price in; higher means options tend to overprice moves." });
+    }
+    return out;
+  }
+  const c5 = await yahooChart(inst.sym, { interval: "5m", range: "60d" });
+  const bars5 = c5.bars;
+  const days = cfDays(bars5);
+  if (days.length < 5) return { ...out, note: "Not enough history for this market." };
+  const tick = inst.dp >= 2 ? 0.25 : 1;
+  const cost = inst.fx || inst.crypto ? 0 : tick * 2;
+  const step = inst.dp >= 2 ? 0.25 : 1;
+  let openIn = 0, openInBal = 0, openOut = 0, backIn = 0, backInCross = 0, vahT = 0, vahH = 0, valT = 0, valH = 0, onHiT = 0, onLoT = 0, onN = 0, pdhT = 0, pdlT = 0, ranges = [];
+  let lonSweep = 0, nyLon = 0, ictN = 0, vwSame = 0, vwN = 0, crosses = 0;
+  const btA = [], btB = [], btI = [];
+  const adrs = days.map((d) => hi(d.rth) - lo(d.rth));
+  for (let i = 1; i < days.length; i++) {
+    const d = days[i], p = days[i - 1];
+    const vp = cfProfile(p.rth, step);
+    if (!vp) continue;
+    const rth = d.rth, open = rth[0].o, close = rth[rth.length - 1].c;
+    const adr = adrs.slice(Math.max(0, i - 5), i).reduce((a, b) => a + b, 0) / Math.min(5, i);
+    ranges.push(hi(rth) - lo(rth));
+    const inside = (x) => x >= vp.val && x <= vp.vah;
+    if (inside(open)) { openIn++; if (inside(close)) openInBal++; }
+    else {
+      openOut++;
+      const hr = rth.filter((b) => b.n.mins < 630);
+      const back = hr.find((b) => inside(b.c));
+      if (back) { backIn++; const after = rth.slice(rth.indexOf(back)); if (open > vp.vah ? lo(after) <= vp.val : hi(after) >= vp.vah) backInCross++; }
+    }
+    const touch = (lv, fromAbove) => {
+      const k = rth.findIndex((b) => b.l <= lv && b.h >= lv);
+      if (k < 0) return null;
+      const nxt = rth.slice(k, k + 6);
+      const brk = nxt.some((b) => fromAbove ? b.c < lv - adr * 0.05 : b.c > lv + adr * 0.05);
+      return !brk;
+    };
+    if (open < vp.vah) { const t = touch(vp.vah, false); if (t != null) { vahT++; if (t) vahH++; } }
+    if (open > vp.val) { const t = touch(vp.val, true); if (t != null) { valT++; if (t) valH++; } }
+    const on = d.all.filter((b) => b.n.mins < 570).concat(p.all.filter((b) => b.n.mins >= 1080));
+    if (on.length > 10) { onN++; const oh = hi(on), ol = lo(on); if (hi(rth) > oh) onHiT++; if (lo(rth) < ol) onLoT++; }
+    if (hi(rth) > hi(p.rth)) pdhT++;
+    if (lo(rth) < lo(p.rth)) pdlT++;
+    // ICT
+    const asia = p.all.filter((b) => b.n.mins >= 1200), lon = d.all.filter((b) => b.n.mins >= 120 && b.n.mins < 300), nyam = rth.filter((b) => b.n.mins < 660);
+    if (asia.length > 6 && lon.length > 6) {
+      ictN++;
+      if (hi(lon) > hi(asia) || lo(lon) < lo(asia)) lonSweep++;
+      if (nyam.length && (hi(nyam) > hi(lon) || lo(nyam) < lo(lon))) nyLon++;
+      // ICT sweep and reclaim backtest: London high/low swept in 9:35-11:00, 5m close back inside, 2R target
+      const LH = hi(lon), LL = lo(lon);
+      let doneS = false, doneL = false;
+      for (let k = 0; k < rth.length; k++) {
+        const b = rth[k];
+        if (b.n.mins < 575 || b.n.mins >= 660) continue;
+        if (!doneS && b.h > LH && b.c < LH) { const stop = b.h + tick * 2, risk = stop - b.c; const t = cfRunTrade(rth, k, -1, b.c, stop, b.c - 2 * risk, cost); if (t) { btI.push({ date: d.date, setup: "ICT sweep", side: "short", entry: b.c, stop, ...t }); doneS = true; } }
+        if (!doneL && b.l < LL && b.c > LL) { const stop = b.l - tick * 2, risk = b.c - stop; const t = cfRunTrade(rth, k, 1, b.c, stop, b.c + 2 * risk, cost); if (t) { btI.push({ date: d.date, setup: "ICT sweep", side: "long", entry: b.c, stop, ...t }); doneL = true; } }
+      }
+    }
+    // VWAP stats
+    let pv = 0, vv = 0, side10 = null, prevSide = null, cr = 0;
+    for (const b of rth) { const tp = (b.h + b.l + b.c) / 3, v = b.v || 1; pv += tp * v; vv += v; const vw = pv / vv, sd = b.c >= vw; if (prevSide != null && sd !== prevSide) cr++; prevSide = sd; if (b.n.mins === 600) side10 = sd; }
+    if (side10 != null) { vwN++; if ((close >= pv / vv) === side10) vwSame++; crosses += cr; }
+    // Setup A: failed auction at the edge of value
+    let exU = null, exD = null, doneA1 = false, doneA2 = false;
+    for (let k = 0; k < rth.length; k++) {
+      const b = rth[k];
+      if (b.n.mins >= 690) break;
+      if (b.h > vp.vah) exU = Math.max(exU ?? -Infinity, b.h);
+      if (b.l < vp.val) exD = Math.min(exD ?? Infinity, b.l);
+      if (b.n.mins < 575) continue;
+      if (!doneA1 && exU != null && b.c < vp.vah && b.c > vp.poc) { const t = cfRunTrade(rth, k, -1, b.c, exU + tick * 2, vp.poc, cost); if (t) { btA.push({ date: d.date, setup: "Setup A", side: "short", entry: b.c, stop: exU + tick * 2, ...t }); doneA1 = true; } }
+      if (!doneA2 && exD != null && b.c > vp.val && b.c < vp.poc) { const t = cfRunTrade(rth, k, 1, b.c, exD - tick * 2, vp.poc, cost); if (t) { btA.push({ date: d.date, setup: "Setup A", side: "long", entry: b.c, stop: exD - tick * 2, ...t }); doneA2 = true; } }
+    }
+    // Setup B: break of the overnight range, first pullback that holds, 2R target
+    if (on.length > 10) {
+      const oh = hi(on), ol = lo(on);
+      let brkU = false, brkD = false, doneB1 = false, doneB2 = false;
+      for (let k = 0; k < rth.length; k++) {
+        const b = rth[k];
+        if (b.n.mins < 575) { if (b.c > oh) brkU = true; if (b.c < ol) brkD = true; continue; }
+        if (b.n.mins >= 690) break;
+        if (!doneB1 && brkU && b.l <= oh + adr * 0.03 && b.c > oh) { const stop = Math.min(b.l, oh) - tick * 2, risk = b.c - stop; const t = cfRunTrade(rth, k, 1, b.c, stop, b.c + 2 * risk, cost); if (t) { btB.push({ date: d.date, setup: "Setup B", side: "long", entry: b.c, stop, ...t }); doneB1 = true; } }
+        if (!doneB2 && brkD && b.h >= ol - adr * 0.03 && b.c < ol) { const stop = Math.max(b.h, ol) + tick * 2, risk = stop - b.c; const t = cfRunTrade(rth, k, -1, b.c, stop, b.c - 2 * risk, cost); if (t) { btB.push({ date: d.date, setup: "Setup B", side: "short", entry: b.c, stop, ...t }); doneB2 = true; } }
+        if (b.c > oh) brkU = true;
+        if (b.c < ol) brkD = true;
+      }
+    }
+  }
+  const n = days.length - 1, avgR = ranges.reduce((a, b) => a + b, 0) / (ranges.length || 1);
+  const fmt = (x) => x == null ? "—" : Number(x).toLocaleString("en-US", { maximumFractionDigits: inst.dp });
+  const S = (name, a, b, detail) => out.stats.push({ name, value: pctTxt(a, b), n: `${a} of ${b} days`, detail });
+  out.period = `${days[1].date} to ${days[days.length - 1].date}`;
+  out.days = n;
+  if (w.pack === "ict") {
+    S("London took out an Asia high or low", lonSweep, ictN, "Asia session 8 PM–midnight, London 2–5 AM, New York time.");
+    S("New York AM took out a London high or low", nyLon, ictN, "9:30–11:00 AM.");
+    S("Prior day high taken", pdhT, n, "During the US session.");
+    S("Prior day low taken", pdlT, n, "During the US session.");
+    out.stats.push({ name: "Average US-session range", value: fmt(avgR), n: `${n} days`, detail: "High minus low, 9:30 AM–4 PM." });
+  } else if (w.pack === "indicators") {
+    S("Closed on the same side of VWAP as at 10 AM", vwSame, vwN, "A quick read on whether the morning's VWAP side holds.");
+    out.stats.push({ name: "VWAP crosses per day", value: (crosses / Math.max(1, vwN)).toFixed(1), n: `${vwN} days`, detail: "5-minute closes switching sides of VWAP during the US session. More crosses means choppier days." });
+    out.stats.push({ name: "Average US-session range", value: fmt(avgR), n: `${n} days`, detail: "" });
+  } else if (w.pack === "news") {
+    const byWd = {};
+    days.slice(1).forEach((d, i) => { const wd = new Date(d.date + "T12:00:00Z").toLocaleDateString("en-US", { weekday: "long", timeZone: "UTC" }); (byWd[wd] = byWd[wd] || []).push(ranges[i]); });
+    for (const wd of ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]) if (byWd[wd]) out.stats.push({ name: `Average range on ${wd}s`, value: fmt(byWd[wd].reduce((a, b) => a + b, 0) / byWd[wd].length), n: `${byWd[wd].length} days`, detail: wd === "Thursday" ? "Jobless claims come out every Thursday at 8:30 AM." : "" });
+  } else {
+    S("Opened inside value and stayed a range day", openInBal, openIn, "Opened inside yesterday's value area and closed inside it.");
+    S("Opened outside value, came back inside in the first hour", backIn, openOut, "The failed-move setup behind Setup A.");
+    S("…and then reached the other side of value", backInCross, backIn, "After coming back inside, price traveled to the opposite edge.");
+    S("Value area high held on first touch", vahH, vahT, "Touched from below and didn't close clearly above within 30 minutes.");
+    S("Value area low held on first touch", valH, valT, "Touched from above and didn't close clearly below within 30 minutes.");
+    S("Overnight high taken in the US session", onHiT, onN, "");
+    S("Overnight low taken in the US session", onLoT, onN, "");
+    S("Prior day high taken", pdhT, n, "");
+    S("Prior day low taken", pdlT, n, "");
+    out.stats.push({ name: "Average US-session range", value: fmt(avgR), n: `${n} days`, detail: "High minus low, 9:30 AM–4 PM." });
+  }
+  const bt = w.pack === "orderflow" || w.pack === "levels" || w.pack === "general" ? [...btA, ...btB] : w.pack === "ict" ? btI : [];
+  if (bt.length && !inst.fx && !inst.crypto) {
+    bt.sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
+    const groups = w.pack === "ict" ? { "ICT sweep and reclaim": btI } : { "Setup A": btA, "Setup B": btB };
+    out.backtest = {
+      rules: w.pack === "ict" ? "Short when a 5-minute candle sweeps the London high and closes back below it between 9:35 and 11:00 AM (long for the London low). Stop 2 ticks past the sweep, target 2R, otherwise out at 3:55 PM."
+        : "Setup A: price pushes beyond yesterday's value area, then a 5-minute candle closes back inside (9:35–11:30 AM). Stop 2 ticks past the extreme, target the POC. Setup B: the overnight range breaks, then the first pullback that holds the broken level (9:35–11:30). Stop 2 ticks past the pullback, target 2R. Exits at 3:55 PM if neither is hit.",
+      costs: cost ? `${cost} points per trade (commission and slippage)` : "none",
+      limits: w.pack === "orderflow" ? "Uses 5-minute candles, so the footprint trigger and the gamma regime filter aren't applied: gamma history isn't free, and footprint needs tick data. Treat it as the baseline your filters have to beat." : "Uses 5-minute candles.",
+      all: cfSummary(bt), by: Object.fromEntries(Object.entries(groups).map(([k, v]) => [k, cfSummary(v)])),
+      equity: (() => { let e = 0; return bt.map((t) => [t.date, e += t.r]); })(),
+      trades: bt.slice(-40).reverse().map((t) => ({ date: t.date, setup: t.setup, side: t.side, entry: t.entry, stop: t.stop, exit: t.exit, why: t.why, r: +t.r.toFixed(2) })),
+      monteCarlo: cfMonteCarlo(bt.map((t) => t.r), 100)
+    };
+  }
+  return out;
+}
+
 // api/_lib/router.js
 var ROUTES = {
   calendar: [() => build(), 900],
@@ -2573,6 +2915,8 @@ var ROUTES = {
   ticks: [(q) => build15(q), 2],
   results: [(q) => build16(q.date), 5],
   confluences: [(q) => build17(q), 30],
+  cfmap: [(q) => build18(q), 15],
+  cfhist: [(q) => build19(q), 3600],
   memedesk: [(q) => build14(q), hasAI() ? 600 : 180],
   explain: [(q) => build12(q), 86400]
 };
