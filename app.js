@@ -6,6 +6,7 @@ import {
   userTZ,
 } from './me.js';
 import { GLOSSARY } from './glossary.js';
+import { SUPABASE_URL, SUPABASE_KEY } from './config.js';
 
 const $ = s => document.querySelector(s);
 const main = $('#main');
@@ -500,7 +501,7 @@ function storyItem(i, { why = true, explain = false, fy: showFy = true, mark = n
     <a class="t" href="${esc(i.link)}" target="_blank" rel="noopener">${esc(i.title)}</a>
     ${showWhy ? `<div class="why">${esc(i.why)}</div>` : ''}
     ${fy ? `<div class="fy"><b>For you</b>${esc(fy)}</div>` : ''}
-    <div class="meta">${i.breaking ? '<span class="brk">Breaking</span>' : ''}<span class="imp ${esc(i.impact || 'low')}">${i.impact === 'high' ? 'Big story' : i.impact === 'medium' ? 'Notable' : 'Minor'}</span><span>${esc(SECTION_NAMES[i.section] || i.themeLabel || '')}</span><span>${esc(i.source)}${i.count > 1 ? ` and ${i.count - 1} more` : ''}</span><span>${ago(i.time)}</span>${reactTxt(i.reaction)}
+    <div class="meta">${i.breaking ? '<span class="brk">Breaking</span>' : ''}<span class="imp ${esc(i.impact || 'low')}">${i.impact === 'high' ? 'Big story' : i.impact === 'medium' ? 'Notable' : 'Minor'}</span><span>${esc(SECTION_NAMES[i.section] || i.themeLabel || '')}</span><span>${esc(i.source)}${(i.outlets || i.count) > 1 ? ` and ${(i.outlets || i.count) - 1} more` : i.impact === 'high' && i.confirmed === false ? ' only <span class="unconf" title="Only one outlet has this so far">not yet confirmed</span>' : ''}</span><span>${ago(i.time)}</span>${reactTxt(i.reaction)}
       ${explain ? `<button class="linkbtn wi-x" data-x="${esc(i.id)}" aria-expanded="false">Explain this</button>` : ''}</div>
     ${explain ? `<div class="wi-explain" id="x-${esc(i.id)}" hidden></div>` : ''}</li>`;
 }
@@ -535,7 +536,7 @@ function bindExplain(root, items) {
     explainOpen.add(id); box.hidden = false; b.textContent = 'Hide explanation'; b.setAttribute('aria-expanded', 'true');
     box.innerHTML = skel(2);
     api(explainURL(item), 864e5).then(x => {
-      box.innerHTML = `<dl class="xp"><dt>What happened</dt><dd>${esc(x.what)}</dd><dt>Why markets care</dt><dd>${esc(x.why)}</dd><dt>How markets reacted</dt><dd>${esc(x.reaction)}</dd>${x.for_you ? `<dt>For you</dt><dd><mark>${esc(x.for_you)}</mark></dd>` : ''}</dl>`;
+      box.innerHTML = `<dl class="xp"><dt>What happened</dt><dd>${esc(x.what)}</dd><dt>Why markets care</dt><dd>${esc(x.why)}</dd><dt>How markets reacted</dt><dd>${esc(x.reaction)}</dd>${x.for_you ? `<dt>For you</dt><dd><mark>${esc(x.for_you)}</mark></dd>` : ''}</dl><p class="aifoot">Source: ${esc(item.source || 'unknown')}${x.source === 'ai' ? ' · Summary written by AI, fact-checked against the headline' : ''} · ${reportBtn(item.title, item.link, 'news')}</p>`;
     }).catch(e => { box.innerHTML = errBox('the explanation', e.message); });
   });
 }
@@ -601,6 +602,33 @@ function guideHTML() {
       <li><b>Go deeper in your tab</b>Tabs with a blue dot are your markets. Each opens with its own briefing. Stuck on a word? Try the <a href="/glossary">Glossary</a>.</li>
     </ol></section>`;
 }
+// Where a story came from, and whether more than one outlet has it
+function srcLine(b) {
+  const list = (b.sources && b.sources.length ? b.sources : [b.source]).filter(Boolean);
+  if (list.length > 1) return `<span title="${esc(list.join(', '))}">${esc(list[0])} and ${list.length - 1} more</span>`;
+  return `${esc(list[0] || '')}${b.confirmed === false ? ' <span class="unconf" title="Only one outlet has this so far. Calls on it count half in the overall summary.">Reported by one outlet so far</span>' : ''}`;
+}
+// ---------- report a mistake ----------
+function reportBtn(headline, link, page) { return `<button class="linkbtn rep" type="button" data-rep="${esc(page)}" data-h="${esc(String(headline || '').slice(0, 300))}" data-l="${esc(String(link || '').slice(0, 1000))}">Report a mistake</button>`; }
+document.addEventListener('click', e => {
+  const b = e.target.closest && e.target.closest('[data-rep]'); if (!b) return;
+  const host = b.parentElement; if (host.querySelector('.repform')) { host.querySelector('.repform').remove(); return; }
+  const f = document.createElement('form'); f.className = 'repform';
+  f.innerHTML = `<label class="sr" for="rp-${host.dataset.k || ''}">What’s wrong?</label><textarea rows="2" maxlength="1000" placeholder="What’s wrong? For example: the price is off, the story is old, or the call makes no sense." required></textarea><div class="repbar"><button class="btn-primary sm" type="submit">Send</button><button class="linkbtn" type="button" data-cancel>Cancel</button><span class="repmsg" aria-live="polite"></span></div>`;
+  host.appendChild(f); f.querySelector('textarea').focus();
+  f.querySelector('[data-cancel]').onclick = () => f.remove();
+  f.onsubmit = async ev => {
+    ev.preventDefault();
+    const msg = f.querySelector('.repmsg'), text = f.querySelector('textarea').value.trim();
+    if (text.length < 3) { msg.textContent = 'Add a few words about what’s wrong.'; return; }
+    f.querySelector('[type=submit]').disabled = true; msg.textContent = 'Sending…';
+    try {
+      const r = await fetch(`${SUPABASE_URL}/rest/v1/open_reports`, { method: 'POST', headers: { apikey: SUPABASE_KEY, Authorization: 'Bearer ' + SUPABASE_KEY, 'Content-Type': 'application/json', Prefer: 'return=minimal' }, body: JSON.stringify({ headline: b.dataset.h, link: b.dataset.l, page: b.dataset.rep, problem: text }) });
+      if (!r.ok) throw new Error(r.status);
+      f.innerHTML = '<p class="repok">Thanks. We’ll check it and fix it.</p>'; setTimeout(() => f.remove(), 4000);
+    } catch { msg.textContent = 'Couldn’t send right now. Try again in a minute.'; f.querySelector('[type=submit]').disabled = false; }
+  };
+});
 const DIR_TXT = { up: '↑ Likely up', down: '↓ Likely down', mixed: '↕ Unclear' };
 // The trading session the briefing is for: today until the 4 PM ET close, then the next weekday
 const US_HOLIDAYS = new Set(['2026-11-26', '2026-12-25', '2027-01-01', '2027-01-18', '2027-02-15', '2027-03-26', '2027-05-31', '2027-06-18', '2027-07-05', '2027-09-06', '2027-11-25', '2027-12-24']);
@@ -616,7 +644,7 @@ function sessionDay(t = Date.now()) {
 function bottomLine(list) {
   const m = {};
   list.forEach((b, i) => {
-    const w = [3, 2, 1][i] || 1, seen = new Set();
+    const w = ([3, 2, 1][i] || 1) * (b.confirmed === false ? 0.5 : 1), seen = new Set();
     (b.effects || []).forEach(e => {
       const k = e.label; if (!k || seen.has(k)) return; seen.add(k);
       const x = m[k] = m[k] || { label: k, score: 0, w: 0, up: 0, down: 0, mixed: 0 };
@@ -627,7 +655,7 @@ function bottomLine(list) {
   if (!rows.length) return '';
   const call = x => { const r = x.score / x.w; return r >= 0.5 ? ['up', '↑ Most likely up'] : r >= 0.2 ? ['up', '↗ Leaning up'] : r <= -0.5 ? ['down', '↓ Most likely down'] : r <= -0.2 ? ['down', '↘ Leaning down'] : ['', '↕ No clear direction']; };
   const count = x => [x.up && `${x.up} up`, x.down && `${x.down} down`, x.mixed && `${x.mixed} unclear`].filter(Boolean).join(' · ');
-  return `<li class="bsum"><p class="bsum-h">Overall summary</p>${rows.map(x => { const [c, t] = call(x); return `<div class="bsum-r"><span class="pill ${c}"><b>${esc(x.label)}</b> ${t}</span><span class="br">${count(x)} across the ${list.length > 1 ? list.length + ' stories' : 'story'} for ${esc(sessionDay().day)}’s session</span></div>`; }).join('')}<p class="bsum-n">Weighs each story’s usual market reaction, with the top story counting most. A lean, not a promise.</p></li>`;
+  return `<li class="bsum"><p class="bsum-h">Overall summary</p>${rows.map(x => { const [c, t] = call(x); return `<div class="bsum-r"><span class="pill ${c}"><b>${esc(x.label)}</b> ${t}</span><span class="br">${count(x)} across the ${list.length > 1 ? list.length + ' stories' : 'story'} for ${esc(sessionDay().day)}’s session</span></div>`; }).join('')}<p class="bsum-n">Weighs each story’s usual market reaction, with the top story counting most and stories only one outlet has reported counting half. A lean, not a promise.</p></li>`;
 }
 function briefingHTML(d, { empty = 'No major stories for this market right now.' } = {}) {
   const list = d.briefing || [];
@@ -639,12 +667,13 @@ function briefingHTML(d, { empty = 'No major stories for this market right now.'
     <span class="bn">${String(i + 1).padStart(2, '0')}</span>
     <div class="bb">
       <a class="bh" href="${esc(b.link)}" target="_blank" rel="noopener">${esc(b.headline)}</a>
-      <p class="bm">${esc(b.source || '')}${b.time ? ' · ' + ago(b.time) : ''}${b.topic ? ' · ' + esc(b.topic) : ''}</p>
+      <p class="bm">${srcLine(b)}${b.time ? ' · ' + ago(b.time) : ''}${b.topic ? ' · ' + esc(b.topic) : ''}</p>
       ${showWhy && b.why ? `<p class="bwhy">${esc(b.why)}</p>` : ''}
       <div class="brow"><span class="bl">Likely effect</span><div>${b.effects && b.effects.length ? b.effects.map(e => `<div class="beff"><span class="pill ${e.dir === 'up' ? 'up' : e.dir === 'down' ? 'down' : ''}"><b>${esc(e.label)}</b> ${DIR_TXT[e.dir] || ''}</span><span class="br">${esc(e.reason)}</span></div>`).join('') : '<span class="br">Little direct effect on your markets.</span>'}</div></div>
       <div class="brow"><span class="bl">Watch next</span><div><span class="br">${esc(b.watch)}</span></div></div>
       ${b.since ? `<div class="brow"><span class="bl">Already moved</span><div>${reactTxt(b.since)}</div></div>` : ''}
-    </div></li>`; }).join('') + `<li class="bnote">“Likely” is the usual reaction to news like this, not a promise. Check “Already moved” to see what price actually did.</li>`;
+      <div class="bfoot">${reportBtn(b.headline, b.link, 'briefing')}</div>
+    </div></li>`; }).join('') + `<li class="bnote">“Likely” is the usual reaction to news like this, not a promise. Check “Already moved” to see what price actually did, and the <a href="/scorecard">scorecard</a> for how past calls turned out.</li>`;
 }
 const FIT_CLASS = { 'Lines up well': 'up', 'Big day for this': 'acc', 'Use caution': 'warn', 'Poor fit today': 'down' };
 function nextHTML(d) {
@@ -789,6 +818,7 @@ PAGES.today = () => {
 // ---------- News ----------
 PAGES.news = () => {
   const f = store.get('newsFilter', { market: 'all', impact: 'all', topic: '', mine: true });
+  const wasRefresh = refreshing;
   layout(`<h1 class="page-h">News</h1>
     <p class="page-intro">Every market-moving story from <span id="srcCount">dozens of</span> sources, grouped when several outlets report the same thing, with how prices moved since it broke. Stories that touch your markets are marked <mark>for you</mark>.</p>
     <div class="chips" role="group" aria-label="Market"><span class="chips-label">Market</span>${[['all', 'Everything'], ['futures', 'Stocks and futures'], ['forex', 'Forex'], ['crypto', 'Crypto'], ['memes', 'Memecoins']].map(([k, l]) => `<button class="chip" data-mk="${k}" aria-pressed="${f.market === k}">${l}</button>`).join('')}</div>
@@ -801,12 +831,12 @@ PAGES.news = () => {
   main.querySelectorAll('[data-tp]').forEach(b => b.onclick = () => { f.topic = b.dataset.tp; rer(); });
   main.querySelectorAll('[data-im]').forEach(b => b.onclick = () => { f.impact = b.dataset.im; rer(); });
   $('#mineFirst').onclick = () => { f.mine = !f.mine; rer(); };
-  const P = api('wire?section=' + f.market, 60e3);
+  const P = api('wire?section=' + f.market, 25e3);
   P.then(d => {
     const sc = $('#srcCount'); if (sc) sc.textContent = d.sources;
     const seen = store.get('newsSeen', []);
     const fresh = d.items.filter(i => !seen.includes(i.id)).length;
-    if (refreshing && fresh && seen.length) { const nb = $('#newBar'); if (nb) { nb.hidden = false; nb.textContent = `${fresh} new ${fresh === 1 ? 'story' : 'stories'} added`; } }
+    if (wasRefresh && fresh && seen.length) { const nb = $('#newBar'); if (nb) { nb.hidden = false; nb.textContent = `${fresh} new ${fresh === 1 ? 'story' : 'stories'} added`; } }
     store.set('newsSeen', d.items.map(i => i.id).slice(0, 150));
   }).catch(() => {});
   const shut = !['crypto', 'memes'].includes(f.market) && allShut(f.market === 'all' ? myMarkets() : [f.market]);
@@ -1285,6 +1315,42 @@ PAGES.glossary = () => {
   draw();
 };
 
+// ---------- Scorecard: how the "Likely up / down" calls actually turned out ----------
+const CALL_NAME = { NQ: 'Nasdaq futures (NQ)', BTC: 'Bitcoin', EURUSD: 'EUR/USD' };
+const RES_TXT = { right: 'Right', wrong: 'Wrong', flat: 'Barely moved', pending: 'Waiting' };
+function hitRate(t) { const n = t.right + t.wrong; return n ? Math.round(t.right / n * 100) : null; }
+function scoreTile(label, t, sub) {
+  const r = hitRate(t), n = t.right + t.wrong;
+  return `<div class="sc-tile"><p class="sc-l">${esc(label)}</p><p class="sc-big">${r == null ? '—' : r + '%'}</p><p class="sc-sub">${n ? `${t.right} right, ${t.wrong} wrong` : 'Not enough graded calls yet'}${t.flat ? ` · ${t.flat} barely moved` : ''}${t.pending ? ` · ${t.pending} waiting` : ''}</p><div class="sc-bar" aria-hidden="true"><i class="up" style="width:${n ? t.right / (n + t.flat) * 100 : 0}%"></i><i class="down" style="width:${n ? t.wrong / (n + t.flat) * 100 : 0}%"></i></div>${sub ? `<p class="sc-note">${esc(sub)}</p>` : ''}</div>`;
+}
+function gradeCell(g) {
+  if (!g || g.result === 'pending') return `<span class="gr pending">Waiting</span>`;
+  const mv = g.moved != null ? `${g.moved > 0 ? '+' : g.moved < 0 ? '−' : ''}${g.unit === '$' ? '$' : ''}${num(Math.abs(g.moved), g.unit === 'pts' ? 2 : 0)}${g.unit === 'pts' ? ' pts' : g.unit === 'pips' ? ' pips' : ''}` : '';
+  return `<span class="gr ${g.result}">${RES_TXT[g.result]}</span><small>${mv}</small>`;
+}
+PAGES.scorecard = () => {
+  layout(`<h1 class="page-h">Scorecard</h1>
+    <p class="page-intro">Every “Likely up” and “Likely down” call in the briefing is saved the moment it’s made, with the price at that time. We check it against what price actually did an hour later and at the 4 PM New York close. Nothing is deleted, so the misses stay here too.</p>
+    <div id="scBody">${skel(3)}</div>`);
+  fill('scBody', 'the scorecard', api('calls', 5 * 60e3), d => {
+    if (!d.ready) return `<div class="sc-empty"><p><b>The scorecard is being set up.</b> Calls will start showing here once tracking is switched on.</p></div>`;
+    if (!d.total) return `<div class="sc-empty"><p><b>No calls logged yet.</b> The first ones appear the next time the briefing makes an up or down call.</p></div>`;
+    const s = d.summary;
+    return `<div class="sc-tiles">${scoreTile('Right after 1 hour', s.hour)}${scoreTile('Right at the close', s.close)}</div>
+      <p class="sc-fine">Last ${d.days} days, ${d.total} calls. “Barely moved” means price moved less than a normal hourly wiggle (0.1% for NQ, 0.3% for Bitcoin, 0.05% for EUR/USD), so it isn’t counted either way. Calls made while a market is closed are checked from when it reopens.</p>
+      ${d.byMarket.length > 1 ? `<h2 class="sec">By market</h2><div class="sc-mk">${d.byMarket.map(b => `<div class="sc-mrow"><b>${esc(CALL_NAME[b.market] || b.market)}</b><span>1 hour: ${hitRate(b.hour) == null ? '—' : hitRate(b.hour) + '%'} <small>(${b.hour.right + b.hour.wrong} graded)</small></span><span>Close: ${hitRate(b.close) == null ? '—' : hitRate(b.close) + '%'} <small>(${b.close.right + b.close.wrong} graded)</small></span></div>`).join('')}</div>` : ''}
+      <h2 class="sec">Latest calls</h2>
+      <div class="sc-list" role="table" aria-label="Latest calls">
+        <div class="sc-row sc-head" role="row"><span role="columnheader">Call</span><span role="columnheader">Story</span><span role="columnheader">After 1 hour</span><span role="columnheader">At the close</span></div>
+        ${d.calls.map(c => `<div class="sc-row" role="row">
+          <span role="cell"><span class="pill ${c.dir}"><b>${esc(c.market === 'EURUSD' ? 'EUR/USD' : c.market)}</b> ${c.dir === 'up' ? '↑ Likely up' : '↓ Likely down'}</span><small>${new Date(c.time).toLocaleDateString('en-US', { timeZone: TZ, month: 'short', day: 'numeric' })}, ${fmtTime(c.time)}${c.price != null ? ` · at ${num(c.price, c.market === 'EURUSD' ? 4 : c.market === 'BTC' ? 0 : 2)}` : ''}</small></span>
+          <span role="cell" class="sc-story"><a href="${esc(c.link)}" target="_blank" rel="noopener">${esc(c.headline)}</a><small>${esc(c.source || '')}${c.outlets > 1 ? ` and ${c.outlets - 1} more` : ' · one outlet'}</small></span>
+          <span role="cell" class="sc-g">${gradeCell(c.hour)}</span>
+          <span role="cell" class="sc-g">${gradeCell(c.close)}</span></div>`).join('')}
+      </div>${stamp(d)}`;
+  });
+};
+
 // ---------- router ----------
 const ALIASES = { movers: 'markets', memecoins: 'memes', economy: 'calendar' };
 const SLUG = { memes: 'memecoins' };
@@ -1381,6 +1447,12 @@ function mStatus() {
 }
 setInterval(() => { if (document.visibilityState === 'visible') mStatus(); }, 1000);
 
+// Headlines: check for new stories every 30 seconds on the News page
+setInterval(() => {
+  if (!started || document.visibilityState !== 'visible' || document.body.classList.contains('locked') || main.dataset.page !== 'news') return;
+  [...cache.keys()].filter(k => String(k).startsWith('wire')).forEach(k => cache.delete(k));
+  route(true);
+}, 30e3);
 // Refresh data every two minutes without reloading charts
 setInterval(() => {
   if (!started || document.visibilityState !== 'visible' || document.body.classList.contains('locked')) return;
