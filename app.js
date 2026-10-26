@@ -595,13 +595,23 @@ function guideHTML() {
     <h2>How to use The Open One</h2>
     <p>Everything is built around one question: what’s happening in the world, and what will it likely do to the market you trade?</p>
     <ol>
-      <li><b>Read Today’s briefing</b>The 3 stories that matter most for you, what they’ll likely do to your market, and what to watch next.</li>
+      <li><b>Read the briefing</b>The 3 stories that matter most for you, what they’ll likely do to your market, and what to watch next.</li>
       <li><b>Check your prices</b>Your markets and a live chart sit right next to the briefing.</li>
       <li><b>See what’s going to happen next</b>The most likely path for your markets, and a game plan for the strategies you use.</li>
       <li><b>Go deeper in your tab</b>Tabs with a blue dot are your markets. Each opens with its own briefing. Stuck on a word? Try the <a href="/glossary">Glossary</a>.</li>
     </ol></section>`;
 }
 const DIR_TXT = { up: '↑ Likely up', down: '↓ Likely down', mixed: '↕ Unclear' };
+// The trading session the briefing is for: today until the 4 PM ET close, then the next weekday
+const US_HOLIDAYS = new Set(['2026-11-26', '2026-12-25', '2027-01-01', '2027-01-18', '2027-02-15', '2027-03-26', '2027-05-31', '2027-06-18', '2027-07-05', '2027-09-06', '2027-11-25', '2027-12-24']);
+function sessionDay(t = Date.now()) {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: MKT_TZ, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hourCycle: 'h23' }).formatToParts(new Date(t)).map(x => [x.type, x.value]));
+  let d = new Date(Date.UTC(+p.year, +p.month - 1, +p.day, 12));
+  const ok = x => x.getUTCDay() % 6 !== 0 && !US_HOLIDAYS.has(x.toISOString().slice(0, 10));
+  if (!ok(d) || +p.hour >= 16) { do d = new Date(d.getTime() + 864e5); while (!ok(d)); }
+  const today = new Date(Date.UTC(+p.year, +p.month - 1, +p.day, 12));
+  return { isToday: d.getTime() === today.getTime(), long: d.toLocaleDateString('en-US', { timeZone: 'UTC', weekday: 'long', month: 'short', day: 'numeric' }), day: d.toLocaleDateString('en-US', { timeZone: 'UTC', weekday: 'long' }) };
+}
 // Overall summary: add up what the stories say for each market. The top story counts most.
 function bottomLine(list) {
   const m = {};
@@ -617,7 +627,7 @@ function bottomLine(list) {
   if (!rows.length) return '';
   const call = x => { const r = x.score / x.w; return r >= 0.5 ? ['up', '↑ Most likely up'] : r >= 0.2 ? ['up', '↗ Leaning up'] : r <= -0.5 ? ['down', '↓ Most likely down'] : r <= -0.2 ? ['down', '↘ Leaning down'] : ['', '↕ No clear direction']; };
   const count = x => [x.up && `${x.up} up`, x.down && `${x.down} down`, x.mixed && `${x.mixed} unclear`].filter(Boolean).join(' · ');
-  return `<li class="bsum"><p class="bsum-h">Overall summary</p>${rows.map(x => { const [c, t] = call(x); return `<div class="bsum-r"><span class="pill ${c}"><b>${esc(x.label)}</b> ${t}</span><span class="br">${count(x)} across today’s ${list.length > 1 ? list.length + ' stories' : 'story'}</span></div>`; }).join('')}<p class="bsum-n">Weighs each story’s usual market reaction, with the top story counting most. A lean, not a promise.</p></li>`;
+  return `<li class="bsum"><p class="bsum-h">Overall summary</p>${rows.map(x => { const [c, t] = call(x); return `<div class="bsum-r"><span class="pill ${c}"><b>${esc(x.label)}</b> ${t}</span><span class="br">${count(x)} across the ${list.length > 1 ? list.length + ' stories' : 'story'} for ${esc(sessionDay().day)}’s session</span></div>`; }).join('')}<p class="bsum-n">Weighs each story’s usual market reaction, with the top story counting most. A lean, not a promise.</p></li>`;
 }
 function briefingHTML(d, { empty = 'No major stories for this market right now.' } = {}) {
   const list = d.briefing || [];
@@ -740,7 +750,7 @@ PAGES.today = () => {
     <h1 class="page-h">${esc(greeting())}</h1>
     <p class="page-intro" id="todayIntro">${isLearning() ? 'Here’s how today’s news connects to the markets you’re learning about.' : ws.text ? esc(ws.text) : 'Here’s what matters for your markets today.'}</p>
     <div class="front">
-      <section class="briefing"><div class="sec-row"><h2 class="sec">Today’s briefing</h2><a href="/news">All news</a></div><ol class="bfeed" id="bfeed">${'<li>' + skel(3) + '</li>'}</ol></section>
+      <section class="briefing"><div class="sec-row"><h2 class="sec">Briefing for ${esc(sessionDay().long)}</h2><a href="/news">All news</a></div><ol class="bfeed" id="bfeed">${'<li>' + skel(3) + '</li>'}</ol></section>
       <aside class="rail">
         <section id="myPrices"></section>
         <section class="rail-chart"><div class="chart-h"><h2 class="sec">Live chart</h2></div><div class="chips tight" id="todayChartPick"></div><div id="todayChart" class="tvbox"></div></section>
