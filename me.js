@@ -7,10 +7,23 @@ const ls = {
   get(k, d) { try { const v = localStorage.getItem('open:' + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
   set(k, v) { try { localStorage.setItem('open:' + k, JSON.stringify(v)); } catch {} },
 };
-const TZ = 'America/New_York';
+const TZ = 'America/New_York'; // market hours always run on New York time
+// The reader's display time zone (Settings → Time zone). 'auto' follows this device.
+export const TZ_LIST = [
+  ['auto', 'Automatic (this device)'], ['America/New_York', 'Eastern (New York)'], ['America/Chicago', 'Central (Chicago)'],
+  ['America/Denver', 'Mountain (Denver)'], ['America/Phoenix', 'Arizona (Phoenix)'], ['America/Los_Angeles', 'Pacific (Los Angeles)'],
+  ['America/Anchorage', 'Alaska (Anchorage)'], ['Pacific/Honolulu', 'Hawaii (Honolulu)'], ['America/Toronto', 'Toronto'],
+  ['America/Sao_Paulo', 'São Paulo'], ['Europe/London', 'London'], ['Europe/Berlin', 'Central Europe (Berlin, Paris)'],
+  ['Africa/Lagos', 'Lagos'], ['Asia/Dubai', 'Dubai'], ['Asia/Kolkata', 'India (Kolkata)'], ['Asia/Singapore', 'Singapore'],
+  ['Asia/Hong_Kong', 'Hong Kong'], ['Asia/Tokyo', 'Tokyo'], ['Australia/Sydney', 'Sydney'],
+];
+const deviceTZ = () => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/New_York'; } catch { return 'America/New_York'; } };
+export const tzChoice = () => ls.get('tz', 'America/New_York');
+export const userTZ = () => { const c = tzChoice(); return c === 'auto' ? deviceTZ() : c; };
+export function setTZ(v) { ls.set('tz', v); window.dispatchEvent(new Event('open:tz')); }
 const nyMins = t => { const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date(t)).map(x => [x.type, x.value])); return +p.hour * 60 + +p.minute; };
 const nyDate = t => new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(new Date(t));
-const fmtTime = t => new Date(t).toLocaleTimeString('en-US', { timeZone: TZ, hour: 'numeric', minute: '2-digit' });
+const fmtTime = t => new Date(t).toLocaleTimeString('en-US', { timeZone: userTZ(), hour: 'numeric', minute: '2-digit', timeZoneName: 'short' });
 const fmtM = m => { m = ((m % 1440) + 1440) % 1440; const h = Math.floor(m / 60), mi = m % 60, ap = h >= 12 ? 'PM' : 'AM'; return `${h % 12 || 12}${mi ? ':' + String(mi).padStart(2, '0') : ''} ${ap}`; };
 const list = a => a.length <= 1 ? (a[0] || '') : a.slice(0, -1).join(', ') + ' and ' + a[a.length - 1];
 const opt = (id, label, sub) => ({ id, label, sub });
@@ -631,10 +644,12 @@ function openMenu() {
     <p class="am-sum">${esc(profileSummary() || 'No markets picked yet')}</p>
     <button class="am-item" id="amEdit">Edit my setup</button>
     <button class="am-item" id="amAlerts">Alerts</button>
+    <label class="am-tz" for="amTz"><span>Time zone</span><select id="amTz">${TZ_LIST.map(([v, l]) => `<option value="${v}" ${v === tzChoice() ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label>
     ${me.user ? '<button class="am-item danger" id="amOut">Sign out</button>' : ''}`;
   m.hidden = false;
   $('#amEdit').onclick = () => { m.hidden = true; editSetup(); };
   $('#amAlerts').onclick = () => { m.hidden = true; openAlerts(); };
+  $('#amTz').onchange = e => setTZ(e.target.value);
   if ($('#amOut')) $('#amOut').onclick = async () => { m.hidden = true; await sb.auth.signOut(); };
 }
 document.addEventListener('click', e => { const m = $('#acctMenu'); if (m && !m.hidden && !e.target.closest('#acctMenu,#acctBtn')) m.hidden = true; });

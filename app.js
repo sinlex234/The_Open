@@ -3,12 +3,16 @@ import {
   initMe, me, myMarkets, myAssets, isBeginner, isLearning, depth, hasStrat, levelTrader, intraday, stratsFor,
   forYouEvent, forYouHeadline, forYouStrength, relevance, greeting, windowStatus, startAlerts, openAlerts, editSetup,
   profileQuery, marketLabel, myStruggles, isProp, newsRestricted, notify,
+  userTZ,
 } from './me.js';
 import { GLOSSARY } from './glossary.js';
 
 const $ = s => document.querySelector(s);
 const main = $('#main');
-const TZ = 'America/New_York';
+const MKT_TZ = 'America/New_York'; // market hours
+let TZ = userTZ();               // what the reader sees (Settings → Time zone)
+const tzAbbr = (t = Date.now()) => (new Intl.DateTimeFormat('en-US', { timeZone: TZ, timeZoneName: 'short' }).formatToParts(new Date(t)).find(x => x.type === 'timeZoneName') || {}).value || '';
+const tzCity = () => TZ.split('/').pop().replace(/_/g, ' ');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 // ---------- per-viewer conveniences ----------
@@ -91,7 +95,7 @@ function exchState(x) {
 }
 function tick() {
   const now = new Date();
-  $('#mastDate').innerHTML = `${now.toLocaleDateString('en-US', { timeZone: TZ, weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}<br><b>${now.toLocaleTimeString('en-US', { timeZone: TZ, hour: 'numeric', minute: '2-digit' })}</b> in New York`;
+  $('#mastDate').innerHTML = `${now.toLocaleDateString('en-US', { timeZone: TZ, weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}<br><b>${now.toLocaleTimeString('en-US', { timeZone: TZ, hour: 'numeric', minute: '2-digit' })}</b> in ${esc(tzCity())}`;
   $('#exchanges').innerHTML = EXCH.map(x => { const s = exchState(x); return `<li class="${s.open ? 'open' : ''}" title="${esc(s.tip)}">${esc(x.name)}</li>`; }).join('');
 }
 
@@ -274,7 +278,7 @@ function tvWidget(el, kind, cfg, height) {
 const TFS = [['1', '1m', 1], ['5', '5m', 5], ['60', '1h', 60], ['240', '4h', 240], ['D', '1D', 1440]];
 const chartTf = () => { const v = store.get('chartTf', null); return TFS.some(t => t[0] === v) ? v : (intraday() ? '5' : 'D'); };
 function nyOffset(t) {
-  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: TZ, year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', hourCycle: 'h23' }).formatToParts(new Date(t)).map(x => [x.type, x.value]));
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: MKT_TZ, year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', hourCycle: 'h23' }).formatToParts(new Date(t)).map(x => [x.type, x.value]));
   return Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute) - Math.floor(t / 60e3) * 60e3;
 }
 function marketKind(sym) {
@@ -327,7 +331,7 @@ function closedHTML(reopen, label = 'The market') {
   const left = reopen - Date.now(), h = Math.floor(left / 36e5), m = Math.floor(left % 36e5 / 6e4);
   const day = new Date(reopen).toLocaleDateString('en-US', { timeZone: TZ, weekday: 'long' });
   return `<div class="closed"><p class="closed-h"><span class="closed-dot"></span>No news. ${esc(label)} is closed.</p>
-    <p>Reopens ${esc(day)} at ${fmtTime(reopen)} ET, in ${h ? h + 'h ' : ''}${m}m. The briefing comes back before the open.</p>
+    <p>Reopens ${esc(day)} at ${fmtTime(reopen)} ${tzAbbr(reopen)}, in ${h ? h + 'h ' : ''}${m}m. The briefing comes back before the open.</p>
     <button class="linkbtn" type="button" data-weekend>Show weekend headlines anyway</button></div>`;
 }
 function bindWeekend() { main.querySelectorAll('[data-weekend]').forEach(b => b.onclick = () => { try { sessionStorage.setItem('weekendNews', '1'); } catch {} refreshing = false; route(); }); }
@@ -424,7 +428,7 @@ function releasedHTML() {
     const cls = r.dir === 'up' ? 'up' : r.dir === 'down' ? 'down' : '';
     return `<article class="rel" data-key="${esc(r.key)}">
       <button class="x rel-x" aria-label="Hide this result">×</button>
-      <p class="rel-top"><span class="rel-live"></span>Just released · ${fmtTime(r.time)} ET · ${esc(r.country)}</p>
+      <p class="rel-top"><span class="rel-live"></span>Just released · ${fmtTime(r.time)} ${tzAbbr(r.time)} · ${esc(r.country)}</p>
       <h2 class="rel-h">${esc(r.name || r.title)}</h2>
       <div class="rel-nums"><div><small>Actual</small><b class="${cls}">${esc(r.actual)}</b></div>${r.forecast ? `<div><small>Forecast</small><b>${esc(r.forecast)}</b></div>` : ''}${r.previous ? `<div><small>Previous</small><b>${esc(r.previous)}</b></div>` : ''}${r.label ? `<div class="rel-lab"><span class="pill ${cls || 'acc'}">${esc(r.label)}</span></div>` : ''}</div>
       ${r.text ? `<p class="rel-text">${esc(r.text)}</p>` : ''}
@@ -783,7 +787,7 @@ PAGES.news = () => {
     const who = f.market === 'all' ? (myMarkets().length > 1 ? 'Your markets are' : `The ${SHUT_NAME[myMarkets()[0]] || ''} market is`) : f.market === 'futures' ? 'The stock and futures market is' : 'The forex market is';
     const day = new Date(shut).toLocaleDateString('en-US', { timeZone: TZ, weekday: 'long' });
     const nb = document.createElement('div'); nb.className = 'closed closed-note';
-    nb.innerHTML = `<p class="closed-h"><span class="closed-dot"></span>${esc(who)} closed for the weekend.</p><p>Reopens ${esc(day)} at ${fmtTime(shut)} ET. Prices won’t react to these stories until then, so anything big here can show up as a gap at the open.</p>`;
+    nb.innerHTML = `<p class="closed-h"><span class="closed-dot"></span>${esc(who)} closed for the weekend.</p><p>Reopens ${esc(day)} at ${fmtTime(shut)} ${tzAbbr(shut)}. Prices won’t react to these stories until then, so anything big here can show up as a gap at the open.</p>`;
     const wl = $('#wireList'); if (wl && !main.querySelector('.closed-note')) wl.before(nb);
   }
   fill('wireList', 'the news', P, d => {
@@ -1139,7 +1143,7 @@ PAGES.calendar = () => {
   const today = nyParts().date, ws = weekStart(today);
   const from = f.week === 'next' ? addDay(ws, 7) : ws, to = addDay(from, 6);
   layout(`<h1 class="page-h">Calendar</h1>
-    <p class="page-intro">Every economic event for the week in one table. The color shows how much it usually moves the market. Times are New York time. Tap an event to see what it is.</p>
+    <p class="page-intro">Every economic event for the week in one table. The color shows how much it usually moves the market. Times are ${esc(tzCity())} time (${esc(tzAbbr())}); change it in your account menu. Tap an event to see what it is.</p>
     <div class="chips" role="group" aria-label="Week"><span class="chips-label">Week</span><button class="chip" data-wk="this" aria-pressed="${f.week !== 'next'}">This week</button><button class="chip" data-wk="next" aria-pressed="${f.week === 'next'}">Next week</button></div>
     <div class="chips" role="group" aria-label="Impact"><span class="chips-label">Impact</span>${['High', 'Medium', 'Low', 'Holiday'].map(k => `<button class="chip ffchip" data-fi="${k}" aria-pressed="${f.imp.includes(k)}">${ffIcon(k)}${k === 'Holiday' ? 'Holiday / other' : k}</button>`).join('')}</div>
     <div class="chips" role="group" aria-label="Currency"><span class="chips-label">Currency</span>${FF_CCY.map(c => `<button class="chip" data-fc="${c}" aria-pressed="${f.ccy.includes(c)}">${c}</button>`).join('')}</div>
@@ -1153,17 +1157,19 @@ PAGES.calendar = () => {
   fill('ff', 'the calendar', P, ([d, ...res]) => {
     const act = {}; res.flat().forEach(r => { if (r.actual) act[r.key] = r; });
     const ev = d.events.filter(e => { const k = nyParts(e.time).date; return k >= from && k <= to && f.imp.includes(impOf(e)) && (f.ccy.includes(e.country) || !FF_CCY.includes(e.country)); });
-    if (!ev.length) return `<p class="empty">${f.week === 'next' && !d.events.some(e => nyParts(e.time).date >= from) ? 'Next week’s calendar isn’t out yet. It’s usually posted over the weekend.' : 'Nothing matches those filters. Try adding more currencies or impact levels.'}</p>`;
+    if (!ev.length && f.week === 'next' && !d.events.some(e => nyParts(e.time).date >= from)) return '<p class="empty">Next week’s calendar isn’t out yet. It’s usually posted over the weekend.</p>';
     const now = Date.now(), nextT = (ev.find(e => e.time > now && !e.allDay) || {}).time;
     let lastDay = '', lastT = null;
-    const rows = ev.map(e => {
-      const k = nyParts(e.time).date, newDay = k !== lastDay, imp = impOf(e);
+    const dayHead = k => { const dd = new Date(k + 'T12:00:00Z'); return `<div class="ff-day${k === today ? ' today' : ''}"><b>${dd.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' })}</b> ${dd.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })}${k === today ? ' <span class="pill acc">Today</span>' : ''}</div>`; };
+    const byDay = {}; ev.forEach(e => { const k = nyParts(e.time).date; (byDay[k] = byDay[k] || []).push(e); });
+    const shown = days.filter(k => byDay[k] || k === today || ![0, 6].includes(new Date(k + 'T12:00:00Z').getUTCDay()));
+    const rows = shown.map(k => byDay[k] ? byDay[k].map(e => {
+      const newDay = k !== lastDay, imp = impOf(e);
       const showT = newDay || e.time !== lastT; lastDay = k; lastT = e.time;
       const r = act[`${e.country}|${e.title}|${e.time}`];
       const past = e.time < now - 60e3 && !e.allDay, isNext = e.time === nextT;
-      const dd = new Date(k + 'T12:00:00Z');
       const body = [e.what ? `<p>${esc(e.what)}</p>` : '', e.why ? `<p>${esc(e.why)}</p>` : '', e.note ? `<p class="note">${esc(e.note)}</p>` : '', r && r.text ? `<p><b>${esc(r.label || '')}.</b> ${esc(r.text)}</p>` : ''].join('');
-      return `${newDay ? `<div class="ff-day${k === today ? ' today' : ''}"><b>${dd.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' })}</b> ${dd.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })}${k === today ? '<span class="pill acc">Today</span>' : ''}</div>` : ''}
+      return `${newDay ? dayHead(k) : ''}
         <details class="ff-row${past ? ' past' : ''}${isNext ? ' next' : ''}${imp === 'High' ? ' hi' : ''}"><summary>
           <span class="ff-t">${showT ? (e.allDay ? 'All day' : fmtTime(e.time).replace(' ', '').toLowerCase()) : ''}</span>
           <span class="ff-c">${esc(e.country)}</span>
@@ -1173,7 +1179,7 @@ PAGES.calendar = () => {
           <span class="ff-v" data-l="Forecast">${esc(e.forecast || (r && r.forecast) || '')}</span>
           <span class="ff-v" data-l="Previous">${esc((e.previous || '').split('|')[0])}</span></span>
         </summary>${body ? `<div class="ff-body">${body}</div>` : ''}</details>`;
-    }).join('');
+    }).join('') : `${dayHead(k)}<div class="ff-none">${d.events.some(e => nyParts(e.time).date === k) ? 'Nothing for your filters' : 'No events scheduled'}</div>`).join('');
     return `<div class="ff-legend">${['High', 'Medium', 'Low', 'Holiday'].map(k => `<span>${ffIcon(k)}${IMP[k][1]}</span>`).join('')}<span><b class="ff-a good">Green</b> / <b class="ff-a bad">red</b> actual: better or worse than forecast for that currency</span></div>
       <div class="ff-table" role="table"><div class="ff-head" role="row"><span>Time</span><span>Cur.</span><span>Impact</span><span>Event</span><span>Actual</span><span>Forecast</span><span>Previous</span></div>${rows}</div>${stamp(d)}`;
   });
@@ -1283,6 +1289,7 @@ initMe(() => {
   api('calendar', 10 * 60e3).then(d => { calendarCache = d.events; }).catch(() => {});
   startAlerts({ calendar: () => calendarCache, wire: () => api('wire?section=all', 60e3).then(d => d.items), levels: levelRows });
 });
+addEventListener('open:tz', () => { TZ = userTZ(); cache.clear(); refreshing = false; tick(); mStatus(); route(); });
 addEventListener('open:profile', () => { orderTabs(); mountStrip(); cache.clear(); route(); });
 // ---------- market status line: open or closed, where prices are from, next update ----------
 function mStatus() {
@@ -1290,7 +1297,7 @@ function mStatus() {
   const mk = myMarkets().filter(m => m !== 'learning');
   const reopen = allShut(mk);
   const next = fmtLeft(lastRefresh + 120e3 - Date.now());
-  const upd = `<span>Updated ${fmtTime(lastRefresh)} ET</span><span class="ms-next">Next update in ${next}</span>`;
+  const upd = `<span>Updated ${fmtTime(lastRefresh)} ${tzAbbr()}</span><span class="ms-next">Next update in ${next}</span>`;
   if (reopen) {
     const names = [...new Set(mk.map(m => MS_NAME[m]).filter(Boolean))];
     const who = names.length > 2 ? 'Your markets' : names.join(' and ') || 'Markets';
@@ -1299,7 +1306,7 @@ function mStatus() {
     const day = new Date(reopen).toLocaleDateString('en-US', { timeZone: TZ, weekday: 'short' });
     const left = reopen - Date.now(), h = Math.floor(left / 36e5), m = Math.floor(left % 36e5 / 6e4);
     el.className = 'mstatus shut';
-    el.innerHTML = `<div class="wrap ms-row"><span class="ms-state"><i></i>${esc(who)} closed for the weekend</span><span>Prices from ${esc(fri)} close</span><span>Reopens ${esc(day)} ${fmtTime(reopen)} ET, in ${h ? h + 'h ' : ''}${m}m</span>${upd}</div>`;
+    el.innerHTML = `<div class="wrap ms-row"><span class="ms-state"><i></i>${esc(who)} closed for the weekend</span><span>Prices from ${esc(fri)} close</span><span>Reopens ${esc(day)} ${fmtTime(reopen)} ${tzAbbr(reopen)}, in ${h ? h + 'h ' : ''}${m}m</span>${upd}</div>`;
   } else {
     el.className = 'mstatus';
     el.innerHTML = `<div class="wrap ms-row"><span class="ms-state"><i></i>Markets open</span><span>Prices update live; futures and stocks can lag up to 15 min</span>${upd}</div>`;

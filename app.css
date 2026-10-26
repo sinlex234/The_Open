@@ -820,3 +820,9 @@ table.t,.mytable,.wm-g table{max-width:100%}
 .mstatus.shut .ms-state i{background:var(--ink-3);box-shadow:none}
 .ms-next{font-family:var(--mono);font-variant-numeric:tabular-nums}
 @media (max-width:640px){.ms-row{gap:2px 14px;font-size:12px}}
+
+/* calendar: a day with nothing on it */
+.ff-none{padding:11px 16px;font-size:13px;color:var(--ink-3);border-bottom:1px solid var(--rule)}
+/* account menu: time zone picker */
+.am-tz{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 8px;font:500 14px var(--sans);color:var(--ink)}
+.am-tz select{max-width:60%;font:500 13px var(--sans);color:var(--ink);background:var(--panel-2);border:1px solid var(--rule-2);border-radius:var(--r-sm);padding:6px 8px}
