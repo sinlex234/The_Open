@@ -602,13 +602,30 @@ function guideHTML() {
     </ol></section>`;
 }
 const DIR_TXT = { up: '↑ Likely up', down: '↓ Likely down', mixed: '↕ Unclear' };
+// Overall summary: add up what the stories say for each market. The top story counts most.
+function bottomLine(list) {
+  const m = {};
+  list.forEach((b, i) => {
+    const w = [3, 2, 1][i] || 1, seen = new Set();
+    (b.effects || []).forEach(e => {
+      const k = e.label; if (!k || seen.has(k)) return; seen.add(k);
+      const x = m[k] = m[k] || { label: k, score: 0, w: 0, up: 0, down: 0, mixed: 0 };
+      x.w += w; x.score += e.dir === 'up' ? w : e.dir === 'down' ? -w : 0; x[e.dir === 'up' ? 'up' : e.dir === 'down' ? 'down' : 'mixed']++;
+    });
+  });
+  const rows = Object.values(m).sort((a, b) => b.w - a.w).slice(0, 4);
+  if (!rows.length) return '';
+  const call = x => { const r = x.score / x.w; return r >= 0.5 ? ['up', '↑ Most likely up'] : r >= 0.2 ? ['up', '↗ Leaning up'] : r <= -0.5 ? ['down', '↓ Most likely down'] : r <= -0.2 ? ['down', '↘ Leaning down'] : ['', '↕ No clear direction']; };
+  const count = x => [x.up && `${x.up} up`, x.down && `${x.down} down`, x.mixed && `${x.mixed} unclear`].filter(Boolean).join(' · ');
+  return `<li class="bsum"><p class="bsum-h">Overall summary</p>${rows.map(x => { const [c, t] = call(x); return `<div class="bsum-r"><span class="pill ${c}"><b>${esc(x.label)}</b> ${t}</span><span class="br">${count(x)} across today’s ${list.length > 1 ? list.length + ' stories' : 'story'}</span></div>`; }).join('')}<p class="bsum-n">Weighs each story’s usual market reaction, with the top story counting most. A lean, not a promise.</p></li>`;
+}
 function briefingHTML(d, { empty = 'No major stories for this market right now.' } = {}) {
   const list = d.briefing || [];
   if (!list.length) return `<li class="empty">${esc(empty)}</li>`;
   const showWhy = isBeginner() || depth() === 'deep';
   const seenWhy = new Set();
   const group = effs => { const g = []; (effs || []).forEach(e => { const k = e.dir + '|' + e.reason; const f = g.find(x => x.k === k); if (f) f.label += ' · ' + e.label; else g.push({ ...e, k }); }); return g; };
-  return list.map((b, i) => { const dupWhy = b.why && seenWhy.has(b.why); if (b.why) seenWhy.add(b.why); b = { ...b, why: dupWhy ? '' : b.why, effects: group(b.effects) }; return `<li class="bc">
+  return bottomLine(list) + list.map((b, i) => { const dupWhy = b.why && seenWhy.has(b.why); if (b.why) seenWhy.add(b.why); b = { ...b, why: dupWhy ? '' : b.why, effects: group(b.effects) }; return `<li class="bc">
     <span class="bn">${String(i + 1).padStart(2, '0')}</span>
     <div class="bb">
       <a class="bh" href="${esc(b.link)}" target="_blank" rel="noopener">${esc(b.headline)}</a>

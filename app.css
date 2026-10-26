@@ -865,3 +865,12 @@ table.t,.mytable,.wm-g table{max-width:100%}
 .ff-fy-b b{color:var(--acc-2)}
 @media (max-width:980px){.cal-grid{grid-template-columns:minmax(0,1fr)}.cal-side{position:static}.mcal{max-width:420px}}
 @media (max-width:640px){.mcal{max-width:none}.mc-d{font-size:14px}}
+
+/* briefing: bottom line across all stories */
+.bsum{padding:16px 20px;border:1px solid var(--acc-line);border-radius:var(--r);background:var(--acc-bg);display:grid;gap:10px}
+.bsum-h{margin:0;font:500 11.5px var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--acc-2)}
+.bsum-r{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px}
+.bsum-r .pill{font-size:13.5px;padding:7px 12px}
+.bsum-r .pill b{font-weight:600}
+.bsum-r .br{font-size:13px;color:var(--ink-2)}
+.bsum-n{margin:0;font-size:12px;color:var(--ink-3)}
