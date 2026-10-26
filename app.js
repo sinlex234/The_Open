@@ -466,7 +466,7 @@ async function pollResults() {
         fast = (j.events || []).some(ev => !ev.actual && ev.time - now < 60e3 && now - ev.time < 30 * 60e3);
         results.loaded = true;
         renderReleased();
-        if (changed && started && ['today', 'economy', 'futures', 'forex'].includes(shownPage)) route(true);
+        if (changed && started && ['today', 'calendar', 'futures', 'forex'].includes(shownPage)) route(true);
       }
     }
   } catch {}
@@ -1099,28 +1099,6 @@ PAGES.options = () => {
   marketNews('oNews', 'options');
 };
 
-// ---------- Economy (calendar) ----------
-PAGES.economy = () => {
-  const mineCcy = [...new Set(['USD', ...myAssets().flatMap(a => a.ccy || [])])];
-  const f = store.get('calFilter2', { imp: ['High', 'Medium'], ccy: mineCcy });
-  const CCY = ['USD', 'EUR', 'GBP', 'JPY', 'CAD', 'AUD', 'NZD', 'CHF', 'CNY'];
-  layout(`<h1 class="page-h">Economy</h1>
-    <p class="page-intro">The big economic releases and central-bank events, explained in plain English. Open any event to see what it is and how markets usually react. For the full week at a glance, see the <a href="/calendar">Calendar</a>. Events that affect your markets are marked <mark>for you</mark>.</p>
-    <div class="chips" role="group" aria-label="Importance"><span class="chips-label">Show</span>${[['High', 'Big'], ['Medium', 'Medium'], ['Low', 'Small']].map(([k, l]) => `<button class="chip" data-imp="${k}" aria-pressed="${f.imp.includes(k)}">${l}</button>`).join('')}</div>
-    <div class="chips" role="group" aria-label="Countries"><span class="chips-label">Currency</span>${CCY.map(c => `<button class="chip" data-ccy="${c}" aria-pressed="${f.ccy.includes(c)}">${c}</button>`).join('')}</div>
-    <div id="calList"></div>`);
-  const rer = () => { store.set('calFilter2', f); refreshing = false; PAGES.economy(); };
-  main.querySelectorAll('[data-imp]').forEach(b => b.onclick = () => { const k = b.dataset.imp; f.imp = f.imp.includes(k) ? f.imp.filter(x => x !== k) : [...f.imp, k]; rer(); });
-  main.querySelectorAll('[data-ccy]').forEach(b => b.onclick = () => { const k = b.dataset.ccy; f.ccy = f.ccy.includes(k) ? f.ccy.filter(x => x !== k) : [...f.ccy, k]; rer(); });
-  fill('calList', 'the calendar', api('calendar', 10 * 60e3), d => {
-    const ev = d.events.filter(e => f.imp.includes(e.impact) && (f.ccy.includes(e.country) || (e.country === 'All' && f.imp.includes('Low'))));
-    if (!ev.length) return '<p class="empty">Nothing matches those filters. Try adding more currencies or sizes.</p>';
-    const days = {}; ev.forEach(e => { const k = nyParts(e.time).date; (days[k] = days[k] || []).push(e); });
-    const today = nyParts().date;
-    return Object.entries(days).filter(([k]) => k >= today || Object.keys(days).length < 4).map(([k, l]) => `<div class="cal-day"><h3>${esc(dayLabel(k))}</h3>${l.map(e => eventRow(e)).join('')}</div>`).join('') + stamp(d);
-  });
-};
-
 // ---------- Calendar: the whole week in one table, ForexFactory style ----------
 const IMP = { High: ['red', 'High impact'], Medium: ['orange', 'Medium impact'], Low: ['yellow', 'Low impact'], Holiday: ['grey', 'Holiday or non-economic'] };
 const impOf = e => IMP[e.impact] ? e.impact : 'Holiday';
@@ -1138,51 +1116,111 @@ function ffDayResults(date) {
   return p;
 }
 function ffIcon(imp) { const [c, t] = IMP[imp]; return `<span class="ffi ${c}" title="${t}" aria-label="${t}"><i></i><i></i><i></i></span>`; }
+// Which day the calendar is showing, and how (kept while you move around the site)
+const CAL = { sel: null, mode: 'week', month: null };
+const monthKey = ds => ds.slice(0, 7);
+const addMonth = (mk, n) => { const d = new Date(mk + '-01T12:00:00Z'); d.setUTCMonth(d.getUTCMonth() + n); return d.toISOString().slice(0, 7); };
+const ymd = ds => new Date(ds + 'T12:00:00Z');
+const dayFmt = (ds, o) => ymd(ds).toLocaleDateString('en-US', { timeZone: 'UTC', ...o });
+const IMP_RANK = { High: 3, Medium: 2, Low: 1, Holiday: 0 };
+
+function ffRow(e, act, today, now, nextT, showT) {
+  const imp = impOf(e), r = act[`${e.country}|${e.title}|${e.time}`];
+  const past = e.time < now - 60e3 && !e.allDay, isNext = e.time === nextT;
+  const fy = forYouEvent(e);
+  const body = [e.what ? `<p>${esc(e.what)}</p>` : '', e.why ? `<p>${esc(e.why)}</p>` : '', e.note ? `<p class="note">${esc(e.note)}</p>` : '', r && r.text ? `<p><b>${esc(r.label || '')}.</b> ${esc(r.text)}</p>` : '', fy ? `<p class="ff-fy-b"><b>For you:</b> ${esc(fy)}</p>` : ''].join('');
+  return `<details class="ff-row${past ? ' past' : ''}${isNext ? ' next' : ''}${imp === 'High' ? ' hi' : ''}"><summary>
+      <span class="ff-t">${showT ? (e.allDay ? 'All day' : fmtTime(e.time).replace(' ', '').toLowerCase()) : ''}</span>
+      <span class="ff-c">${esc(e.country)}</span>
+      <span class="ff-i">${ffIcon(imp)}</span>
+      <span class="ff-e">${esc(e.title)}${e.name && e.name !== e.title ? `<small>${esc(e.name)}</small>` : ''}${fy ? '<span class="ff-fy">For you</span>' : ''}</span>
+      <span class="ff-vals"><span class="ff-v ff-a ${r && r.ccyDir ? r.ccyDir : ''}" data-l="Actual">${r ? esc(r.actual) : ''}</span>
+      <span class="ff-v" data-l="Forecast">${esc(e.forecast || (r && r.forecast) || '')}</span>
+      <span class="ff-v" data-l="Previous">${esc((e.previous || '').split('|')[0])}</span></span>
+    </summary>${body ? `<div class="ff-body">${body}</div>` : ''}</details>`;
+}
+
 PAGES.calendar = () => {
-  const f = store.get('ffFilter', { week: 'this', imp: ['High', 'Medium', 'Low', 'Holiday'], ccy: FF_CCY.slice() });
-  const today = nyParts().date, ws = weekStart(today);
-  const from = f.week === 'next' ? addDay(ws, 7) : ws, to = addDay(from, 6);
+  const mine = [...new Set(['USD', ...myAssets().flatMap(a => a.ccy || [])])].filter(c => FF_CCY.includes(c));
+  const f = store.get('ffFilter', { imp: ['High', 'Medium', 'Low', 'Holiday'], ccy: mine.length ? mine : ['USD'] });
+  const today = nyParts().date;
+  if (!CAL.sel) { CAL.sel = today; CAL.month = monthKey(today); }
   layout(`<h1 class="page-h">Calendar</h1>
-    <p class="page-intro">Every economic event for the week in one table. The color shows how much it usually moves the market. Times are ${esc(tzCity())} time (${esc(tzAbbr())}); change it in your account menu. Tap an event to see what it is.</p>
-    <div class="chips" role="group" aria-label="Week"><span class="chips-label">Week</span><button class="chip" data-wk="this" aria-pressed="${f.week !== 'next'}">This week</button><button class="chip" data-wk="next" aria-pressed="${f.week === 'next'}">Next week</button></div>
-    <div class="chips" role="group" aria-label="Impact"><span class="chips-label">Impact</span>${['High', 'Medium', 'Low', 'Holiday'].map(k => `<button class="chip ffchip" data-fi="${k}" aria-pressed="${f.imp.includes(k)}">${ffIcon(k)}${k === 'Holiday' ? 'Holiday / other' : k}</button>`).join('')}</div>
-    <div class="chips" role="group" aria-label="Currency"><span class="chips-label">Currency</span>${FF_CCY.map(c => `<button class="chip" data-fc="${c}" aria-pressed="${f.ccy.includes(c)}">${c}</button>`).join('')}</div>
-    <div class="ff" id="ff"></div>`);
-  const rer = () => { store.set('ffFilter', f); refreshing = false; PAGES.calendar(); };
-  main.querySelectorAll('[data-wk]').forEach(b => b.onclick = () => { f.week = b.dataset.wk; rer(); });
-  main.querySelectorAll('[data-fi]').forEach(b => b.onclick = () => { const k = b.dataset.fi; f.imp = f.imp.includes(k) ? f.imp.filter(x => x !== k) : [...f.imp, k]; rer(); });
-  main.querySelectorAll('[data-fc]').forEach(b => b.onclick = () => { const k = b.dataset.fc; f.ccy = f.ccy.includes(k) ? f.ccy.filter(x => x !== k) : [...f.ccy, k]; rer(); });
-  const days = Array.from({ length: 7 }, (_, i) => addDay(from, i));
-  const P = Promise.all([api('calendar', 10 * 60e3), ...days.map(ffDayResults)]);
-  fill('ff', 'the calendar', P, ([d, ...res]) => {
+    <p class="page-intro">Every economic release and central-bank event, with what it is, how markets usually react and what it means for your markets. Pick a day on the calendar, or see the whole week. Times are ${esc(tzCity())} time (${esc(tzAbbr())}); change it in your account menu.</p>
+    <div class="cal-grid">
+      <aside class="cal-side">
+        <div class="mcal" id="mcal"></div>
+        <div class="cal-filters">
+          <div class="chips" role="group" aria-label="Impact"><span class="chips-label">Impact</span>${['High', 'Medium', 'Low', 'Holiday'].map(k => `<button class="chip ffchip" data-fi="${k}" aria-pressed="${f.imp.includes(k)}">${ffIcon(k)}${k === 'Holiday' ? 'Other' : k}</button>`).join('')}</div>
+          <div class="chips" role="group" aria-label="Currency"><span class="chips-label">Currency</span>${FF_CCY.map(c => `<button class="chip" data-fc="${c}" aria-pressed="${f.ccy.includes(c)}">${c}</button>`).join('')}</div>
+          <button type="button" class="linkbtn" id="ffMine">Just my currencies</button>
+        </div>
+      </aside>
+      <section class="cal-main"><div class="ff" id="ff"><p class="loading">Loading the calendar…</p></div></section>
+    </div>`);
+  const rer = () => { store.set('ffFilter', f); draw(); };
+  main.querySelectorAll('[data-fi]').forEach(b => b.onclick = () => { const k = b.dataset.fi; f.imp = f.imp.includes(k) ? f.imp.filter(x => x !== k) : [...f.imp, k]; b.setAttribute('aria-pressed', f.imp.includes(k)); rer(); });
+  main.querySelectorAll('[data-fc]').forEach(b => b.onclick = () => { const k = b.dataset.fc; f.ccy = f.ccy.includes(k) ? f.ccy.filter(x => x !== k) : [...f.ccy, k]; b.setAttribute('aria-pressed', f.ccy.includes(k)); rer(); });
+  $('#ffMine').onclick = () => { f.ccy = mine.length ? mine.slice() : ['USD']; main.querySelectorAll('[data-fc]').forEach(b => b.setAttribute('aria-pressed', f.ccy.includes(b.dataset.fc))); rer(); };
+
+  let data = null;
+  const keep = e => f.imp.includes(impOf(e)) && (f.ccy.includes(e.country) || !FF_CCY.includes(e.country));
+  function grid() {
+    const all = data.events, have = new Set(all.map(e => nyParts(e.time).date));
+    const dates = [...have].sort(), lo = dates[0], hi = dates[dates.length - 1];
+    const byDay = {}; all.filter(keep).forEach(e => { const k = nyParts(e.time).date; (byDay[k] = byDay[k] || []).push(e); });
+    const first = CAL.month + '-01', start = weekStart(first);
+    const cells = [];
+    for (let i = 0; i < 42; i++) {
+      const k = addDay(start, i);
+      if (i >= 35 && monthKey(k) !== CAL.month) break;
+      const evs = byDay[k] || [], inMonth = monthKey(k) === CAL.month, avail = k >= lo && k <= hi;
+      const lv = [...new Set(evs.map(impOf))].sort((a, b) => IMP_RANK[b] - IMP_RANK[a]).filter(x => x !== 'Holiday').slice(0, 3);
+      const label = `${dayFmt(k, { weekday: 'long', month: 'long', day: 'numeric' })}${avail ? `, ${evs.length} event${evs.length === 1 ? '' : 's'}` : ', no calendar data'}`;
+      cells.push(`<button type="button" class="mc-d${inMonth ? '' : ' out'}${k === today ? ' today' : ''}${k === CAL.sel ? ' sel' : ''}${avail ? '' : ' na'}${CAL.mode === 'week' && weekStart(k) === weekStart(CAL.sel) ? ' inwk' : ''}" data-day="${k}" ${avail ? '' : 'disabled'} aria-label="${esc(label)}" aria-pressed="${k === CAL.sel}">
+        <span class="mc-n">${+k.slice(8)}</span><span class="mc-dots">${lv.map(x => `<i class="${IMP[x][0]}"></i>`).join('')}</span></button>`);
+    }
+    $('#mcal').innerHTML = `<div class="mc-top"><button type="button" class="mc-nav" data-mon="-1" aria-label="Previous month">‹</button>
+      <b>${dayFmt(first, { month: 'long', year: 'numeric' })}</b>
+      <button type="button" class="mc-nav" data-mon="1" aria-label="Next month">›</button></div>
+      <div class="mc-wk">${['S', 'M', 'T', 'W', 'T', 'F', 'S'].map(x => `<span>${x}</span>`).join('')}</div>
+      <div class="mc-days">${cells.join('')}</div>
+      <div class="mc-foot"><div class="seg" role="group" aria-label="Show"><button type="button" data-mode="day" aria-pressed="${CAL.mode === 'day'}">Day</button><button type="button" data-mode="week" aria-pressed="${CAL.mode === 'week'}">Week</button></div>
+        <button type="button" class="linkbtn" id="mcToday">Today</button></div>
+      <p class="mc-note">Calendar data covers this week${hi > addDay(weekStart(today), 6) ? ' and next week' : ''}. Next week’s events usually appear over the weekend.</p>`;
+    $('#mcal').querySelectorAll('[data-day]').forEach(b => b.onclick = () => { CAL.sel = b.dataset.day; CAL.mode = 'day'; if (monthKey(CAL.sel) !== CAL.month) CAL.month = monthKey(CAL.sel); draw(); });
+    $('#mcal').querySelectorAll('[data-mon]').forEach(b => b.onclick = () => { CAL.month = addMonth(CAL.month, +b.dataset.mon); grid(); });
+    $('#mcal').querySelectorAll('[data-mode]').forEach(b => b.onclick = () => { CAL.mode = b.dataset.mode; draw(); });
+    $('#mcToday').onclick = () => { CAL.sel = today; CAL.month = monthKey(today); draw(); };
+  }
+  async function list() {
+    const box = $('#ff'); if (!box) return;
+    const wk = weekStart(CAL.sel);
+    const days = CAL.mode === 'day' ? [CAL.sel] : Array.from({ length: 7 }, (_, i) => addDay(wk, i));
+    const res = await Promise.all(days.map(ffDayResults));
+    if (!$('#ff')) return;
     const act = {}; res.flat().forEach(r => { if (r.actual) act[r.key] = r; });
-    const ev = d.events.filter(e => { const k = nyParts(e.time).date; return k >= from && k <= to && f.imp.includes(impOf(e)) && (f.ccy.includes(e.country) || !FF_CCY.includes(e.country)); });
-    if (!ev.length && f.week === 'next' && !d.events.some(e => nyParts(e.time).date >= from)) return '<p class="empty">Next week’s calendar isn’t out yet. It’s usually posted over the weekend.</p>';
-    const now = Date.now(), nextT = (ev.find(e => e.time > now && !e.allDay) || {}).time;
-    let lastDay = '', lastT = null;
-    const dayHead = k => { const dd = new Date(k + 'T12:00:00Z'); return `<div class="ff-day${k === today ? ' today' : ''}"><b>${dd.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' })}</b> ${dd.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })}${k === today ? ' <span class="pill acc">Today</span>' : ''}</div>`; };
-    const byDay = {}; ev.forEach(e => { const k = nyParts(e.time).date; (byDay[k] = byDay[k] || []).push(e); });
-    const shown = days.filter(k => byDay[k] || k === today || ![0, 6].includes(new Date(k + 'T12:00:00Z').getUTCDay()));
-    const rows = shown.map(k => byDay[k] ? byDay[k].map(e => {
-      const newDay = k !== lastDay, imp = impOf(e);
-      const showT = newDay || e.time !== lastT; lastDay = k; lastT = e.time;
-      const r = act[`${e.country}|${e.title}|${e.time}`];
-      const past = e.time < now - 60e3 && !e.allDay, isNext = e.time === nextT;
-      const body = [e.what ? `<p>${esc(e.what)}</p>` : '', e.why ? `<p>${esc(e.why)}</p>` : '', e.note ? `<p class="note">${esc(e.note)}</p>` : '', r && r.text ? `<p><b>${esc(r.label || '')}.</b> ${esc(r.text)}</p>` : ''].join('');
-      return `${newDay ? dayHead(k) : ''}
-        <details class="ff-row${past ? ' past' : ''}${isNext ? ' next' : ''}${imp === 'High' ? ' hi' : ''}"><summary>
-          <span class="ff-t">${showT ? (e.allDay ? 'All day' : fmtTime(e.time).replace(' ', '').toLowerCase()) : ''}</span>
-          <span class="ff-c">${esc(e.country)}</span>
-          <span class="ff-i">${ffIcon(imp)}</span>
-          <span class="ff-e">${esc(e.title)}${e.name && e.name !== e.title ? `<small>${esc(e.name)}</small>` : ''}</span>
-          <span class="ff-vals"><span class="ff-v ff-a ${r && r.ccyDir ? r.ccyDir : ''}" data-l="Actual">${r ? esc(r.actual) : ''}</span>
-          <span class="ff-v" data-l="Forecast">${esc(e.forecast || (r && r.forecast) || '')}</span>
-          <span class="ff-v" data-l="Previous">${esc((e.previous || '').split('|')[0])}</span></span>
-        </summary>${body ? `<div class="ff-body">${body}</div>` : ''}</details>`;
-    }).join('') : `${dayHead(k)}<div class="ff-none">${d.events.some(e => nyParts(e.time).date === k) ? 'Nothing for your filters' : 'No events scheduled'}</div>`).join('');
-    return `<div class="ff-legend">${['High', 'Medium', 'Low', 'Holiday'].map(k => `<span>${ffIcon(k)}${IMP[k][1]}</span>`).join('')}<span><b class="ff-a good">Green</b> / <b class="ff-a bad">red</b> actual: better or worse than forecast for that currency</span></div>
-      <div class="ff-table" role="table"><div class="ff-head" role="row"><span>Time</span><span>Cur.</span><span>Impact</span><span>Event</span><span>Actual</span><span>Forecast</span><span>Previous</span></div>${rows}</div>${stamp(d)}`;
-  });
+    const all = data.events;
+    const byDay = {}; all.filter(keep).forEach(e => { const k = nyParts(e.time).date; if (days.includes(k)) (byDay[k] = byDay[k] || []).push(e); });
+    const shown = CAL.mode === 'day' ? days : days.filter(k => byDay[k] || k === today || k === CAL.sel || ![0, 6].includes(ymd(k).getUTCDay()));
+    const now = Date.now(), nextT = (all.filter(keep).find(e => e.time > now && !e.allDay) || {}).time;
+    const head = k => `<div class="ff-day${k === today ? ' today' : ''}${k === CAL.sel && CAL.mode === 'week' ? ' sel' : ''}" id="d-${k}"><b>${dayFmt(k, { weekday: 'short' })}</b> ${dayFmt(k, { month: 'short', day: 'numeric' })}${k === today ? ' <span class="pill acc">Today</span>' : ''}</div>`;
+    const rows = shown.map(k => {
+      const evs = byDay[k];
+      if (!evs) return head(k) + `<div class="ff-none">${all.some(e => nyParts(e.time).date === k) ? 'Nothing for your filters on this day' : 'No events scheduled'}</div>`;
+      let lastT = null;
+      return head(k) + evs.map(e => { const showT = e.time !== lastT; lastT = e.time; return ffRow(e, act, today, now, nextT, showT); }).join('');
+    }).join('');
+    const title = CAL.mode === 'day' ? dayFmt(CAL.sel, { weekday: 'long', month: 'long', day: 'numeric' }) : `Week of ${dayFmt(wk, { month: 'long', day: 'numeric' })}`;
+    box.innerHTML = `<div class="ff-top"><h2 class="sec">${esc(title)}</h2>
+        <div class="ff-step"><button type="button" class="mc-nav" data-step="-1" aria-label="Previous ${CAL.mode}">‹</button><button type="button" class="mc-nav" data-step="1" aria-label="Next ${CAL.mode}">›</button></div></div>
+      <div class="ff-legend">${['High', 'Medium', 'Low', 'Holiday'].map(k => `<span>${ffIcon(k)}${IMP[k][1]}</span>`).join('')}<span><b class="ff-a good">Green</b> / <b class="ff-a bad">red</b> actual: better or worse than forecast for that currency</span></div>
+      <div class="ff-table" role="table"><div class="ff-head" role="row"><span>Time</span><span>Cur.</span><span>Impact</span><span>Event</span><span>Actual</span><span>Forecast</span><span>Previous</span></div>${rows}</div>${stamp(data)}`;
+    box.querySelectorAll('[data-step]').forEach(b => b.onclick = () => { CAL.sel = addDay(CAL.sel, (CAL.mode === 'day' ? 1 : 7) * +b.dataset.step); CAL.month = monthKey(CAL.sel); draw(); });
+    if (CAL.mode === 'week' && CAL.sel !== today && !refreshing) { const el = document.getElementById('d-' + CAL.sel); if (el) el.scrollIntoView({ block: 'nearest' }); }
+  }
+  function draw() { if (!data) return; grid(); list(); }
+  api('calendar', 10 * 60e3).then(d => { data = d; draw(); }).catch(() => { const box = $('#ff'); if (box) box.innerHTML = '<p class="empty">Couldn’t load the calendar. Try again in a minute.</p>'; });
 };
 
 // ---------- Earnings ----------
@@ -1221,7 +1259,7 @@ PAGES.glossary = () => {
 };
 
 // ---------- router ----------
-const ALIASES = { movers: 'markets', memecoins: 'memes' };
+const ALIASES = { movers: 'markets', memecoins: 'memes', economy: 'calendar' };
 const SLUG = { memes: 'memecoins' };
 const pagePath = key => key === 'today' ? '/' : '/' + (SLUG[key] || key);
 function currentPage() {
@@ -1230,6 +1268,7 @@ function currentPage() {
   if (h && (PAGES[h] || ALIASES[h])) history.replaceState(null, '', pagePath(ALIASES[h] || h));
   const p = location.pathname.replace(/^\/+|\/+$/g, '').split('/')[0] || 'today';
   const key = ALIASES[p] || p;
+  if (ALIASES[p] && PAGES[key]) history.replaceState(null, '', pagePath(key) + location.search);
   // Keep one address per page, e.g. /memes becomes /memecoins
   if (PAGES[key] && SLUG[key] && p !== SLUG[key]) history.replaceState(null, '', pagePath(key) + location.search);
   return key;
