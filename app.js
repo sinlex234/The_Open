@@ -20,6 +20,8 @@ function applyTheme() { const t = store.get('theme', null); if (t) document.docu
 applyTheme();
 $('#themeBtn').onclick = () => { store.set('theme', document.documentElement.dataset.theme === 'light' ? 'dark' : 'light'); applyTheme(); if (started) { mountStrip(true); route(); } };
 
+let lastRefresh = Date.now(); // when page data last refreshed (shown in the status line)
+const MS_NAME = { futures: 'Futures', stocks: 'Stocks', options: 'Options', forex: 'Forex' };
 // ---------- time ----------
 const nyParts = (t = Date.now()) => {
   const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', weekday: 'short', hourCycle: 'h23' }).formatToParts(new Date(t)).map(x => [x.type, x.value]));
@@ -1277,15 +1279,39 @@ tick(); setInterval(tick, 30e3);
 $('#bellBtn').onclick = () => { if (started) openAlerts(); };
 initMe(() => {
   started = true;
-  orderTabs(); mountStrip(); route(); pollResults();
+  orderTabs(); mountStrip(); route(); pollResults(); lastRefresh = Date.now(); mStatus();
   api('calendar', 10 * 60e3).then(d => { calendarCache = d.events; }).catch(() => {});
   startAlerts({ calendar: () => calendarCache, wire: () => api('wire?section=all', 60e3).then(d => d.items), levels: levelRows });
 });
 addEventListener('open:profile', () => { orderTabs(); mountStrip(); cache.clear(); route(); });
+// ---------- market status line: open or closed, where prices are from, next update ----------
+function mStatus() {
+  const el = $('#mstatus'); if (!el || !started) return;
+  const mk = myMarkets().filter(m => m !== 'learning');
+  const reopen = allShut(mk);
+  const next = fmtLeft(lastRefresh + 120e3 - Date.now());
+  const upd = `<span>Updated ${fmtTime(lastRefresh)} ET</span><span class="ms-next">Next update in ${next}</span>`;
+  if (reopen) {
+    const names = [...new Set(mk.map(m => MS_NAME[m]).filter(Boolean))];
+    const who = names.length > 2 ? 'Your markets' : names.join(' and ') || 'Markets';
+    const friClose = reopen - 49 * 36e5; // Friday afternoon, two days before the Sunday reopen
+    const fri = new Date(friClose).toLocaleDateString('en-US', { timeZone: TZ, weekday: 'short', month: 'short', day: 'numeric' });
+    const day = new Date(reopen).toLocaleDateString('en-US', { timeZone: TZ, weekday: 'short' });
+    const left = reopen - Date.now(), h = Math.floor(left / 36e5), m = Math.floor(left % 36e5 / 6e4);
+    el.className = 'mstatus shut';
+    el.innerHTML = `<div class="wrap ms-row"><span class="ms-state"><i></i>${esc(who)} closed for the weekend</span><span>Prices from ${esc(fri)} close</span><span>Reopens ${esc(day)} ${fmtTime(reopen)} ET, in ${h ? h + 'h ' : ''}${m}m</span>${upd}</div>`;
+  } else {
+    el.className = 'mstatus';
+    el.innerHTML = `<div class="wrap ms-row"><span class="ms-state"><i></i>Markets open</span><span>Prices update live; futures and stocks can lag up to 15 min</span>${upd}</div>`;
+  }
+  el.hidden = false;
+}
+setInterval(() => { if (document.visibilityState === 'visible') mStatus(); }, 1000);
+
 // Refresh data every two minutes without reloading charts
 setInterval(() => {
   if (!started || document.visibilityState !== 'visible' || document.body.classList.contains('locked')) return;
-  cache.clear(); mountStrip();
+  cache.clear(); mountStrip(); lastRefresh = Date.now();
   api('calendar').then(d => { calendarCache = d.events; }).catch(() => {});
   route(true);
 }, 120e3);
