@@ -1037,7 +1037,7 @@ function similar(a, b) {
 var JUNK = [
   /\((?:NYSE|NASDAQ|NYSEARCA|NYSEAMERICAN|TSX|TSXV|OM|OB|LSE|ASX|SGX|BIT|ETR|EPA|HKG|SEHK|TSE|KOSE|NSE|BSE|SWX|CPSE|STO|HLSE|XTRA|SHSE|SZSE|BOVESPA|JSE)\s*:/i,
   /\([A-Z]{1,5}\) Stock\b/, /\bstocks? to watch\b/i, /millionaire|should you buy|buy now\b|is it too late|top \d+ (stocks|cryptos?|coins)|best (stocks|cryptos?|coins) to|price prediction|prediction:/i,
-  /presale|\bico\b|airdrop guide|remittix/i, /announces approval of application|press release:/i, /\b(forum|summit|conference|webinar|podcast)\b.*\b20\d\d\b/i, /^watch:|^video:|^live:/i, /horoscope|recipe|weather forecast/i
+  /presale|\bico\b|airdrop guide|remittix/i, /^\d+ [\w\s-]{0,40}(stocks|shares|cryptos?|coins|etfs|picks|ways|reasons|things)\b/i, /\bstocks? (with|that|riding|to buy|to own|to hold)\b/i, /earnings call (highlights|transcript)|\(q[1-4] 20\d\d\)|has changed its investment/i, /exchange rate today|\bbank (usd|dollar) rates?\b|\b(peso|rupee|naira|piasters?|cedi|shilling|rand)\b.*\b(dollar|usd)\b/i, /announces approval of application|press release:/i, /\b(forum|summit|conference|webinar|podcast)\b.*\b20\d\d\b/i, /^watch:|^video:|^live:/i, /horoscope|recipe|weather forecast/i
 ];
 function cleanTitle(t) {
   return t.replace(/^(?:Global Market|Crypto Market News|Bitcoin News|Ethereum News|XRP News|On the Chain|Market Wrap|Markets?|Breaking|Exclusive|Update|Explainer|Analysis|Opinion|Stock Market Today|Forex)\s*[:|\-–]\s*/i, "")
@@ -1064,6 +1064,12 @@ function sectionOf(h) {
   return "markets";
 }
 var OFFICIAL = new Set(["Federal Reserve", "ECB"]);
+// ---------- source quality ----------
+// Tier A: wire services, major financial press and official sources. A single Tier A report can carry a market call.
+var TIER_A = /^(reuters|bloomberg|bloomberg\.com|associated press|ap news|ap|the wall street journal|wsj|wsj markets|financial times|ft|cnbc|cnbc markets|marketwatch|marketwatch pulse|barron's|barrons|federal reserve|ecb|nikkei asia|the economist|financialjuice|investinglive|forexlive)$/i;
+// Tier B: solid outlets. They count as a source, but a call on them needs a second outlet.
+var TIER_B = /^(yahoo finance|investing\.com|investing\.com forex|fox business|cnn|cnn business|the new york times|new york times|the washington post|washington post|bbc|bbc business|bbc news|npr|npr economy|axios|politico|fortune|business insider|morningstar|the guardian|kitco( news)?|fxstreet|s&p global|oilprice\.com|forbes|the hill|semafor|south china morning post|scmp|the japan times|handelsblatt|les echos|coindesk|the block|decrypt|cointelegraph|blockworks|dl news|the information|techcrunch|the verge|wired|ars technica)$/i;
+function tierOf(src) { const x = String(src || "").trim(); return TIER_A.test(x) ? "A" : TIER_B.test(x) ? "B" : "C"; }
 async function build8(section = "all") {
   const names = SECTION_FEEDS[section] || SECTION_FEEDS.all;
   const { res, errors } = await settle(Object.fromEntries(names.map((n) => [n, getText(FEEDS3[n]).then((x) => parseRSS(x, n))])));
@@ -1073,7 +1079,7 @@ async function build8(section = "all") {
       if (m) return { ...i, title: m[1].trim(), source: m[2].trim(), summary: "" };
     }
     return i;
-  }));
+  })).filter((i) => tierOf(i.source) !== "C"); // weak outlets (content farms, listicle sites, small foreign papers) are dropped
   const cutoff = Date.now() - 2 * 864e5;
   raw = raw.map((i) => ({ ...i, title: cleanTitle(i.title || "") })).filter((i) => i.title && (!i.time || i.time > cutoff) && !JUNK.some((re) => re.test(i.title)) && i.title.length >= 18);
   raw.sort((a, b) => (b.time || 0) - (a.time || 0));
@@ -1661,6 +1667,20 @@ var WHY_DIR = {
   good: { risk: "Good news for risk appetite, so buyers usually step in.", crypto: "Upbeat news for crypto. Smaller coins usually move more than Bitcoin." },
   bad: { risk: "Bad news for risk appetite, so sellers usually step in first.", crypto: "Negative crypto news. Smaller coins usually fall harder than Bitcoin." }
 };
+// Can this story carry an up/down call? It must come from a strong outlet (or 2+ outlets) and be about something that moves whole markets.
+var MEGA = /\b(nvidia|apple|microsoft|amazon|alphabet|google|meta|tesla|broadcom|amd|netflix|oracle|tsmc|magnificent seven|mag 7|big tech)\b/i;
+var INDEX_WORDS = /\b(stocks?|shares|wall street|nasdaq|s&p|dow|futures|equities|markets?|fed|fomc|powell|treasur(y|ies)|yields?|inflation|cpi|pce|jobs|payrolls|gdp|tariffs?|recession|rate (cut|hike)s?|oil|crude|war|sanctions|china|white house|trump|congress|shutdown)\b/i;
+function callStrength(h, m) {
+  const tier = tierOf(h.source), outlets = [...new Set(h.sources || [h.source])].filter((x) => tierOf(x) !== "C").length;
+  if (tier === "C") return { ok: false, why: "Source too weak to make a call on." };
+  if (tier !== "A" && outlets < 2) return { ok: false, why: "Only one outlet so far. Waiting for a second before calling it." };
+  const t = h.title;
+  if (["futures", "stocks", "options"].includes(m)) {
+    if (["earnings", "ai"].includes(h.theme) && !MEGA.test(t) && !/\b(nasdaq|s&p|stocks|wall street|chip stocks|tech stocks)\b/i.test(t)) return { ok: false, why: "About a single smaller company. Unlikely to move the whole index." };
+    if (!INDEX_WORDS.test(t) && !MEGA.test(t)) return { ok: false, why: "Not a big enough story to move the index on its own." };
+  }
+  return { ok: true };
+}
 function effectsFor(h, prof) {
   const t = h.title, theme = h.theme;
   const out = [];
@@ -1680,7 +1700,8 @@ function effectsFor(h, prof) {
         const d = (ccy[b] || 0) - (ccy[q] || 0);
         const dir = d > 0 ? "up" : d < 0 ? "down" : "mixed";
         const reason = ccy.USD && (b === "USD" || q === "USD") ? (ccy.USD > 0 ? WHY_DIR.ratesUp.fx : WHY_DIR.ratesDown.fx) : dir === "mixed" ? "No clear push on this pair yet. Watch the first reaction." : `The story points to a ${d > 0 ? "stronger " + b : "stronger " + q}.`;
-        out.push({ market: m, label: ASSET_LABEL(p), dir, reason });
+        const cs = callStrength(h, m);
+        out.push(cs.ok || dir === "mixed" ? { market: m, label: ASSET_LABEL(p), dir, reason } : { market: m, label: ASSET_LABEL(p), dir: "mixed", reason: cs.why, held: dir });
       });
       return;
     }
@@ -1695,7 +1716,9 @@ function effectsFor(h, prof) {
     else if (theme === "energy" && oil) { d = -oil; reason = (oil > 0 ? WHY_DIR.oilUp : WHY_DIR.oilDown).risk; }
     else if (tone) { d = tone; reason = (tone > 0 ? WHY_DIR.good : WHY_DIR.bad)[crypto && ["crypto", "memes"].includes(theme) ? "crypto" : "risk"]; }
     if (m === "memes" && !["memes", "crypto"].includes(theme) && d) reason += " Memecoins usually move more than the rest of crypto.";
-    out.push({ market: m, label: labels, dir: d > 0 ? "up" : d < 0 ? "down" : "mixed", reason: reason || "Direction unclear. Watch the first reaction." });
+    const cs = callStrength(h, m);
+    if (d && !cs.ok) out.push({ market: m, label: labels, dir: "mixed", reason: cs.why, held: d > 0 ? "up" : "down" });
+    else out.push({ market: m, label: labels, dir: d > 0 ? "up" : d < 0 ? "down" : "mixed", reason: reason || "Direction unclear. Watch the first reaction." });
   });
   return out;
 }
@@ -1726,7 +1749,44 @@ function watchFor(h, upcoming) {
   if (ev) return `${ev.country === "USD" ? "US " : ""}${ev.name}, ${whenTxt(ev.time)}. That release can confirm or undo this move.`;
   return WATCH_DEFAULT[h.theme] || "How prices behave in the next session. A move that holds usually matters more than the first spike.";
 }
-function briefingFor(stories, prof, upcoming, focus) {
+// ---------- price check: a call is paused when price has clearly gone the other way since the story ----------
+var PX_OF = { futures: "NQ", stocks: "NQ", options: "NQ", crypto: "BTC", memes: "BTC" };
+var PX_CFG = { NQ: { sym: "NQ=F", name: "NQ", against: 0.3, dp: 2, unit: "pts" }, BTC: { sym: "BTC-USD", name: "Bitcoin", against: 1, dp: 0, unit: "$" }, EURUSD: { sym: "EURUSD=X", name: "EUR/USD", against: 0.15, pip: 1e-4, unit: "pips" } };
+async function priceBars() {
+  const { res } = await settle(Object.fromEntries(Object.entries(PX_CFG).map(([k, c]) => [k, yahooChart(c.sym, { interval: "5m", range: "2d" })])));
+  return Object.fromEntries(Object.entries(res).map(([k, v]) => [k, v && v.bars]));
+}
+function checkCalls(effects, t, px) {
+  if (!px || !t) return effects;
+  return effects.map((e) => {
+    const k = e.market === "forex" ? (e.label === "EUR/USD" ? "EURUSD" : null) : PX_OF[e.market];
+    const c = PX_CFG[k], bars = px[k];
+    if (!c || !bars || bars.length < 2 || e.dir === "mixed") return e;
+    const p0 = priceAt(bars, Math.max(t, bars[0].t)), p1 = bars[bars.length - 1].c;
+    if (p0 == null) return e;
+    const pct = (p1 - p0) / p0 * 100, amt = c.pip ? Math.round((p1 - p0) / c.pip) : +(p1 - p0).toFixed(c.dp);
+    const txt = `${c.name} is ${amt > 0 ? "up" : "down"} ${c.unit === "$" ? "$" : ""}${Math.abs(amt).toLocaleString("en-US")}${c.unit === "$" ? "" : " " + c.unit} since this story`;
+    const against = e.dir === "up" ? pct <= -c.against : pct >= c.against;
+    const agrees = e.dir === "up" ? pct >= c.against / 2 : pct <= -c.against / 2;
+    if (against) return { ...e, dir: "mixed", held: e.dir, paused: true, reason: `Call paused: price disagrees. ${txt}, so the market isn\u2019t taking this story the usual way.` };
+    if (agrees) return { ...e, agrees: true, reason: `${e.reason} So far price agrees: ${txt}.` };
+    return e;
+  });
+}
+// When the call will likely be tested: the matching release, else the next big session open
+function decideBy(h, upcoming, m) {
+  const re = WATCH_THEME[h.theme];
+  const ev = re ? upcoming.find((e) => re.test(e.name) || re.test(e.title || "")) : null;
+  if (ev && ev.time - Date.now() < 30 * 36e5) return { label: ev.name, time: ev.time };
+  if (["crypto", "memes"].includes(m)) return null;
+  const n = ny(Date.now());
+  let date = n.date;
+  const wk = (d) => { const w = new Date(d + "T12:00:00Z").getUTCDay(); return w > 0 && w < 6; };
+  const open = m === "forex" ? 3 * 60 : 9 * 60 + 30;
+  if (!wk(date) || n.mins >= open) { do date = addDays(date, 1); while (!wk(date)); }
+  return { label: m === "forex" ? "the London open" : "the New York open", time: nyToMs(date, open) };
+}
+function briefingFor(stories, prof, upcoming, focus, px) {
   const mk = prof.map((x) => x.m);
   const rel = (h) => mk.some((m) => relevantFor(h, m) || (h.markets || []).includes(m));
   let pool = stories.filter((h) => h.theme);
@@ -1734,13 +1794,13 @@ function briefingFor(stories, prof, upcoming, focus) {
   const DIRECT = { memes: ["memes", "crypto"], crypto: ["crypto", "memes"], forex: ["dollar", "rates", "gold", "inflation", "jobs"], futures: ["earnings", "ai", "rates", "inflation", "jobs"], stocks: ["earnings", "ai", "rates", "growth"], options: ["options", "earnings", "rates"] };
   const direct = (h) => (focus ? [focus] : mk).some((m) => (DIRECT[m] || []).includes(h.theme));
   const clear = (h) => effectsFor(h, prof).some((e) => e.dir !== "mixed");
-  const ranked = pool.map((h) => ({ h, s: (h.score || 0) + (rel(h) ? 30 : 0) + (direct(h) ? 15 : 0) + (clear(h) ? 10 : 0) + (h.confirmed ? 8 : 0) + (h.reaction && Math.abs(h.reaction.change) > 0 ? 5 : 0) })).sort((a, b) => b.s - a.s);
+  const ranked = pool.map((h) => ({ h, s: (h.score || 0) + (rel(h) ? 30 : 0) + (direct(h) ? 15 : 0) + (clear(h) ? 10 : 0) + (h.confirmed ? 8 : 0) + (tierOf(h.source) === "A" ? 8 : 0) + (h.reaction && Math.abs(h.reaction.change) > 0 ? 5 : 0) })).sort((a, b) => b.s - a.s);
   const out = [], themes = {};
   for (const { h } of ranked) {
     if (out.length >= 3) break;
     if ((themes[h.theme] || 0) >= 2) continue;
     themes[h.theme] = (themes[h.theme] || 0) + 1;
-    out.push({ id: h.id, headline: h.title, link: h.link, source: h.source, sources: (h.sources || [h.source]).slice(0, 6), confirmed: h.confirmed !== false, time: h.time, topic: h.themeLabel, why: h.why || "", effects: effectsFor(h, prof).slice(0, 3), watch: watchFor(h, upcoming), since: h.reaction || null });
+    out.push({ id: h.id, headline: h.title, link: h.link, source: h.source, sources: (h.sources || [h.source]).slice(0, 6), confirmed: h.confirmed !== false, time: h.time, topic: h.themeLabel, why: h.why || "", effects: checkCalls(effectsFor(h, prof).slice(0, 3), h.time, px), decide: decideBy(h, upcoming, (focus || (prof.find((x) => x.m !== "learning") || {}).m)), watch: watchFor(h, upcoming), since: h.reaction || null });
   }
   return out;
 }
@@ -1945,8 +2005,9 @@ Pick the 4-6 most important stories, world events first. effects should only lis
   if (!out.outlook) out.outlook = outlook;
   const upcoming = (res.cal && res.cal.events || []).filter((e) => e.time > now && e.impact !== "Low" && (e.country === "USD" || e.impact === "High"));
   const allStories = (res.news && res.news.items || []).filter((h) => h.time && now - h.time < 18 * 36e5);
-  out.briefing = briefingFor(allStories, prof, upcoming, focus);
-  out.callLog = await logCalls(callsToLog(allStories, upcoming, pick));
+  const px = await priceBars().catch(() => null);
+  out.briefing = briefingFor(allStories, prof, upcoming, focus, px);
+  out.callLog = await logCalls(callsToLog(allStories, upcoming, pick, px));
   if (focus) out.outlook = out.outlook.filter((o) => (o.markets || []).includes(focus)).slice(0, 3);
   const states = {};
   prof.filter((x) => x.m !== "learning").forEach((x) => { states[x.m] = marketState(x.m, pick, out.briefing, outlook); });
@@ -2284,11 +2345,11 @@ async function sb(path, { method = "GET", body, prefer } = {}) {
 }
 var CALL_MKTS = { NQ: { m: "futures", assets: ["NQ"], sym: "NQ=F", dp: 2, unit: "pts", flat: 0.1 }, BTC: { m: "crypto", assets: ["BTC"], sym: "BTC-USD", dp: 0, unit: "$", flat: 0.3 }, EURUSD: { m: "forex", assets: ["EURUSD"], sym: "EURUSD=X", dp: 5, unit: "pips", pip: 1e-4, flat: 0.05 } };
 // The calls a reader of each market sees: the top 3 briefing stories for that market, up or down only
-function callsToLog(allStories, upcoming, pick) {
+function callsToLog(allStories, upcoming, pick, px) {
   const rows = [];
   Object.entries(CALL_MKTS).forEach(([key, c]) => {
     const prof = [{ m: c.m, assets: c.assets, strats: [] }];
-    briefingFor(allStories, prof, upcoming, c.m).forEach((b) => {
+    briefingFor(allStories, prof, upcoming, c.m, px).forEach((b) => {
       const e = (b.effects || []).find((x) => x.market === c.m && x.dir !== "mixed");
       if (!e || !b.id) return;
       const q = pick(c.sym);
@@ -2350,6 +2411,52 @@ async function buildCalls() {
   }).filter(Boolean);
   return { ready: true, days: 30, summary: sum, byMarket: Object.values(by), calls: calls.slice(0, 60), total: calls.length, updated: Date.now() };
 }
+// ---------- when price usually moves: typical move per half hour over the last ~20 trading days, plus today's scheduled events ----------
+var TIMING = {
+  NQ: { sym: "NQ=F", name: "Nasdaq futures (NQ)", from: 3 * 60, to: 17 * 60, step: 30, dp: 0, unit: "pts", weekdays: true, ccy: ["USD"] },
+  ES: { sym: "ES=F", name: "S&P futures (ES)", from: 3 * 60, to: 17 * 60, step: 30, dp: 1, unit: "pts", weekdays: true, ccy: ["USD"] },
+  EURUSD: { sym: "EURUSD=X", name: "EUR/USD", from: 2 * 60, to: 13 * 60, step: 30, pip: 1e-4, unit: "pips", weekdays: true, ccy: ["USD", "EUR"] },
+  BTC: { sym: "BTC-USD", name: "Bitcoin", from: 0, to: 24 * 60, step: 60, dp: 0, unit: "$", weekdays: false, ccy: ["USD"] }
+};
+var SLOT_TAG = [[3 * 60, "London opens"], [8 * 60 + 30, "US data time"], [9 * 60 + 30, "New York open"], [10 * 60, "US data time"], [12 * 60, "Lunch, usually quiet"], [14 * 60, "Fed decisions land here"], [15 * 60, "Last hour"], [16 * 60, "Close"], [20 * 60, "Asia opens"]];
+async function buildTiming(key) {
+  const C = TIMING[key] || TIMING.NQ;
+  const { res } = await settle({ c: yahooChart(C.sym, { interval: "15m", range: "1mo" }), cal: build() });
+  if (!res.c || res.c.bars.length < 100) throw new Error("Not enough price history for " + C.name);
+  const size = (d) => C.pip ? d / C.pip : d;
+  const days = {};
+  res.c.bars.forEach((b) => {
+    const n = ny(b.t);
+    if (C.weekdays && ["Sat", "Sun"].includes(n.dow)) return;
+    if (n.mins < C.from || n.mins >= C.to) return;
+    const slot = C.from + Math.floor((n.mins - C.from) / C.step) * C.step;
+    const d = days[n.date] = days[n.date] || {};
+    const x = d[slot] = d[slot] || { o: b.o, c: b.c, h: b.h, l: b.l };
+    x.c = b.c; x.h = Math.max(x.h, b.h); x.l = Math.min(x.l, b.l);
+  });
+  const hist = Object.keys(days).sort().filter((d) => d !== ny(Date.now()).date).slice(-20);
+  const med = (a) => { if (!a.length) return null; const z = [...a].sort((p, q) => p - q); return z[Math.floor(z.length / 2)]; };
+  const slots = [];
+  for (let t = C.from; t < C.to; t += C.step) {
+    const ranges = hist.map((d) => days[d][t]).filter(Boolean).map((x) => size(x.h - x.l));
+    slots.push({ start: t, end: t + C.step, typical: ranges.length >= 5 ? Math.round(med(ranges)) : null, days: ranges.length, tag: (SLOT_TAG.find(([m]) => m >= t && m < t + C.step) || [])[1] || "" });
+  }
+  const vals = slots.map((x) => x.typical || 0), top = [...vals].sort((a, b) => b - a);
+  slots.forEach((x) => { x.rank = x.typical ? top.indexOf(x.typical) + 1 : null; x.level = x.typical ? (x.typical >= top[2] ? "big" : x.typical >= top[Math.floor(top.length / 2)] ? "mid" : "low") : "low"; });
+  // The session day this is for: today until the window ends, then the next weekday
+  const now = Date.now(), n = ny(now);
+  let day = n.date;
+  const wk = (d) => { const w = new Date(d + "T12:00:00Z").getUTCDay(); return w > 0 && w < 6; };
+  if ((C.weekdays && !wk(day)) || n.mins >= C.to) { do day = addDays(day, 1); while (C.weekdays && !wk(day)); }
+  const evs = (res.cal && res.cal.events || []).filter((e) => ny(e.time).date === day && e.impact !== "Low" && C.ccy.includes(e.country) && !e.allDay);
+  slots.forEach((x) => {
+    x.time = nyToMs(day, x.start);
+    x.events = evs.filter((e) => { const m = ny(e.time).mins; return m >= x.start && m < x.end; }).map((e) => ({ name: e.name || e.title, impact: e.impact, country: e.country, time: e.time }));
+    if (x.events.some((e) => e.impact === "High")) x.level = "big";
+  });
+  const best = slots.filter((x) => x.rank && x.rank <= 3).sort((a, b) => a.rank - b.rank);
+  return { key, name: C.name, unit: C.unit, day, step: C.step, slots, best, days: hist.length, updated: now };
+}
 var ROUTES = {
   calendar: [() => build(), 900],
   markets: [(q) => build2(String(q.section || "futures")), 120],
@@ -2367,7 +2474,8 @@ var ROUTES = {
   results: [(q) => build16(q.date), 5],
   memedesk: [(q) => build14(q), hasAI() ? 600 : 180],
   explain: [(q) => build12(q), 86400],
-  calls: [() => buildCalls(), 300]
+  calls: [() => buildCalls(), 300],
+  timing: [(q) => buildTiming(String(q.m || "NQ").toUpperCase()), 900]
 };
 async function handler(req, res) {
   const q = req.query || {};

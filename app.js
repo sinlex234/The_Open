@@ -433,7 +433,7 @@ function releasedHTML() {
       <h2 class="rel-h">${esc(r.name || r.title)}</h2>
       <div class="rel-nums"><div><small>Actual</small><b class="${cls}">${esc(r.actual)}</b></div>${r.forecast ? `<div><small>Forecast</small><b>${esc(r.forecast)}</b></div>` : ''}${r.previous ? `<div><small>Previous</small><b>${esc(r.previous)}</b></div>` : ''}${r.label ? `<div class="rel-lab"><span class="pill ${cls || 'acc'}">${esc(r.label)}</span></div>` : ''}</div>
       ${r.text ? `<p class="rel-text">${esc(r.text)}</p>` : ''}
-      ${effs.length ? `<div class="rel-effs">${effs.map(e => `<div class="beff"><span class="pill ${e.dir === 'up' ? 'up' : e.dir === 'down' ? 'down' : ''}"><b>${esc(e.label)}</b> ${DIR_TXT[e.dir] || ''}</span><span class="br">${esc(e.reason)}</span></div>`).join('')}</div>` : ''}
+      ${effs.length ? `<div class="rel-effs">${effs.map(e => `<div class="beff"><span class="pill ${e.paused ? 'paused' : e.dir === 'up' ? 'up' : e.dir === 'down' ? 'down' : ''}"><b>${esc(e.label)}</b> ${e.paused ? '⏸ Call paused' : DIR_TXT[e.dir] || ''}</span><span class="br">${esc(e.reason)}</span></div>`).join('')}</div>` : ''}
       ${(r.since || []).length ? `<p class="rel-since"><span>Since the release:</span> ${r.since.map(x => reactTxt(x).replace(' since</span>', '</span>')).join(' · ')}</p>` : ''}
     </article>`;
   }).join('');
@@ -629,6 +629,43 @@ document.addEventListener('click', e => {
     } catch { msg.textContent = 'Couldn’t send right now. Try again in a minute.'; f.querySelector('[type=submit]').disabled = false; }
   };
 });
+function testWhen(t) {
+  const d = new Date(t), same = d.toLocaleDateString('en-US', { timeZone: TZ }) === new Date().toLocaleDateString('en-US', { timeZone: TZ });
+  return `${same ? 'today' : d.toLocaleDateString('en-US', { timeZone: TZ, weekday: 'long' })} ${fmtTime(t)} ${tzAbbr(t)}`;
+}
+// ---------- when price usually moves ----------
+const TIMING_KEY = { futures: 'NQ', stocks: 'NQ', options: 'NQ', forex: 'EURUSD', crypto: 'BTC', memes: 'BTC' };
+const TIMING_NAME = { NQ: 'NQ', ES: 'ES', EURUSD: 'EUR/USD', BTC: 'Bitcoin' };
+function timingKeys() {
+  const ks = [...new Set(myMarkets().map(m => TIMING_KEY[m]).filter(Boolean))];
+  if (ks.includes('NQ') && myAssets().some(a => a.id === 'ES') && !myAssets().some(a => a.id === 'NQ')) ks[ks.indexOf('NQ')] = 'ES';
+  return ks.length ? ks : ['NQ'];
+}
+function unitTxt(v, u) { return u === '$' ? '$' + num(v, 0) : num(v, 0) + (u === 'pips' ? ' pips' : ' pts'); }
+function timingHTML(d) {
+  const sl = d.slots.filter(x => x.typical != null);
+  if (!sl.length) return '<p class="empty">Not enough price history yet.</p>';
+  const mx = Math.max(...sl.map(x => x.typical)), now = Date.now();
+  const span = t => `${fmtTime(t).replace(/ [AP]M$/, '')}–${fmtTime(t + d.step * 6e4)}`;
+  const best = d.best.map(x => span(x.time));
+  const evs = d.slots.flatMap(x => x.events.map(e => ({ ...e, slot: x })));
+  const big = evs.filter(e => e.impact === 'High');
+  const dayName = new Date(d.slots[0].time).toLocaleDateString('en-US', { timeZone: TZ, weekday: 'long' });
+  const lead = `<p class="tm-lead">${esc(TIMING_NAME[d.key] || d.name)} usually moves most <b>${best.slice(0, 2).join('</b> and <b>')}</b>${best[2] ? ` and <b>${best[2]}</b>` : ''} ${tzAbbr()}.${big.length ? ` ${dayName} also has <b>${big.map(e => `${esc(e.name)} at ${fmtTime(e.time)}`).join('</b> and <b>')}</b>, which can be bigger than any normal half hour.` : evs.length ? ` ${dayName}’s scheduled releases: ${evs.slice(0, 3).map(e => `${esc(e.name)} at ${fmtTime(e.time)}`).join(', ')}.` : ` No big scheduled releases ${dayName}.`}</p>`;
+  const hourMark = (x, i) => new Date(x.time).getUTCMinutes() === 0 && i % (d.step === 60 ? 3 : 2) === 0;
+  const bars = d.slots.map((x, i) => {
+    const h = x.typical ? Math.max(6, x.typical / mx * 100) : 2, live = now >= x.time && now < x.time + d.step * 6e4, past = now >= x.time + d.step * 6e4;
+    const tip = `${fmtTime(x.time)}–${fmtTime(x.time + d.step * 6e4)}: usually about ${x.typical != null ? unitTxt(x.typical, d.unit) : '—'} from high to low${x.tag ? '. ' + x.tag : ''}${x.events.length ? '. Today: ' + x.events.map(e => e.name).join(', ') : ''}`;
+    return `<div class="tm-col${live ? ' now' : ''}${past ? ' past' : ''}" title="${esc(tip)}"><div class="tm-ev">${x.events.length ? `<i class="${x.events.some(e => e.impact === 'High') ? 'hi' : ''}"></i>` : ''}</div><div class="tm-bar"><span class="${x.level}" style="height:${h}%"></span></div><div class="tm-t">${hourMark(x, i) ? esc(fmtTime(x.time).replace(':00', '').replace(/ ?([AP])M/, (m, a) => a.toLowerCase())) : ''}</div></div>`;
+  }).join('');
+  const list = [...d.best.map(x => ({ x, why: 'One of the 3 busiest windows' })), ...evs.filter(e => !d.best.includes(e.slot)).map(e => ({ x: e.slot, why: 'Scheduled release' }))]
+    .sort((a, b) => a.x.time - b.x.time)
+    .map(({ x, why }) => `<li><span class="tm-when">${fmtTime(x.time)}</span><span><b>${x.events.length ? esc(x.events.map(e => e.name).join(', ')) : esc(x.tag || why)}</b> · usually ${unitTxt(x.typical || 0, d.unit)} high to low</span></li>`).join('');
+  return `${lead}<div class="tm-chart" role="img" aria-label="Typical move size for each ${d.step === 60 ? 'hour' : 'half hour'} of the day">${bars}</div>
+    <div class="tm-key"><span><i class="big"></i>Busiest</span><span><i class="mid"></i>Normal</span><span><i class="low"></i>Quiet</span><span><i class="ev"></i>Scheduled release</span></div>
+    ${list ? `<ul class="tm-list">${list}</ul>` : ''}
+    <p class="tm-note">Bar height is the typical high-to-low range in that ${d.step === 60 ? 'hour' : 'half hour'} over the last ${d.days} trading days. It shows <i>when</i> price tends to move, not which way. The direction comes from the briefing above.</p>`;
+}
 const DIR_TXT = { up: '↑ Likely up', down: '↓ Likely down', mixed: '↕ Unclear' };
 // The trading session the briefing is for: today until the 4 PM ET close, then the next weekday
 const US_HOLIDAYS = new Set(['2026-11-26', '2026-12-25', '2027-01-01', '2027-01-18', '2027-02-15', '2027-03-26', '2027-05-31', '2027-06-18', '2027-07-05', '2027-09-06', '2027-11-25', '2027-12-24']);
@@ -662,15 +699,15 @@ function briefingHTML(d, { empty = 'No major stories for this market right now.'
   if (!list.length) return `<li class="empty">${esc(empty)}</li>`;
   const showWhy = isBeginner() || depth() === 'deep';
   const seenWhy = new Set();
-  const group = effs => { const g = []; (effs || []).forEach(e => { const k = e.dir + '|' + e.reason; const f = g.find(x => x.k === k); if (f) f.label += ' · ' + e.label; else g.push({ ...e, k }); }); return g; };
+  const group = effs => { const g = []; (effs || []).forEach(e => { const k = e.dir + '|' + e.reason + '|' + !!e.paused; const f = g.find(x => x.k === k); if (f) f.label += ' · ' + e.label; else g.push({ ...e, k }); }); return g; };
   return bottomLine(list) + list.map((b, i) => { const dupWhy = b.why && seenWhy.has(b.why); if (b.why) seenWhy.add(b.why); b = { ...b, why: dupWhy ? '' : b.why, effects: group(b.effects) }; return `<li class="bc">
     <span class="bn">${String(i + 1).padStart(2, '0')}</span>
     <div class="bb">
       <a class="bh" href="${esc(b.link)}" target="_blank" rel="noopener">${esc(b.headline)}</a>
       <p class="bm">${srcLine(b)}${b.time ? ' · ' + ago(b.time) : ''}${b.topic ? ' · ' + esc(b.topic) : ''}</p>
       ${showWhy && b.why ? `<p class="bwhy">${esc(b.why)}</p>` : ''}
-      <div class="brow"><span class="bl">Likely effect</span><div>${b.effects && b.effects.length ? b.effects.map(e => `<div class="beff"><span class="pill ${e.dir === 'up' ? 'up' : e.dir === 'down' ? 'down' : ''}"><b>${esc(e.label)}</b> ${DIR_TXT[e.dir] || ''}</span><span class="br">${esc(e.reason)}</span></div>`).join('') : '<span class="br">Little direct effect on your markets.</span>'}</div></div>
-      <div class="brow"><span class="bl">Watch next</span><div><span class="br">${esc(b.watch)}</span></div></div>
+      <div class="brow"><span class="bl">Likely effect</span><div>${b.effects && b.effects.length ? b.effects.map(e => `<div class="beff"><span class="pill ${e.paused ? 'paused' : e.dir === 'up' ? 'up' : e.dir === 'down' ? 'down' : ''}"><b>${esc(e.label)}</b> ${e.paused ? '⏸ Call paused' : DIR_TXT[e.dir] || ''}</span><span class="br">${esc(e.reason)}</span></div>`).join('') : '<span class="br">Little direct effect on your markets.</span>'}</div></div>
+      <div class="brow"><span class="bl">Watch next</span><div><span class="br">${esc(b.watch)}</span>${b.decide && b.effects.some(e => e.dir !== 'mixed') ? `<span class="br btest">Likely tested at ${esc(b.decide.label.replace(/^the /, 'the '))}, ${testWhen(b.decide.time)}.</span>` : ''}</div></div>
       ${b.since ? `<div class="brow"><span class="bl">Already moved</span><div>${reactTxt(b.since)}</div></div>` : ''}
       <div class="bfoot">${reportBtn(b.headline, b.link, 'briefing')}</div>
     </div></li>`; }).join('') + `<li class="bnote">“Likely” is the usual reaction to news like this, not a promise. Check “Already moved” to see what price actually did, and the <a href="/scorecard">scorecard</a> for how past calls turned out.</li>`;
@@ -785,6 +822,7 @@ PAGES.today = () => {
         <section class="rail-chart"><div class="chart-h"><h2 class="sec">Live chart</h2></div><div class="chips tight" id="todayChartPick"></div><div id="todayChart" class="tvbox"></div></section>
       </aside>
     </div>
+    <section class="block" id="timingBlock"><div class="sec-row"><h2 class="sec">When price usually moves</h2><div class="chips tight" id="tmPick"></div></div><div id="timing"></div></section>
     <section class="block"><div class="sec-row"><h2 class="sec" id="outlookH">What’s going to happen next</h2><a href="/calendar">Full calendar</a></div><div id="outlook"></div></section>
     <section class="block wknd-hide"><div class="sec-row"><h2 class="sec">How to trade today’s news with your strategy</h2><button class="linkbtn" type="button" data-edit>Change strategies</button></div><div id="todayPlay"></div></section>
     <section class="block wknd-hide"><div class="sec-row"><h2 class="sec">More news by topic</h2><a href="/news">All news</a></div><div class="topics" id="topics"></div></section>
@@ -803,6 +841,15 @@ PAGES.today = () => {
   }
   else fill('bfeed', 'today’s briefing', deskP, d => briefingHTML(d));
   fill('outlook', 'what’s next', deskP, nextHTML);
+  {
+    const ks = timingKeys(); let tk = store.get('timingKey', ks[0]); if (!ks.includes(tk)) tk = ks[0];
+    const draw = () => {
+      const pk = $('#tmPick'); if (pk) pk.innerHTML = ks.length > 1 ? ks.map(k => `<button class="chip" data-tk="${k}" aria-pressed="${k === tk}">${TIMING_NAME[k]}</button>`).join('') : '';
+      main.querySelectorAll('[data-tk]').forEach(b => b.onclick = () => { tk = b.dataset.tk; store.set('timingKey', tk); const el = $('#timing'); if (el) el.innerHTML = ''; draw(); });
+      fill('timing', 'when price usually moves', api('timing?m=' + tk, 15 * 60e3), timingHTML);
+    };
+    draw();
+  }
   if (!shut) fill('todayPlay', 'your game plan', deskP, playbookHTML);
   main.querySelectorAll('[data-edit]').forEach(b => b.onclick = editSetup);
   fill('myPrices', 'your prices', personalData(), pricesHTML).then(() => {
