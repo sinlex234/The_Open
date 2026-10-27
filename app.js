@@ -629,6 +629,15 @@ document.addEventListener('click', e => {
     } catch { msg.textContent = 'Couldn’t send right now. Try again in a minute.'; f.querySelector('[type=submit]').disabled = false; }
   };
 });
+function whenShort(t) {
+  const d = new Date(t), today = d.toLocaleDateString('en-US', { timeZone: TZ }) === new Date().toLocaleDateString('en-US', { timeZone: TZ });
+  return `${today ? 'Today' : d.toLocaleDateString('en-US', { timeZone: TZ, weekday: 'short' })} ${fmtTime(t)} ${tzAbbr(t)}`;
+}
+function whenWhy(w) {
+  const slot = w.step === 60 ? 'hour' : 'half hour';
+  const size = w.typical ? ` ${w.market.split(' (')[0].replace('Nasdaq futures', 'NQ')} usually moves about ${unitTxt(w.typical, w.unit)} in that ${slot}${w.rank === 1 ? ', the busiest of the day' : w.rank && w.rank <= 3 ? ', one of the busiest of the day' : ''}.` : '';
+  return `Most likely to hit price at ${w.label}.${size}`;
+}
 function testWhen(t) {
   const d = new Date(t), same = d.toLocaleDateString('en-US', { timeZone: TZ }) === new Date().toLocaleDateString('en-US', { timeZone: TZ });
   return `${same ? 'today' : d.toLocaleDateString('en-US', { timeZone: TZ, weekday: 'long' })} ${fmtTime(t)} ${tzAbbr(t)}`;
@@ -692,7 +701,7 @@ function bottomLine(list) {
   if (!rows.length) return '';
   const call = x => { const r = x.score / x.w; return r >= 0.5 ? ['up', '↑ Most likely up'] : r >= 0.2 ? ['up', '↗ Leaning up'] : r <= -0.5 ? ['down', '↓ Most likely down'] : r <= -0.2 ? ['down', '↘ Leaning down'] : ['', '↕ No clear direction']; };
   const count = x => [x.up && `${x.up} up`, x.down && `${x.down} down`, x.mixed && `${x.mixed} unclear`].filter(Boolean).join(' · ');
-  return `<li class="bsum"><p class="bsum-h">Overall summary</p>${rows.map(x => { const [c, t] = call(x); return `<div class="bsum-r"><span class="pill ${c}"><b>${esc(x.label)}</b> ${t}</span><span class="br">${count(x)} across the ${list.length > 1 ? list.length + ' stories' : 'story'} for ${esc(sessionDay().day)}’s session</span></div>`; }).join('')}<p class="bsum-n">Weighs each story’s usual market reaction, with the top story counting most and stories only one outlet has reported counting half. A lean, not a promise.</p></li>`;
+  return `<li class="bsum"><p class="bsum-h">Overall summary</p>${rows.map(x => { const [c, t] = call(x); return `<div class="bsum-r"><span class="pill ${c}"><b>${esc(x.label)}</b> ${t}</span><span class="br">${count(x)} across the ${list.length > 1 ? list.length + ' stories' : 'story'} for ${esc(sessionDay().day)}’s session</span></div>`; }).join('')}${(() => { const ws = list.map(b => b.when).filter(Boolean).sort((a, b) => a.time - b.time); return ws.length ? `<div class="bsum-r"><span class="pill when">⏱ ${esc(whenShort(ws[0].time))}</span><span class="br">When these stories are most likely to move price: ${esc(ws[0].label)}${ws[0].typical ? `, usually about ${unitTxt(ws[0].typical, ws[0].unit)} in that ${ws[0].step === 60 ? 'hour' : 'half hour'}` : ''}.</span></div>` : ''; })()}<p class="bsum-n">Weighs each story’s usual market reaction, with the top story counting most and stories only one outlet has reported counting half. A lean, not a promise.</p></li>`;
 }
 function briefingHTML(d, { empty = 'No major stories for this market right now.' } = {}) {
   const list = d.briefing || [];
@@ -707,7 +716,8 @@ function briefingHTML(d, { empty = 'No major stories for this market right now.'
       <p class="bm">${srcLine(b)}${b.time ? ' · ' + ago(b.time) : ''}${b.topic ? ' · ' + esc(b.topic) : ''}</p>
       ${showWhy && b.why ? `<p class="bwhy">${esc(b.why)}</p>` : ''}
       <div class="brow"><span class="bl">Likely effect</span><div>${b.effects && b.effects.length ? b.effects.map(e => `<div class="beff"><span class="pill ${e.paused ? 'paused' : e.dir === 'up' ? 'up' : e.dir === 'down' ? 'down' : ''}"><b>${esc(e.label)}</b> ${e.paused ? '⏸ Call paused' : DIR_TXT[e.dir] || ''}</span><span class="br">${esc(e.reason)}</span></div>`).join('') : '<span class="br">Little direct effect on your markets.</span>'}</div></div>
-      <div class="brow"><span class="bl">Watch next</span><div><span class="br">${esc(b.watch)}</span>${b.decide && b.effects.some(e => e.dir !== 'mixed') ? `<span class="br btest">Likely tested at ${esc(b.decide.label.replace(/^the /, 'the '))}, ${testWhen(b.decide.time)}.</span>` : ''}</div></div>
+      ${b.when ? `<div class="brow"><span class="bl">When</span><div><div class="beff"><span class="pill when">⏱ ${esc(whenShort(b.when.time))}</span><span class="br">${esc(whenWhy(b.when))}</span></div></div></div>` : ''}
+      <div class="brow"><span class="bl">Watch next</span><div><span class="br">${esc(b.watch)}</span></div></div>
       ${b.since ? `<div class="brow"><span class="bl">Already moved</span><div>${reactTxt(b.since)}</div></div>` : ''}
       <div class="bfoot">${reportBtn(b.headline, b.link, 'briefing')}</div>
     </div></li>`; }).join('') + `<li class="bnote">“Likely” is the usual reaction to news like this, not a promise. Check “Already moved” to see what price actually did, and the <a href="/scorecard">scorecard</a> for how past calls turned out.</li>`;

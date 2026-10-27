@@ -1777,7 +1777,7 @@ function checkCalls(effects, t, px) {
 function decideBy(h, upcoming, m) {
   const re = WATCH_THEME[h.theme];
   const ev = re ? upcoming.find((e) => re.test(e.name) || re.test(e.title || "")) : null;
-  if (ev && ev.time - Date.now() < 30 * 36e5) return { label: ev.name, time: ev.time };
+  if (ev && ev.time - Date.now() < 30 * 36e5) return { label: `the ${ev.name} release`, time: ev.time };
   if (["crypto", "memes"].includes(m)) return null;
   const n = ny(Date.now());
   let date = n.date;
@@ -2007,6 +2007,22 @@ Pick the 4-6 most important stories, world events first. effects should only lis
   const allStories = (res.news && res.news.items || []).filter((h) => h.time && now - h.time < 18 * 36e5);
   const px = await priceBars().catch(() => null);
   out.briefing = briefingFor(allStories, prof, upcoming, focus, px);
+  // When each story is most likely to hit price: its test time, with how much that slot usually moves
+  {
+    const m0 = focus || (prof.find((x) => x.m !== "learning") || {}).m || "futures";
+    const tk = { futures: "NQ", stocks: "NQ", options: "NQ", forex: "EURUSD", crypto: "BTC", memes: "BTC" }[m0] || "NQ";
+    const tm = await buildTiming(tk).catch(() => null);
+    const slotAt = (t) => tm && tm.slots.find((x) => t >= x.time && t < x.time + tm.step * 6e4);
+    const nextBest = () => tm && [...tm.best].map((x) => ({ ...x, t: x.time < now ? x.time + 864e5 : x.time })).sort((a, b) => a.t - b.t)[0];
+    out.briefing.forEach((b) => {
+      let w = b.decide ? { time: b.decide.time, label: b.decide.label } : null;
+      if (!w && tm) { const nb = nextBest(); if (nb) w = { time: nb.t, label: "one of its busiest hours" }; }
+      if (!w) return;
+      const sl = slotAt(w.time) || (tm && tm.slots.find((x) => x.start === ny(w.time).mins - (ny(w.time).mins % tm.step)));
+      b.when = { ...w, market: tm ? tm.name : "", typical: sl ? sl.typical : null, unit: tm ? tm.unit : "", rank: sl ? sl.rank : null, step: tm ? tm.step : 30 };
+    });
+    out.timingKey = tk;
+  }
   out.callLog = await logCalls(callsToLog(allStories, upcoming, pick, px));
   if (focus) out.outlook = out.outlook.filter((o) => (o.markets || []).includes(focus)).slice(0, 3);
   const states = {};
