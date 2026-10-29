@@ -1773,18 +1773,40 @@ function checkCalls(effects, t, px) {
     return e;
   });
 }
-// When the call will likely be tested: the matching release, else the next big session open
+// When the story is likely to hit price.
+// Futures trade almost around the clock (Sun 6 PM to Fri 5 PM New York, with a 5-6 PM break each weekday),
+// so fresh news usually moves price within minutes, not at the 9:30 stock open.
+function marketOpenAt(t, m) {
+  if (["crypto", "memes"].includes(m)) return true;
+  const n = ny(t), dow = n.dow, mins = n.mins;
+  const close = 17 * 60, reopen = m === "forex" ? 17 * 60 : 18 * 60;
+  if (dow === "Sat") return false;
+  if (dow === "Sun") return mins >= reopen;
+  if (dow === "Fri") return mins < close;
+  return mins < close || mins >= reopen;
+}
+function nextOpen(t, m) {
+  let x = Math.ceil(t / 6e4) * 6e4;
+  for (let i = 0; i < 3 * 24 * 4 && !marketOpenAt(x, m); i++) x += 15 * 6e4;
+  // snap to the exact reopen hour
+  const n = ny(x);
+  return nyToMs(n.date, Math.floor(n.mins / 60) * 60);
+}
 function decideBy(h, upcoming, m) {
+  const now = Date.now(), t = h.time || now, age = now - t;
+  const openNow = marketOpenAt(now, m), openAtStory = marketOpenAt(t, m);
   const re = WATCH_THEME[h.theme];
-  const ev = re ? upcoming.find((e) => re.test(e.name) || re.test(e.title || "")) : null;
-  if (ev && ev.time - Date.now() < 30 * 36e5) return { label: `the ${ev.name} release`, time: ev.time };
-  if (["crypto", "memes"].includes(m)) return null;
-  const n = ny(Date.now());
-  let date = n.date;
-  const wk = (d) => { const w = new Date(d + "T12:00:00Z").getUTCDay(); return w > 0 && w < 6; };
-  const open = m === "forex" ? 3 * 60 : 9 * 60 + 30;
-  if (!wk(date) || n.mins >= open) { do date = addDays(date, 1); while (!wk(date)); }
-  return { label: m === "forex" ? "the London open" : "the New York open", time: nyToMs(date, open) };
+  const ev = re ? upcoming.find((e) => (re.test(e.name) || re.test(e.title || "")) && e.time > now && e.time - now < 30 * 36e5) : null;
+  // 1) Fresh headline while the market is trading: it hits price right away
+  if (openNow && age < 45 * 6e4) return { kind: "now", label: "right away", time: t + 10 * 6e4 };
+  // 2) A matching scheduled release is coming: that is the real test
+  if (ev) return { kind: "release", label: `the ${ev.name} release`, time: ev.time };
+  // 3) Market closed: it hits price when futures reopen
+  if (!openNow) return { kind: "reopen", label: m === "forex" ? "when forex reopens" : ["crypto", "memes"].includes(m) ? "right away" : "when futures reopen", time: nextOpen(now, m) };
+  // 4) Broke while closed and the market has reopened since: the reopen already took it in
+  if (!openAtStory) return { kind: "priced", label: "already: it hit price when the market reopened", time: nextOpen(t, m) };
+  // 5) Older story during trading hours: the first reaction has happened
+  return { kind: "priced", label: "already: the first reaction happens within minutes", time: t + 10 * 6e4 };
 }
 function briefingFor(stories, prof, upcoming, focus, px) {
   const mk = prof.map((x) => x.m);
@@ -2015,7 +2037,7 @@ Pick the 4-6 most important stories, world events first. effects should only lis
     const slotAt = (t) => tm && tm.slots.find((x) => t >= x.time && t < x.time + tm.step * 6e4);
     const nextBest = () => tm && [...tm.best].map((x) => ({ ...x, t: x.time < now ? x.time + 864e5 : x.time })).sort((a, b) => a.t - b.t)[0];
     out.briefing.forEach((b) => {
-      let w = b.decide ? { time: b.decide.time, label: b.decide.label } : null;
+      let w = b.decide ? { time: b.decide.time, label: b.decide.label, kind: b.decide.kind } : null;
       if (!w && tm) { const nb = nextBest(); if (nb) w = { time: nb.t, label: "one of its busiest hours" }; }
       if (!w) return;
       const sl = slotAt(w.time) || (tm && tm.slots.find((x) => x.start === ny(w.time).mins - (ny(w.time).mins % tm.step)));
