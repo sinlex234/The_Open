@@ -829,12 +829,55 @@ function worldHTML(d, { rowsPer = 99, sparks = true } = {}) {
   const mine = new Set(myAssets().map(a => a.ysym).filter(Boolean));
   return `<div class="wm">${d.groups.map(g => `<div class="wm-g"><h3>${esc(g.name)}</h3><table>${g.rows.slice(0, rowsPer).map(r => `<tr class="${mine.has(r.sym) ? 'mine' : ''}"><td class="n">${esc(r.label)}</td><td class="p">${priceOf(r)}</td><td class="c">${chg(r.pct)}</td>${sparks ? `<td class="s">${spark(r.spark)}</td>` : ''}</tr>`).join('')}</table></div>`).join('')}</div>`;
 }
+
+// ---------- Live read + News bot: re-checked every 5 minutes ----------
+const PULSE_KEY = { futures: 'NQ', stocks: 'NQ', options: 'NQ', crypto: 'BTC', memes: 'BTC', forex: 'EURUSD' };
+const PULSE_DP = { NQ: 2, BTC: 0, EURUSD: 4 };
+// Only the markets this reader trades (everything if they haven't picked any we cover yet)
+const pulseMine = () => [...new Set(myMarkets().map(m => PULSE_KEY[m]).filter(Boolean))];
+function pulseOrder(reads) {
+  const mine = pulseMine();
+  return mine.length ? mine.map(k => reads.find(r => r.key === k)).filter(Boolean) : reads;
+}
+const unitAmt = (n, u) => `${n > 0 ? '+' : n < 0 ? '−' : ''}${u === '$' ? '$' : ''}${num(Math.abs(n), u === 'pts' ? (Math.abs(n) >= 100 ? 0 : 1) : 0)}${u === 'pts' ? ' pts' : u === 'pips' ? ' pips' : ''}`;
+function pulseCard(r) {
+  const lean = r.lean === 'up' ? '↑ Leaning up' : r.lean === 'down' ? '↓ Leaning down' : r.closed ? 'Market closed' : r.gate ? 'Waiting for the release' : 'No clear lean';
+  const conf = r.conf ? `<span class="pill ${r.conf === 'medium' ? 'acc' : ''}">${r.conf === 'medium' ? 'Medium' : 'Low'} confidence</span>` : '';
+  const mv = r.move ? `<small class="${r.move.ch60 > 0 ? 'up' : r.move.ch60 < 0 ? 'down' : 'faint'}">${unitAmt(r.move.ch60, r.move.unit)} last hour</small>` : '';
+  const why = r.closed && r.reopens ? `Reads restart when it reopens, ${new Date(r.reopens).toLocaleString('en-US', { timeZone: TZ, weekday: 'short', hour: 'numeric', minute: '2-digit' })}.` : r.why;
+  return `<article class="pl-card pl-${r.lean}${r.closed ? ' pl-closed' : ''}">
+    <div class="pl-top"><b>${esc(r.name)}</b><span class="pl-px">${r.price != null ? num(r.price, PULSE_DP[r.key]) : ''} ${mv}</span></div>
+    <div class="pl-lean"><span>${lean}</span>${conf}</div>
+    <p class="pl-why">${esc(why)}</p>
+    ${r.note ? `<p class="pl-note"><span class="pl-ai">AI check</span>${esc(r.note)}</p>` : ''}
+    ${(r.reasons || []).length ? `<ul class="pl-rs">${r.reasons.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}
+  </article>`;
+}
+function newsbotHTML(d) {
+  const names = pulseOrder(d.reads).map(r => r.name);
+  const items = (d.newsbot || []).map(n => ({ ...n, reads: n.reads.filter(x => names.includes(x.market) && (x.dir !== 'mixed' || x.paused)) })).filter(n => n.reads.length);
+  if (!items.length) return `<p class="faint small">No strong headlines for your markets in the last few hours.</p>`;
+  const chip = x => x.paused ? `<span class="pill paused">${esc(x.market)} paused</span>` : x.dir === 'up' ? `<span class="pill up">${esc(x.market)} ↑</span>` : x.dir === 'down' ? `<span class="pill down">${esc(x.market)} ↓</span>` : '';
+  return `<ol class="nb">${items.slice(0, 6).map(n => `<li${Date.now() - n.time < 15 * 60e3 ? ' class="nb-new"' : ''}>
+    <span class="nb-t">${Date.now() - n.time < 15 * 60e3 ? '<i class="nb-dot" aria-hidden="true"></i>' : ''}${esc(ago(n.time))}</span>
+    <span class="nb-h"><a href="${esc(n.link)}" target="_blank" rel="noopener">${esc(n.headline)}</a><small>${esc(n.source)}${n.outlets > 1 ? ` and ${n.outlets - 1} more` : ''}</small></span>
+    <span class="nb-r">${n.reads.map(chip).join('')}</span></li>`).join('')}</ol>`;
+}
+function pulseHTML(d) {
+  const next = d.next ? fmtTime(d.next) : '';
+  const reads = pulseOrder(d.reads);
+  return `<div class="pl-grid n${reads.length}">${reads.map(pulseCard).join('')}</div>
+    <p class="pl-fine">Which way price is more likely to drift over the <b>next hour</b>, from strong news, what price has done in the last hour, and upcoming releases. It's a lean, not a promise, and most of the time the honest answer is “no clear lean”. Every read is saved and graded on the <a href="/scorecard">Scorecard</a>.${next ? ` Next check ${next}.` : ''}</p>
+    <div class="sec-row nb-row"><h3 class="sec sm"><i class="nb-live" aria-hidden="true"></i>News bot</h3><span class="faint small">Strong headlines for your markets as they land</span></div>
+    ${newsbotHTML(d)}`;
+}
 PAGES.today = () => {
   const ws = windowStatus();
   if (layout(`
     ${guideHTML()}
     <h1 class="page-h">${esc(greeting())}</h1>
     <p class="page-intro" id="todayIntro">${isLearning() ? 'Here’s how today’s news connects to the markets you’re learning about.' : ws.text ? esc(ws.text) : 'Here’s what matters for your markets today.'}</p>
+    <section class="pulse" id="pulseBlock"><div class="sec-row"><h2 class="sec">Live read</h2><span class="faint small" id="pulseNext">Re-checked every 5 minutes</span></div><div id="pulse">${skel(2)}</div></section>
     <div class="front">
       <section class="briefing"><div class="sec-row"><h2 class="sec">Briefing for ${esc(sessionDay().long)}</h2><a href="/news">All news</a></div><ol class="bfeed" id="bfeed">${'<li>' + skel(3) + '</li>'}</ol></section>
       <aside class="rail">
@@ -861,6 +904,7 @@ PAGES.today = () => {
   }
   else fill('bfeed', 'today’s briefing', deskP, d => briefingHTML(d));
   fill('outlook', 'what’s next', deskP, nextHTML);
+  fill('pulse', 'the live read', api('pulse', 60e3), pulseHTML);
   {
     const ks = timingKeys(); let tk = store.get('timingKey', ks[0]); if (!ks.includes(tk)) tk = ks[0];
     const draw = () => {
@@ -1398,7 +1442,13 @@ function gradeCell(g) {
 PAGES.scorecard = () => {
   layout(`<h1 class="page-h">Scorecard</h1>
     <p class="page-intro">Every “Likely up” and “Likely down” call in the briefing is saved the moment it’s made, with the price at that time. We check it against what price actually did an hour later and at the 4 PM New York close. Nothing is deleted, so the misses stay here too.</p>
-    <div id="scBody">${skel(3)}</div>`);
+    <div id="scBody">${skel(3)}</div><section class="block"><div class="sec-row"><h2 class="sec">Live read, every 5 minutes</h2></div><div id="scPulse">${skel(2)}</div></section>`);
+  fill('scPulse', 'the live read score', api('pulsescore', 5 * 60e3), d => {
+    if (!d.ready || !d.total) return `<div class="sc-empty"><p><b>No live reads graded yet.</b> Each “Leaning up” or “Leaning down” read is checked one hour later.</p></div>`;
+    return `<div class="sc-tiles sc3">${scoreTile('Right after 1 hour', d.summary)}${scoreTile('Low confidence', d.byConf.low)}${scoreTile('Medium confidence', d.byConf.medium)}</div>
+      <p class="sc-fine">Last ${d.days} days, ${d.total} leans. “No clear lean” reads aren’t graded. If medium confidence isn’t beating low confidence, the confidence label isn’t telling you anything yet.</p>
+      ${Object.keys(d.byMarket).length ? `<div class="sc-mk">${Object.entries(d.byMarket).map(([k, t]) => `<div class="sc-mrow"><b>${esc(CALL_NAME[k] || k)}</b><span>1 hour: ${hitRate(t) == null ? '—' : hitRate(t) + '%'} <small>(${t.right + t.wrong} graded)</small></span><span></span></div>`).join('')}</div>` : ''}`;
+  });
   fill('scBody', 'the scorecard', api('calls', 5 * 60e3), d => {
     if (!d.ready) return `<div class="sc-empty"><p><b>The scorecard is being set up.</b> Calls will start showing here once tracking is switched on.</p></div>`;
     if (!d.total) return `<div class="sc-empty"><p><b>No calls logged yet.</b> The first ones appear the next time the briefing makes an up or down call.</p></div>`;

@@ -47,3 +47,35 @@ alter table public.open_reports enable row level security;
 drop policy if exists "open_reports: add now" on public.open_reports;
 create policy "open_reports: add now" on public.open_reports for insert
   with check (created_at between now() - interval '1 minute' and now() + interval '1 minute');
+
+-- ---------- Live read (added Oct 29 2026). Safe to run more than once. ----------
+-- One row per market per 5-minute check: the lean, its confidence and the price at that moment. Anyone can read them (Scorecard).
+create table if not exists public.open_pulse (
+  id       bigint generated always as identity primary key,
+  market   text not null check (market in ('NQ', 'BTC', 'EURUSD')),
+  slot     bigint not null,
+  lean     text not null check (lean in ('up', 'down', 'none')),
+  conf     text check (conf in ('low', 'medium')),
+  score    double precision,
+  price    double precision,
+  note     text check (char_length(note) <= 400),
+  engine   text check (engine in ('rules', 'ai')),
+  read_at  timestamptz not null default now(),
+  unique (market, slot)
+);
+alter table public.open_pulse enable row level security;
+drop policy if exists "open_pulse: read" on public.open_pulse;
+create policy "open_pulse: read" on public.open_pulse for select using (true);
+drop policy if exists "open_pulse: add now" on public.open_pulse;
+create policy "open_pulse: add now" on public.open_pulse for insert
+  with check (read_at between now() - interval '1 minute' and now() + interval '1 minute'
+    and slot between (extract(epoch from now()) * 1000)::bigint - 600000 and (extract(epoch from now()) * 1000)::bigint + 60000);
+create index if not exists open_pulse_slot on public.open_pulse (slot desc);
+grant select, insert on public.open_pulse to anon, authenticated;
+
+-- Run the check every 5 minutes, even when nobody has the site open
+create extension if not exists pg_cron;
+create extension if not exists pg_net;
+select cron.unschedule(jobid) from cron.job where jobname = 'open-one-live-read';
+select cron.schedule('open-one-live-read', '*/5 * * * *',
+  $$select net.http_get(url := 'https://the-open-one.vercel.app/api/data?fn=pulse&slot=' || floor(extract(epoch from now()) / 300)::bigint)$$);
