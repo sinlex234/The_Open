@@ -1706,10 +1706,10 @@ var RD_PRE_UP = /\b(boost(?:s|ed)?|lift(?:s|ed)?|rising|higher|soaring|surging|c
 var RD_PRE_DOWN = /\b(falling|lower|sliding|easing|declining|dropping|retreating|tumbling|cooling|softer|soft|slowing|weak(?:er)?)\s+(?:\S+\s+){0,3}?$/i;
 var RD_HEDGE_ALL = /^\s*(why|how|what|is|are|should|can|could|will|does|do|here(?:’|')?s|here are|analysis|opinion|commentary|view|factbox|explainer|preview|live updates?|morning minute|stock market news today)\b|\?|\b(survey|poll|price forecast|forecast:)/i;
 var RD_HEDGE = /\b(could|might|may|would|if|likely|set (?:to|for)|poised|expects?|expected to|plans? to|aims? to|seen|to gain|won(?:’|')t|not|n(?:’|')t|how|why|what|outlook for|looms?|awaits?|ahead of (?:its|the)? ?(?:results|earnings))\b/i;
-var RD_FOREIGN = "asia(?:n)?|asia-pacific|europe(?:an)?|euro ?zone|japan(?:ese)?|tokyo|chin(?:a|ese)|hong kong|india(?:n)?|korea(?:n)?|south korea(?:n)?|taiwan(?:ese)?|german(?:y)?|french|france|uk|british|britain|london|italian|spanish|swiss|norwegian|swedish|australian?|canadian?|mexican|brazil(?:ian)?|saudi|turkish|russian|global|world";
+var RD_FOREIGN = "canada|italy|spain|switzerland|sweden|norway|australia|mexico|turkey|russia|new zealand|singapore|indonesia|poland|asia(?:n)?|asia-pacific|europe(?:an)?|euro ?zone|japan(?:ese)?|tokyo|chin(?:a|ese)|hong kong|india(?:n)?|korea(?:n)?|south korea(?:n)?|taiwan(?:ese)?|german(?:y)?|french|france|uk|british|britain|london|italian|spanish|swiss|norwegian|swedish|australian?|canadian?|mexican|brazil(?:ian)?|saudi|turkish|russian|global|world";
 var RD_FOREIGN_EQ = new RegExp("\\b(?:" + RD_FOREIGN + ")\\s+(?:\\w+\\s+){0,2}?(?:stocks?|shares|equities|markets?|indexes|indices|bourses?|chip stocks)\\b|\\b(?:nikkei|kospi|sensex|nifty|ftse|dax|cac|stoxx|hang seng|asx|tsx|shanghai composite|csi 300|topix)\\b", "i");
 var RD_MEGA = "nvidia|apple|microsoft|amazon|alphabet|google|meta|tesla|broadcom|netflix|amd";
-var RD_EARN_STORY = /\b(earnings|revenue|profit|net income|results|guidance|eps|sales|q[1-4])\b/i;
+var RD_EARN_STORY = /\b(earnings|revenue|profit|net income|results|guidance|eps|sales|q[1-4]|posts|reports)\b/i;
 function rdClean(t) {
   return String(t || "").replace(/^\s*[A-Z][\w .&-]{1,30}:\s+(?=\S)/, (m) => /^(financialjuice|breaking|update|exclusive|fj|wsj|bloomberg)\b/i.test(m.trim()) ? "" : m)
     .replace(/\s+(?:By|-)\s+(?:Reuters|Bloomberg|AP|Kitco[^|]*|Investing\.com)\s*$/i, "").replace(/\s+-\s+[A-Z][\w’' ]+$/, "").replace(/[‘’]/g, "'").replace(/[“”]/g, '"').trim();
@@ -1735,7 +1735,8 @@ function rdMove(clause, subjRe, reach = 6) {
       else if (RD_VERB_DOWN.test(rest)) d = -1;
       if (/^(and|or|vs|versus|against)$/i.test(words[i]) && i > 0) break;
     }
-    if (!d) {
+    // "higher oil prices" counts; "higher crude oil procurement costs" is about costs, not the price of oil moving
+    if (!d && !/^\s*(?:procurement|costs?|demand|imports?|exports?|output|production|supply|stocks|majors|companies|firms|producers|tankers?|refiners?|inventor\w+|bills?|tax)\b/i.test(after)) {
       const before = clause.slice(0, m.index);
       if (RD_PRE_UP.test(before)) d = 1; else if (RD_PRE_DOWN.test(before)) d = -1;
     }
@@ -1749,7 +1750,7 @@ var RD_SUBJ = {
   mega: "\\b(?:" + RD_MEGA + ")(?:(?:'s|’s)?\\s+(?:stock|shares|inc\\.?|corp\\.?))?\\b",
   yields: "\\b(?:(?:u\\.?s\\.?|us|treasury|treasuries|bond|government|10-year|2-year|30-year|two-year|ten-year)\\s+){1,3}yields?\\b|\\byields\\b",
   bonds: "\\b(?:u\\.?s\\.?\\s+)?(?:treasuries|treasury bonds|bonds)\\b",
-  oil: "\\b(?:oil|crude|brent|wti)(?: prices?| futures)?\\b",
+  oil: "\\b(?:crude oil|brent crude|wti crude|oil|crude|brent|wti)(?: prices?| futures)?\\b",
   inflation: "\\b(?:(?:u\\.?s\\.?|us|american|core|headline|consumer|september|october|november|december|january|february|march|april|may|june|july|august|pce|cpi|ppi)\\s+){0,3}(?:inflation|cpi|pce|ppi|consumer prices)\\b",
   dollar: "\\b(?:u\\.?s\\.?\\s+)?(?:dollar(?: index)?|greenback|dxy)\\b",
   euro: "\\b(?:euro(?!\\s?zone|pean|s\\b)|eur/usd|single currency)\\b",
@@ -1824,7 +1825,9 @@ function readHeadline(title) {
   for (const c of clauses) {
     if (RD_HEDGE.test(c) && !/\b(no rush to cut|unlikely to cut)\b/i.test(c)) continue;
     const mv = {};
-    ["equity", "mega", "yields", "bonds", "oil", "inflation", "dollar", "euro", "crypto"].forEach((k) => { mv[k] = rdMove(rdFilter(c, k), RD_SUBJ[k], k === "mega" ? 1 : 6); });
+    // Inflation and bond yields only count as US when nothing in the headline points to another country or central bank
+    const foreignCtx = new RegExp("\\b(?:" + RD_FOREIGN + "|boj|bank of japan|ecb|lagarde|boe|bank of england|boc|bank of canada|rba|rbnz|snb|pboc|rbi|jgbs?|bunds?|gilts?)\\b", "i").test(t) && !/\b(u\.?s\.?|us|american|treasur(y|ies)|fed|fomc|federal reserve|pce|wall street)\b/i.test(t);
+    ["equity", "mega", "yields", "bonds", "oil", "inflation", "dollar", "euro", "crypto"].forEach((k) => { mv[k] = foreignCtx && ["yields", "bonds", "inflation"].includes(k) ? { d: 0 } : rdMove(rdFilter(c, k), RD_SUBJ[k], k === "mega" ? 1 : 6); });
     const sell = c.match(/\b(?:u\.?s\.? )?(?:stock|equity|tech|share|market)[- ](selloff|sell-off|rout|rally|rebound)\b/i);
     if (sell && !mv.equity.d) mv.equity = { d: /rally|rebound/i.test(sell[1]) ? 1 : -1, found: true };
     let megaEarn = 0;
