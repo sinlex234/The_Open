@@ -2529,9 +2529,11 @@ function pulseNews(stories, key, px, upcoming) {
 }
 function pulsePrice(bars, key) {
   const c = CALL_MKTS[key];
+  // Only finished 5-minute bars: the scan reads price at the bar close, not mid-bar
+  if (bars) bars = bars.filter((b) => b.t + PULSE_SLOT <= Date.now() + 2e3);
   if (!bars || bars.length < 30) return null;
   const last = bars[bars.length - 1];
-  if (Date.now() - last.t > 20 * 6e4) return { stale: true, price: last.c };
+  if (Date.now() - last.t > 25 * 6e4) return { stale: true, price: last.c };
   const back = (n) => bars[Math.max(0, bars.length - 1 - n)].c;
   const rs = bars.slice(-72).map((b) => b.h - b.l).filter((x) => x > 0).sort((a, b) => a - b);
   const typ = rs[Math.floor(rs.length / 2)] || 0;

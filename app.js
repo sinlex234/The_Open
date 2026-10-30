@@ -880,8 +880,9 @@ function pulseHTML(d) {
     <div class="sec-row nb-row"><h3 class="sec sm"><i class="nb-live" aria-hidden="true"></i>What the bot is reading</h3><span class="faint small">The 3 strongest headlines in your briefing</span></div>
     ${newsbotHTML(d)}`;
 }
-// Scan timer: a new read every 5 minutes, on the clock (:00, :05, :10…), a few seconds after for fresh prices
-const PULSE_MS = 5 * 60e3, PULSE_GRACE = 8e3;
+// Scan timer: a new read at every 5-minute bar close (:00, :05, :10…), the same moment the chart's 5m bar closes.
+// The data is fetched a few seconds after the close so the finished bar is in.
+const PULSE_MS = 5 * 60e3, PULSE_GRACE = 4e3;
 const pulseSlot = () => Math.floor((Date.now() - PULSE_GRACE) / PULSE_MS);
 let pulseShown = null, pulseTimer = null;
 function loadPulse() {
@@ -891,10 +892,13 @@ function loadPulse() {
 function tickPulse() {
   const el = document.getElementById('pulseNext');
   if (!el) { clearInterval(pulseTimer); pulseTimer = null; return; }
-  const left = (pulseShown + 1) * PULSE_MS + PULSE_GRACE - Date.now();
-  if (left <= 0) { el.innerHTML = `<i class="nb-live" aria-hidden="true"></i>Scanning…`; loadPulse(); return; }
-  const m = Math.floor(left / 60e3), sec = Math.floor(left / 1e3) % 60;
-  el.innerHTML = `Next scan in <b>${m}:${String(sec).padStart(2, '0')}</b>`;
+  const close = (pulseShown + 1) * PULSE_MS, left = close - Date.now();
+  if (left <= 0) {
+    el.innerHTML = `<i class="nb-live" aria-hidden="true"></i>Bar closed, scanning…`;
+    if (Date.now() >= close + PULSE_GRACE) loadPulse();
+    return;
+  }
+  el.innerHTML = `5m bar closes in <b>${fmtLeft(left)}</b> · then it scans`;
 }
 PAGES.today = () => {
   const ws = windowStatus();
