@@ -686,6 +686,8 @@ function timingHTML(d) {
     <p class="tm-note">Bar height is the typical high-to-low range in that ${d.step === 60 ? 'hour' : 'half hour'} over the last ${d.days} trading days. It shows <i>when</i> price tends to move, not which way. The direction comes from the briefing above.</p>`;
 }
 const DIR_TXT = { up: '↑ Likely up', down: '↓ Likely down', mixed: '↕ Unclear' };
+const DIR_ARROW = { up: '↑', down: '↓', mixed: '↕' }, DIR_WORD = { up: 'Likely up', down: 'Likely down', mixed: 'Unclear' };
+const dirPill = (label, dir, paused) => paused ? `<span class="pill paused"><b>${esc(label)}</b> ⏸ Call paused</span>` : `<span class="pill dir"><b>${esc(label)}</b> <i class="${dir}">${DIR_ARROW[dir] || '↕'}</i> ${DIR_WORD[dir] || 'Unclear'}</span>`;
 // The trading session the briefing is for: today until the 4 PM ET close, then the next weekday
 const US_HOLIDAYS = new Set(['2026-11-26', '2026-12-25', '2027-01-01', '2027-01-18', '2027-02-15', '2027-03-26', '2027-05-31', '2027-06-18', '2027-07-05', '2027-09-06', '2027-11-25', '2027-12-24']);
 function sessionDay(t = Date.now()) {
@@ -711,26 +713,44 @@ function bottomLine(list) {
   if (!rows.length) return '';
   const call = x => { const r = x.score / x.w; return r >= 0.5 ? ['up', '↑ Most likely up'] : r >= 0.2 ? ['up', '↗ Leaning up'] : r <= -0.5 ? ['down', '↓ Most likely down'] : r <= -0.2 ? ['down', '↘ Leaning down'] : ['', '↕ No clear direction']; };
   const count = x => [x.up && `${x.up} up`, x.down && `${x.down} down`, x.mixed && `${x.mixed} unclear`].filter(Boolean).join(' · ');
-  return `<li class="bsum"><p class="bsum-h">Overall summary</p>${rows.map(x => { const [c, t] = call(x); return `<div class="bsum-r"><span class="pill ${c}"><b>${esc(x.label)}</b> ${t}</span><span class="br">${count(x)} across the ${list.length > 1 ? list.length + ' stories' : 'story'} for ${esc(sessionDay().day)}’s session</span></div>`; }).join('')}${(() => { const ws = list.map(b => b.when).filter(w => w && w.kind !== 'priced').sort((a, b) => a.time - b.time); if (!ws.length) return ''; const w = ws[0]; const txt = w.kind === 'now' ? 'Fresh news is out while futures are trading, so expect the reaction in the next few minutes.' : w.kind === 'reopen' ? `Markets are closed, so these stories hit price ${w.label}.` : `Next likely move: ${w.label}${w.typical ? `, usually about ${unitTxt(w.typical, w.unit)} in that ${w.step === 60 ? 'hour' : 'half hour'}` : ''}.`; return `<div class="bsum-r"><span class="pill when">⏱ ${esc(whenPill(w))}</span><span class="br">${esc(txt)}</span></div>`; })()}<p class="bsum-n">Weighs each story’s usual market reaction, with the top story counting most and stories only one outlet has reported counting half. A lean, not a promise.</p></li>`;
+  return `<li class="bsum"><p class="bsum-h">Overall summary</p>${rows.map(x => { const [c, t] = call(x); return `<div class="bsum-r"><span class="pill dir"><b>${esc(x.label)}</b> <i class="${c}">${t.slice(0, 1)}</i> ${t.slice(2)}</span><span class="br">${count(x)} across the ${list.length > 1 ? list.length + ' stories' : 'story'} for ${esc(sessionDay().day)}’s session</span></div>`; }).join('')}${(() => { const ws = list.map(b => b.when).filter(w => w && w.kind !== 'priced').sort((a, b) => a.time - b.time); if (!ws.length) return ''; const w = ws[0]; const txt = w.kind === 'now' ? 'Fresh news is out while futures are trading, so expect the reaction in the next few minutes.' : w.kind === 'reopen' ? `Markets are closed, so these stories hit price ${w.label}.` : `Next likely move: ${w.label}${w.typical ? `, usually about ${unitTxt(w.typical, w.unit)} in that ${w.step === 60 ? 'hour' : 'half hour'}` : ''}.`; return `<div class="bsum-r"><span class="pill when">⏱ ${esc(whenPill(w))}</span><span class="br">${esc(txt)}</span></div>`; })()}<p class="bsum-n">Weighs each story’s usual market reaction, with the top story counting most and stories only one outlet has reported counting half. A lean, not a promise.</p></li>`;
 }
-function briefingHTML(d, { empty = 'No major stories for this market right now.' } = {}) {
+// Track record from the Scorecard: how calls for this market did one hour later (last 30 days)
+const REC_KEY = { futures: 'NQ', stocks: 'NQ', options: 'NQ', crypto: 'BTC', memes: 'BTC', forex: 'EURUSD' };
+function recLine(effs, rec) {
+  if (!rec || !rec.byMarket) return '';
+  const seen = new Set(), out = [];
+  (effs || []).forEach(e => {
+    if (e.paused || e.dir === 'mixed') return;
+    const k = REC_KEY[e.market]; if (!k || seen.has(k)) return; seen.add(k);
+    const t = (rec.byMarket.find(x => x.market === k) || {}).hour; if (!t) return;
+    const n = t.right + t.wrong; if (n < 5) return;
+    out.push(`${esc(CALL_NAME[k] || k)} calls were right ${Math.round(t.right / n * 100)}% of the time an hour later (${n} graded)`);
+  });
+  return out.length ? `<p class="brec">Track record: ${out.join('; ')}. <a href="/scorecard">Scorecard</a></p>` : '';
+}
+function briefingHTML(d, { empty = 'No major stories for this market right now.', rec = null, fresh = null } = {}) {
   const list = d.briefing || [];
   if (!list.length) return `<li class="empty">${esc(empty)}</li>`;
   const showWhy = isBeginner() || depth() === 'deep';
   const seenWhy = new Set();
   const group = effs => { const g = []; (effs || []).forEach(e => { const k = e.dir + '|' + e.reason + '|' + !!e.paused; const f = g.find(x => x.k === k); if (f) f.label += ' · ' + e.label; else g.push({ ...e, k }); }); return g; };
-  return bottomLine(list) + list.map((b, i) => { const dupWhy = b.why && seenWhy.has(b.why); if (b.why) seenWhy.add(b.why); b = { ...b, why: dupWhy ? '' : b.why, effects: group(b.effects) }; return `<li class="bc">
+  return bottomLine(list) + list.map((b, i) => { const dupWhy = b.why && seenWhy.has(b.why); if (b.why) seenWhy.add(b.why); const raw = b.effects; b = { ...b, why: dupWhy ? '' : b.why, effects: group(b.effects) };
+    const isNew = fresh && fresh.has(b.id || b.link);
+    return `<li class="bc${isNew ? ' bc-new' : ''}">
     <span class="bn">${String(i + 1).padStart(2, '0')}</span>
     <div class="bb">
-      <a class="bh" href="${esc(b.link)}" target="_blank" rel="noopener">${esc(b.headline)}</a>
-      <p class="bm">${srcLine(b)}${b.time ? ' · ' + ago(b.time) : ''}${b.topic ? ' · ' + esc(b.topic) : ''}</p>
+      <a class="bh" href="${esc(b.link)}" target="_blank" rel="noopener">${isNew ? '<span class="newtag">New</span>' : ''}${esc(b.headline)}</a>
+      <p class="bm">${srcLine(b)}${b.time ? ' · ' + ago(b.time) : ''}${b.topic ? ' · ' + esc(b.topic) : ''}${b.since ? ` · <span class="bm-moved">${reactTxt(b.since)}</span>` : ''}</p>
       ${showWhy && b.why ? `<p class="bwhy">${esc(b.why)}</p>` : ''}
-      <div class="brow"><span class="bl">Likely effect</span><div>${b.effects && b.effects.length ? b.effects.map(e => `<div class="beff"><span class="pill ${e.paused ? 'paused' : e.dir === 'up' ? 'up' : e.dir === 'down' ? 'down' : ''}"><b>${esc(e.label)}</b> ${e.paused ? '⏸ Call paused' : DIR_TXT[e.dir] || ''}</span><span class="br">${esc(e.reason)}</span></div>`).join('') : '<span class="br">Little direct effect on your markets.</span>'}</div></div>
-      ${b.when ? `<div class="brow"><span class="bl">When</span><div><div class="beff"><span class="pill when">⏱ ${esc(whenPill(b.when))}</span><span class="br">${esc(whenWhy(b.when, b))}</span></div></div></div>` : ''}
-      <div class="brow"><span class="bl">Watch next</span><div><span class="br">${esc(b.watch)}</span></div></div>
-      ${b.since ? `<div class="brow"><span class="bl">Already moved</span><div>${reactTxt(b.since)}</div></div>` : ''}
-      <div class="bfoot">${reportBtn(b.headline, b.link, 'briefing')}</div>
-    </div></li>`; }).join('') + `<li class="bnote">“Likely” is the usual reaction to news like this, not a promise. Check “Already moved” to see what price actually did, and the <a href="/scorecard">scorecard</a> for how past calls turned out.</li>`;
+      <div class="bfx">${b.effects && b.effects.length ? b.effects.map(e => `<div class="beff">${dirPill(e.label, e.dir, e.paused)}${b.when && e === b.effects[0] ? `<span class="pill when">⏱ ${esc(whenPill(b.when))}</span>` : ''}<span class="br">${esc(e.reason)}</span></div>`).join('') : `<div class="beff">${b.when ? `<span class="pill when">⏱ ${esc(whenPill(b.when))}</span>` : ''}<span class="br">Little direct effect on your markets.</span></div>`}</div>
+      ${recLine(raw, rec)}
+      <details class="bmore"><summary>Timing and what to watch</summary>
+        ${b.when ? `<div class="brow"><span class="bl">When</span><div><span class="br">${esc(whenWhy(b.when, b))}</span></div></div>` : ''}
+        <div class="brow"><span class="bl">Watch next</span><div><span class="br">${esc(b.watch)}</span></div></div>
+        <div class="bfoot">${reportBtn(b.headline, b.link, 'briefing')}</div>
+      </details>
+    </div></li>`; }).join('') + `<li class="bnote">“Likely” is the usual reaction to news like this, not a promise. The grey numbers after each source show what price has done since; the <a href="/scorecard">scorecard</a> shows how past calls turned out.</li>`;
 }
 const FIT_CLASS = { 'Lines up well': 'up', 'Big day for this': 'acc', 'Use caution': 'warn', 'Poor fit today': 'down' };
 function nextHTML(d) {
@@ -830,6 +850,129 @@ function worldHTML(d, { rowsPer = 99, sparks = true } = {}) {
   return `<div class="wm">${d.groups.map(g => `<div class="wm-g"><h3>${esc(g.name)}</h3><table>${g.rows.slice(0, rowsPer).map(r => `<tr class="${mine.has(r.sym) ? 'mine' : ''}"><td class="n">${esc(r.label)}</td><td class="p">${priceOf(r)}</td><td class="c">${chg(r.pct)}</td>${sparks ? `<td class="s">${spark(r.spark)}</td>` : ''}</tr>`).join('')}</table></div>`).join('')}</div>`;
 }
 
+
+// ---------- Session countdowns: the sessions that matter for what this reader trades ----------
+// Each session is defined in its own city's time, so daylight-saving changes in Tokyo, London and New York are handled.
+const SESSIONS = {
+  futures: { name: 'Index futures', shut: 'futures', weekdays: true, list: [
+    { id: 'asia', name: 'Asia', tz: 'Asia/Tokyo', from: '09:00', to: '15:00' },
+    { id: 'london', name: 'London', tz: 'Europe/London', from: '08:00', to: '16:30' },
+    { id: 'ny', name: 'New York', tz: 'America/New_York', from: '09:30', to: '16:00' }] },
+  forex: { name: 'Forex', shut: 'forex', weekdays: true, list: [
+    { id: 'tokyo', name: 'Tokyo', tz: 'Asia/Tokyo', from: '09:00', to: '18:00' },
+    { id: 'london', name: 'London', tz: 'Europe/London', from: '08:00', to: '17:00' },
+    { id: 'ny', name: 'New York', tz: 'America/New_York', from: '08:00', to: '17:00' }] },
+  stocks: { name: 'US stocks', weekdays: true, list: [
+    { id: 'pre', name: 'Pre-market', tz: 'America/New_York', from: '04:00', to: '09:30' },
+    { id: 'ny', name: 'Regular session', tz: 'America/New_York', from: '09:30', to: '16:00' },
+    { id: 'after', name: 'After hours', tz: 'America/New_York', from: '16:00', to: '20:00' }] },
+  crypto: { name: 'Crypto', weekdays: false, list: [
+    { id: 'asia', name: 'Asia', tz: 'Asia/Tokyo', from: '09:00', to: '17:00' },
+    { id: 'london', name: 'London', tz: 'Europe/London', from: '08:00', to: '16:00' },
+    { id: 'us', name: 'US', tz: 'America/New_York', from: '09:30', to: '16:00' }] }
+};
+const SESS_OF = { futures: 'futures', stocks: 'stocks', options: 'stocks', forex: 'forex', crypto: 'crypto', memes: 'crypto' };
+const sessFmt = {};
+function tzOff(ms, tz) {
+  const f = sessFmt[tz] || (sessFmt[tz] = new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+  const o = {}; f.formatToParts(new Date(ms)).forEach(x => o[x.type] = x.value);
+  return Date.UTC(+o.year, +o.month - 1, +o.day, +o.hour % 24, +o.minute, +o.second) - Math.floor(ms / 1e3) * 1e3;
+}
+function tzDate(ms, tz) { const t = ms + tzOff(ms, tz); return new Date(t).toISOString().slice(0, 10); }
+function wallMs(date, hm, tz) {
+  const [y, mo, d] = date.split('-').map(Number), [h, mi] = hm.split(':').map(Number);
+  const guess = Date.UTC(y, mo - 1, d, h, mi);
+  let t = guess - tzOff(guess, tz); t = guess - tzOff(t, tz);
+  return t;
+}
+// Every real session window from yesterday to a week ahead, for one market
+function sessWindows(key, now = Date.now()) {
+  const S = SESSIONS[key], out = [];
+  S.list.forEach(x => {
+    const seen = new Set();
+    for (let k = -1; k <= 8; k++) {
+      const date = tzDate(now + k * 864e5, x.tz); if (seen.has(date)) continue; seen.add(date);
+      const dow = new Date(date + 'T12:00:00Z').getUTCDay();
+      if (S.weekdays && (dow === 0 || dow === 6)) continue;
+      const start = wallMs(date, x.from, x.tz), end = wallMs(date, x.to, x.tz);
+      if (S.shut && marketShut(S.shut, start + 6e4) != null) continue;
+      out.push({ ...x, start, end });
+    }
+  });
+  return out.sort((a, b) => a.start - b.start);
+}
+function cdText(ms) {
+  const s = Math.max(0, Math.ceil(ms / 1e3)), d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60), x = s % 60;
+  const pad = n => String(n).padStart(2, '0');
+  return d ? `${d}d ${h}:${pad(m)}:${pad(x)}` : h ? `${h}:${pad(m)}:${pad(x)}` : `${m}:${pad(x)}`;
+}
+let sessTimer = null, sessState = {};
+function sessionsHTML() {
+  const keys = [...new Set(myMarkets().map(m => SESS_OF[m]).filter(Boolean))];
+  return (keys.length ? keys : ['futures']).map(k => `<article class="ssc" data-sk="${k}">
+      <p class="rel-top"><span class="ssc-dot"></span><span class="ssc-eye"></span></p>
+      <div class="ssc-body"><div class="rel-nums ssc-nums"></div></div>
+      <div class="ssc-bar" aria-hidden="true"><i></i></div>
+      <div class="brow"><span class="bl">Sessions</span><div class="ssc-pills"></div></div>
+    </article>`).join('');
+}
+const sessT = t => `${fmtTime(t)}${dayIn(t) !== dayIn(Date.now()) ? ' ' + new Date(t).toLocaleDateString('en-US', { timeZone: TZ, weekday: 'short' }) : ''}`;
+const sessR = w => `${fmtTime(w.start)}–${fmtTime(w.end)}`;
+function tickSessions() {
+  const cards = document.querySelectorAll('.ssc');
+  if (!cards.length) { clearInterval(sessTimer); sessTimer = null; return; }
+  const now = Date.now();
+  cards.forEach(card => {
+    const k = card.dataset.sk, S = SESSIONS[k], wins = sessWindows(k, now);
+    const active = wins.filter(w => w.start <= now && now < w.end);
+    const upcoming = wins.filter(w => w.start > now && !active.some(a => a.id === w.id));
+    const next = upcoming[0], then = upcoming[1];
+    const shutAt = S.shut ? marketShut(S.shut, now) : null;
+    const key = active.map(a => a.id).join('+') || (shutAt ? 'shut' : 'gap:' + (next ? next.id : ''));
+    const prev = sessState[k];
+    const live = active.length > 0;
+    const nowName = active.length > 1 ? `${active.map(a => a.name).join(' + ')} overlap` : live ? `${active[0].name} session` : shutAt ? 'Closed for the weekend' : 'Between sessions';
+    // Eyebrow, numbers
+    let nums;
+    if (live) {
+      const end = Math.min(...active.map(a => a.end));
+      nums = [['Ends in', cdText(end - now), 'ssc-cd'], next ? [`Next · ${next.name}`, sessT(next.start)] : null, next ? ['Starts in', cdText(next.start - now)] : null];
+    } else if (shutAt) {
+      nums = [['Reopens in', cdText(shutAt - now), 'ssc-cd'], ['At', sessT(shutAt)], next ? [`First · ${next.name}`, sessT(next.start)] : null];
+    } else {
+      nums = [[next ? `${next.name} opens in` : 'Next session', next ? cdText(next.start - now) : '—', 'ssc-cd'], next ? ['At', sessT(next.start)] : null, then ? [`Then · ${then.name}`, sessT(then.start)] : null];
+    }
+    const numsHTML = nums.filter(Boolean).map(([l, v, c]) => `<div><small>${esc(l)}</small><b class="${c || ''}">${esc(v)}</b></div>`).join('');
+    const soon = !live && next && next.start - now <= 60e3 && next.start > now;
+    card.classList.toggle('ssc-live', live);
+    card.classList.toggle('ssc-soon', !!soon);
+    const eye = card.querySelector('.ssc-eye'), body = card.querySelector('.ssc-body'), numEl = card.querySelector('.ssc-nums');
+    const justOpened = live && active.some(a => now - a.start < 60e3);
+    card.classList.toggle('ssc-just', justOpened);
+    const eyeText = `${S.name} · ${justOpened ? 'Just opened · ' + active.map(a => a.name).join(' + ') : nowName}`;
+    if (prev !== undefined && prev !== key) {
+      // The session changed: fade the old numbers out and the new ones in
+      body.classList.add('out');
+      setTimeout(() => { numEl.innerHTML = numsHTML; eye.textContent = eyeText; body.classList.remove('out'); }, 280);
+    } else if (!body.classList.contains('out')) { numEl.innerHTML = numsHTML; eye.textContent = eyeText; }
+    sessState[k] = key;
+    // Progress through the current session
+    const bar = card.querySelector('.ssc-bar i');
+    if (live) { const a = active[0]; bar.style.width = Math.min(100, (now - a.start) / (a.end - a.start) * 100).toFixed(2) + '%'; }
+    else bar.style.width = '0%';
+    // One pill per session: the one happening now, or its next time
+    const pills = S.list.map(x => wins.find(w => w.id === x.id && w.end > now)).filter(Boolean).sort((p, q) => p.start - q.start);
+    const ph = pills.map(w => `<span class="pill${w.start <= now ? ' when' : ''}"><b>${esc(w.name)}</b> ${esc(sessR(w))}</span>`).join('');
+    const pe = card.querySelector('.ssc-pills'); if (pe.dataset.h !== ph) { pe.innerHTML = ph; pe.dataset.h = ph; }
+  });
+}
+function dayIn(t) { return new Date(t).toLocaleDateString('en-US', { timeZone: TZ }); }
+function mountSessions() {
+  const el = document.getElementById('sessions'); if (!el) return;
+  if (!el.querySelector('.ssc')) { el.innerHTML = sessionsHTML(); sessState = {}; }
+  tickSessions();
+  if (!sessTimer) sessTimer = setInterval(() => { if (document.visibilityState === 'visible') tickSessions(); }, 1000);
+}
 // ---------- Live read + News bot: re-checked every 5 minutes ----------
 const PULSE_KEY = { futures: 'NQ', stocks: 'NQ', options: 'NQ', crypto: 'BTC', memes: 'BTC', forex: 'EURUSD' };
 const PULSE_DP = { NQ: 2, BTC: 0, EURUSD: 4 };
@@ -841,7 +984,7 @@ function pulseOrder(reads) {
 }
 const unitAmt = (n, u) => `${n > 0 ? '+' : n < 0 ? '−' : ''}${u === '$' ? '$' : ''}${num(Math.abs(n), u === 'pts' ? (Math.abs(n) >= 100 ? 0 : 1) : 0)}${u === 'pts' ? ' pts' : u === 'pips' ? ' pips' : ''}`;
 function pulseCard(r) {
-  const lean = r.lean === 'up' ? '↑ Leaning up' : r.lean === 'down' ? '↓ Leaning down' : r.closed ? 'Market closed' : r.gate ? 'Waiting for the release' : 'No clear lean';
+  const lean = r.lean === 'up' ? '<i class="up">↑</i> Leaning up' : r.lean === 'down' ? '<i class="down">↓</i> Leaning down' : r.closed ? 'Market closed' : r.gate ? 'Waiting for the release' : 'No clear lean';
   const conf = r.conf ? `<span class="pill ${r.conf === 'medium' ? 'acc' : ''}">${r.conf === 'medium' ? 'Medium' : 'Low'} confidence</span>` : '';
   const mv = r.move ? `<small class="${r.move.ch60 > 0 ? 'up' : r.move.ch60 < 0 ? 'down' : 'faint'}">${unitAmt(r.move.ch60, r.move.unit)} last hour</small>` : '';
   const why = r.closed && r.reopens ? `Reads restart when it reopens, ${new Date(r.reopens).toLocaleString('en-US', { timeZone: TZ, weekday: 'short', hour: 'numeric', minute: '2-digit' })}.` : r.why;
@@ -875,10 +1018,11 @@ function newsbotHTML(d) {
 }
 function pulseHTML(d) {
   const reads = pulseOrder(d.reads);
+  const tops = topThree(d);
+  const ar = x => x.paused ? '⏸' : x.dir === 'up' ? '<i class="up">↑</i>' : x.dir === 'down' ? '<i class="down">↓</i>' : '<i>↕</i>';
   return `<div class="pl-grid n${reads.length}">${reads.map(pulseCard).join('')}</div>
-    <p class="pl-fine">Which way price is more likely to drift over the <b>next hour</b>, from the 3 strongest headlines in the briefing, what price has done in the last hour, and upcoming releases. It's a lean, not a promise, and most of the time the honest answer is “no clear lean”. Every read is saved and graded on the <a href="/scorecard">Scorecard</a>.</p>
-    <div class="sec-row nb-row"><h3 class="sec sm"><i class="nb-live" aria-hidden="true"></i>What the bot is reading</h3><span class="faint small">The 3 strongest headlines in your briefing</span></div>
-    ${newsbotHTML(d)}`;
+    ${tops.length ? `<p class="pl-src">Reading the top ${tops.length} stories in your briefing: ${tops.map((n, i) => `<a href="${esc(n.link)}" target="_blank" rel="noopener" title="${esc(n.headline)}">${String(i + 1).padStart(2, '0')} ${n.reads.map(ar).join('')}</a>`).join('')}</p>` : ''}
+    <p class="pl-fine">A lean for the next hour, not a promise. Every read is graded on the <a href="/scorecard">Scorecard</a>.</p>`;
 }
 // Scan timer: a new read at every 5-minute bar close (:00, :05, :10…), the same moment the chart's 5m bar closes.
 // The data is fetched a few seconds after the close so the finished bar is in.
@@ -887,18 +1031,59 @@ const pulseSlot = () => Math.floor((Date.now() - PULSE_GRACE) / PULSE_MS);
 let pulseShown = null, pulseTimer = null;
 function loadPulse() {
   const slot = pulseSlot(); pulseShown = slot;
-  return fill('pulse', 'the live read', api('pulse?slot=' + slot, PULSE_MS), pulseHTML);
+  pulseP = api('pulse?slot=' + slot, PULSE_MS).then(d => { pulseLast = d; return d; });
+  return fill('pulse', 'the live read', pulseP, pulseHTML);
 }
 function tickPulse() {
   const el = document.getElementById('pulseNext');
   if (!el) { clearInterval(pulseTimer); pulseTimer = null; return; }
   const close = (pulseShown + 1) * PULSE_MS, left = close - Date.now();
   if (left <= 0) {
-    el.innerHTML = `<i class="nb-live" aria-hidden="true"></i>Bar closed, scanning…`;
+    el.innerHTML = `<i class="nb-live" aria-hidden="true"></i>Scanning…`;
     if (Date.now() >= close + PULSE_GRACE) loadPulse();
     return;
   }
-  el.innerHTML = `5m bar closes in <b>${fmtLeft(left)}</b> · then it scans`;
+  el.innerHTML = `Next scan <b>${fmtLeft(left)}</b>`; el.title = 'Scans when each 5-minute bar closes';
+}
+// "Since you last looked": new briefing stories, how far your markets moved, and calls that changed
+function sinceStart(d) {
+  const prev = store.get('lastSeen', null), now = Date.now();
+  const ids = (d.briefing || []).map(b => b.id || b.link);
+  const fresh = new Set();
+  const el = document.getElementById('since');
+  if (prev && now - prev.t > 10 * 60e3 && now - prev.t < 3 * 864e5) {
+    ids.forEach(k => { if (!prev.ids.includes(k)) fresh.add(k); });
+    const bits = [];
+    if (fresh.size) bits.push(`<b>${fresh.size} new ${fresh.size === 1 ? 'story' : 'stories'}</b> in your briefing`);
+    const leanNow = {}; try { (pulseLast && pulseLast.reads || []).forEach(r => leanNow[r.key] = r); } catch {}
+    Object.entries(prev.px || {}).forEach(([k, p]) => { const r = leanNow[k]; if (!r || r.price == null || p == null) return; const dp = r.price - p; const u = k === 'EURUSD' ? Math.round(dp / 1e-4) + ' pips' : k === 'BTC' ? '$' + Math.round(Math.abs(dp)).toLocaleString('en-US') : Math.abs(dp).toFixed(1) + ' pts'; bits.push(`${esc(r.name)} <span class="${dp > 0 ? 'up' : dp < 0 ? 'down' : ''}">${dp > 0 ? '+' : dp < 0 ? '−' : ''}${k === 'EURUSD' ? u.replace('-', '') : u}</span>`); });
+    Object.entries(prev.lean || {}).forEach(([k, l]) => { const r = leanNow[k]; if (r && r.lean !== l) bits.push(`${esc(r.name)} read went from ${LEAN_TXT[l]} to <b>${LEAN_TXT[r.lean]}</b>`); });
+    if (el && bits.length) { el.innerHTML = `<span class="since-h">Since you were here at ${fmtTime(prev.t)}</span><span class="since-b">${bits.join('<i>·</i>')}</span><button class="since-x" type="button" aria-label="Dismiss">×</button>`; el.hidden = false; el.querySelector('.since-x').onclick = () => { el.hidden = true; }; }
+  }
+  clearTimeout(sinceSave); sinceSave = setTimeout(() => saveSeen(ids), 20e3);
+  sinceIds = ids;
+  return fresh;
+}
+const LEAN_TXT = { up: 'leaning up', down: 'leaning down', none: 'no clear lean' };
+let sinceSave = null, sinceIds = [], pulseLast = null, pulseP = null;
+function saveSeen(ids) {
+  const px = {}, lean = {};
+  (pulseLast && pulseLast.reads || []).forEach(r => { if (r.price != null) px[r.key] = r.price; lean[r.key] = r.lean; });
+  store.set('lastSeen', { t: Date.now(), ids: ids || sinceIds, px, lean });
+}
+addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden' && sinceIds.length && main.dataset.page === 'today') saveSeen(sinceIds); });
+const TODAY_TABS = [['next', 'What’s next'], ['timing', 'When price moves'], ['play', 'Your game plan'], ['topics', 'More news'], ['world', 'World markets']];
+function bindTabs() {
+  const bar = main.querySelector('.tabbar'); if (!bar) return;
+  const vis = k => { const p = main.querySelector(`.tabp[data-panel="${k}"]`); return p && !p.classList.contains('wk-off'); };
+  let cur = store.get('todayTab', 'next'); if (!vis(cur)) cur = 'next';
+  const show = k => {
+    cur = k; store.set('todayTab', k);
+    bar.querySelectorAll('[data-tab]').forEach(b => { const on = b.dataset.tab === k; b.setAttribute('aria-selected', on); b.setAttribute('aria-pressed', on); b.hidden = !vis(b.dataset.tab); });
+    main.querySelectorAll('.tabp').forEach(p => p.classList.toggle('on', p.dataset.panel === k));
+  };
+  bar.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => show(b.dataset.tab));
+  show(cur);
 }
 PAGES.today = () => {
   const ws = windowStatus();
@@ -906,34 +1091,46 @@ PAGES.today = () => {
     ${guideHTML()}
     <h1 class="page-h">${esc(greeting())}</h1>
     <p class="page-intro" id="todayIntro">${isLearning() ? 'Here’s how today’s news connects to the markets you’re learning about.' : ws.text ? esc(ws.text) : 'Here’s what matters for your markets today.'}</p>
-    <section class="pulse" id="pulseBlock"><div class="sec-row"><h2 class="sec">Live read</h2><span class="pl-timer" id="pulseNext" aria-live="off">Next scan in …</span></div><div id="pulse">${skel(2)}</div></section>
-    <div class="front">
+    <div class="since" id="since" hidden></div>
+    <div class="front front2">
+      <div class="maincol">
       <section class="briefing"><div class="sec-row"><h2 class="sec">Briefing for ${esc(sessionDay().long)}</h2><a href="/news">All news</a></div><ol class="bfeed" id="bfeed">${'<li>' + skel(3) + '</li>'}</ol></section>
+    <section class="block more-tabs">
+        <div class="chips tabbar" role="tablist" aria-label="More for today">${TODAY_TABS.map(([k, l]) => `<button class="chip" role="tab" data-tab="${k}" aria-selected="false" aria-pressed="false">${l}</button>`).join('')}</div>
+        <div class="tabp" data-panel="next"><div class="tab-links"><a class="more" href="/calendar">Full calendar</a></div><h2 class="sr-only" id="outlookH">What’s going to happen next</h2><div id="outlook"></div></div>
+        <div class="tabp" data-panel="timing"><div class="tab-links"><div class="chips tight" id="tmPick"></div></div><div id="timing"></div></div>
+        <div class="tabp wknd-hide" data-panel="play"><div class="tab-links"><button class="linkbtn" type="button" data-edit>Change strategies</button></div><div id="todayPlay"></div></div>
+        <div class="tabp wknd-hide" data-panel="topics"><div class="tab-links"><a class="more" href="/news">All news</a></div><div class="topics" id="topics"></div></div>
+        <div class="tabp" data-panel="world"><div class="tab-links"><a class="more" href="/markets">All markets</a></div><div id="worldMini"></div></div>
+      </section>
+      </div>
+      <div class="now">
+        <section class="now-sec" id="sessBlock"><div class="sec-row"><h2 class="sec">Your sessions</h2><span class="faint small">${esc(tzAbbr())}</span></div><div id="sessions" class="ssc-list"></div></section>
+        <section class="now-sec pulse" id="pulseBlock"><div class="sec-row"><h2 class="sec">Live read</h2><span class="pl-timer" id="pulseNext" aria-live="off">…</span></div><div id="pulse">${skel(2)}</div></section>
+      </div>
       <aside class="rail">
         <section id="myPrices"></section>
         <section class="rail-chart"><div class="chart-h"><h2 class="sec">Live chart</h2></div><div class="chips tight" id="todayChartPick"></div><div id="todayChart" class="tvbox"></div></section>
       </aside>
     </div>
-    <section class="block" id="timingBlock"><div class="sec-row"><h2 class="sec">When price usually moves</h2><div class="chips tight" id="tmPick"></div></div><div id="timing"></div></section>
-    <section class="block"><div class="sec-row"><h2 class="sec" id="outlookH">What’s going to happen next</h2><a href="/calendar">Full calendar</a></div><div id="outlook"></div></section>
-    <section class="block wknd-hide"><div class="sec-row"><h2 class="sec">How to trade today’s news with your strategy</h2><button class="linkbtn" type="button" data-edit>Change strategies</button></div><div id="todayPlay"></div></section>
-    <section class="block wknd-hide"><div class="sec-row"><h2 class="sec">More news by topic</h2><a href="/news">All news</a></div><div class="topics" id="topics"></div></section>
-    <section class="block"><div class="sec-row"><h2 class="sec">World markets</h2><a href="/markets">All markets</a></div><div id="worldMini"></div></section>`)) {
+`)) {
     chartPicker('todayChart', 'todayChartPick', todayChartOptions());
     const gx = $('#guideX'); if (gx) gx.onclick = () => { store.set('guideDone', true); const g = $('#guide'); if (g) g.remove(); };
   }
+  loadPulse();
   const deskP = api('desk?' + profileQuery(), 5 * 60e3);
   const wireP = api('wire?section=all', 60e3);
   const shut = !showWeekendNews() && allShut(myMarkets());
-  main.querySelectorAll('.wknd-hide').forEach(x => x.hidden = !!shut);
+  main.querySelectorAll('.wknd-hide').forEach(x => x.classList.toggle('wk-off', !!shut));
+  bindTabs();
   if (shut) {
     const bf = $('#bfeed'); if (bf) { bf.innerHTML = `<li class="closed-li">${closedHTML(shut, myMarkets().length > 1 ? 'Every market you trade' : `The ${SHUT_NAME[myMarkets()[0]] || ''} market`)}</li>`; bindWeekend(); }
     const oh = $('#outlookH'); if (oh) oh.textContent = 'What’s coming when it reopens';
     const ti = $('#todayIntro'); if (ti && !isLearning()) ti.textContent = 'Your markets are closed for the weekend. Here’s what’s coming when they reopen.';
   }
-  else fill('bfeed', 'today’s briefing', deskP, d => briefingHTML(d));
+  else fill('bfeed', 'today’s briefing', Promise.all([deskP, api('calls', 5 * 60e3).catch(() => null), (pulseP || Promise.resolve()).catch(() => null)]), ([d, c]) => { const seen = sinceStart(d); return briefingHTML(d, { rec: c, fresh: seen }); });
   fill('outlook', 'what’s next', deskP, nextHTML);
-  loadPulse();
+  mountSessions();
   if (!pulseTimer) pulseTimer = setInterval(tickPulse, 1000); tickPulse();
   {
     const ks = timingKeys(); let tk = store.get('timingKey', ks[0]); if (!ks.includes(tk)) tk = ks[0];
