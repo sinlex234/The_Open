@@ -2513,21 +2513,19 @@ async function buildTiming(key) {
 // An AI double-checks the lean when credits are available; it can agree or step back to "no lean", never flip it.
 var PULSE_MKTS = { NQ: { ccy: ["USD"] }, BTC: { ccy: ["USD"] }, EURUSD: { ccy: ["USD", "EUR"] } };
 var PULSE_SLOT = 5 * 6e4;
-function pulseNews(stories, key, px) {
+// The bot reads the briefing: the 3 strongest headlines for this market, in the same order the briefing shows them
+function pulseNews(stories, key, px, upcoming) {
   const c = CALL_MKTS[key], prof = [{ m: c.m, assets: c.assets, strats: [], hold: [] }], now = Date.now();
+  const top = briefingFor(stories, prof, upcoming, c.m, px).slice(0, 3);
   let s = 0;
-  const used = [];
-  stories.forEach((h) => {
-    if (!h.time || now - h.time > 3 * 36e5 || h.time > now + 6e4) return;
-    const e = checkCalls(effectsFor(h, prof), h.time, px).find((x) => x.market === c.m);
-    if (!e) return;
-    const age = (now - h.time) / 6e4;
-    const wt = Math.pow(0.5, age / 60) * (tierOf(h.source) === "A" ? 1 : 0.7) * (h.confirmed === false ? 0.5 : 1);
-    const d = e.dir === "up" ? 1 : e.dir === "down" ? -1 : 0;
-    s += d * wt;
-    used.push({ id: h.id, headline: h.title, source: h.source, link: h.link, time: h.time, outlets: (h.sources || [h.source]).length, dir: e.dir, held: e.held || null, paused: !!e.paused, agrees: !!e.agrees, reason: e.reason, wt });
+  const used = top.map((b, i) => {
+    const e = (b.effects || []).find((x) => x.market === c.m) || { dir: "mixed", reason: "" };
+    const age = Math.max(0, (now - (b.time || now)) / 6e4);
+    const wt = [1, 0.75, 0.55][i] * Math.pow(0.5, age / 120) * (tierOf(b.source) === "A" ? 1 : 0.7) * (b.confirmed === false ? 0.5 : 1);
+    s += (e.dir === "up" ? 1 : e.dir === "down" ? -1 : 0) * wt;
+    return { rank: i + 1, id: b.id, headline: b.headline, source: b.source, link: b.link, time: b.time, outlets: (b.sources || [b.source]).length, dir: e.dir, held: e.held || null, paused: !!e.paused, agrees: !!e.agrees, reason: e.reason, wt };
   });
-  return { score: Math.tanh(s), stories: used.sort((a, b) => b.wt - a.wt) };
+  return { score: Math.tanh(s), stories: used };
 }
 function pulsePrice(bars, key) {
   const c = CALL_MKTS[key];
@@ -2552,10 +2550,10 @@ function pulseGate(key, events, now) {
   return null;
 }
 var PX_WORD = (n, unit) => `${n > 0 ? "up" : "down"} ${unit === "$" ? "$" : ""}${Math.abs(n).toLocaleString("en-US")}${unit === "$" ? "" : " " + unit}`;
-function pulseRead(key, stories, px, events, now) {
+function pulseRead(key, stories, px, events, now, upcoming) {
   const c = CALL_MKTS[key], name = { NQ: "NQ", BTC: "Bitcoin", EURUSD: "EUR/USD" }[key];
-  const news = pulseNews(stories, key, px), price = pulsePrice(px && px[key], key);
-  const base = { key, name, slot: Math.floor(now / PULSE_SLOT) * PULSE_SLOT, horizon: 60, price: price && price.price != null ? price.price : null, newsScore: +news.score.toFixed(2), priceScore: price && !price.stale ? +price.score.toFixed(2) : null, allStories: news.stories, stories: [...news.stories].sort((a, b) => b.wt - a.wt).slice(0, 3), move: price && !price.stale ? { ch30: price.ch30, ch60: price.ch60, unit: price.unit } : null };
+  const news = pulseNews(stories, key, px, upcoming), price = pulsePrice(px && px[key], key);
+  const base = { key, name, slot: Math.floor(now / PULSE_SLOT) * PULSE_SLOT, horizon: 60, price: price && price.price != null ? price.price : null, newsScore: +news.score.toFixed(2), priceScore: price && !price.stale ? +price.score.toFixed(2) : null, stories: news.stories, move: price && !price.stale ? { ch30: price.ch30, ch60: price.ch60, unit: price.unit } : null };
   const none = (why, extra = {}) => ({ ...base, lean: "none", conf: null, score: 0, why, ...extra });
   if (!marketOpenAt(now, c.m)) return none("Market closed. Reads restart when it reopens.", { closed: true, reopens: nextOpen(now, c.m) });
   if (!price || price.stale) return none("Price feed is late, so no read right now.");
@@ -2567,10 +2565,10 @@ function pulseRead(key, stories, px, events, now) {
   const nd = news.score > 0.15 ? "up" : news.score < -0.15 ? "down" : null;
   const top = nd && news.stories.find((x) => x.dir === nd);
   const sides = news.stories.filter((x) => x.dir !== "mixed");
-  if (top) reasons.push(`Recent news leans ${nd}, led by “${top.headline}” (${top.source}).`);
-  else if (sides.length) reasons.push("Strong stories point both ways, so news isn’t tipping it.");
+  if (top) reasons.push(`The briefing’s top headlines lean ${nd} (${news.stories.filter((x) => x.dir === nd).length} of ${news.stories.length}), led by “${top.headline}” (${top.source}).`);
+  else if (sides.length) reasons.push("The briefing’s top headlines point both ways, so news isn’t tipping it.");
   else if (news.stories.some((x) => x.paused)) reasons.push("The latest strong story’s call was paused because price went the other way.");
-  else reasons.push("No strong news in the last few hours pointing either way.");
+  else reasons.push("None of the briefing’s top headlines points clearly either way.");
   reasons.push(Math.abs(price.ch60) < 1e-9 ? "Price is flat over the last hour." : `${name} is ${PX_WORD(price.ch60, price.unit)} in the last hour${Math.sign(price.ch30) !== Math.sign(price.ch60) && price.ch30 ? `, but ${PX_WORD(price.ch30, price.unit)} in the last 30 minutes` : ""}.`);
   if (hasNews && news.score * price.score < 0 && Math.abs(news.score) > 0.3 && Math.abs(price.score) > 0.3) return none("News and price disagree, so there’s no edge either way right now.", { reasons, score: +total.toFixed(2) });
   if (Math.abs(total) < 0.35) return none("Nothing pushing hard enough either way. Most of the time this is the honest answer.", { reasons, score: +total.toFixed(2) });
@@ -2600,9 +2598,10 @@ async function pulseLog(reads) {
 async function buildPulse() {
   const now = Date.now();
   const { res } = await settle({ news: build8("all"), cal: build(), px: priceBars() });
-  const stories = (res.news && res.news.items || []).filter((h) => h.time && now - h.time < 3 * 36e5);
+  const stories = (res.news && res.news.items || []).filter((h) => h.time && now - h.time < 18 * 36e5);
   const events = res.cal && res.cal.events || [];
-  const reads = Object.keys(PULSE_MKTS).map((k) => pulseRead(k, stories, res.px, events, now));
+  const upcoming = events.filter((e) => e.time > now && e.impact !== "Low" && (e.country === "USD" || e.impact === "High"));
+  const reads = Object.keys(PULSE_MKTS).map((k) => pulseRead(k, stories, res.px, events, now, upcoming));
   // Reuse the AI note if this 5-minute slot was already read (keeps the AI to one run per slot)
   let saved = [];
   try { saved = await sb(`open_pulse?select=market,lean,note,engine&slot=eq.${reads[0].slot}`); } catch {}
@@ -2621,15 +2620,7 @@ async function buildPulse() {
     });
   }
   const log = await pulseLog(reads);
-  // News bot: the strong headlines behind the reads, newest first, with the instant read for each market
-  const feed = {};
-  reads.forEach((r) => r.allStories.forEach((s) => {
-    if (s.dir === "mixed" && !s.paused) return;
-    const f = feed[s.link || s.id] = feed[s.link || s.id] || { headline: s.headline, source: s.source, link: s.link, time: s.time, outlets: s.outlets, reads: [] };
-    if (!f.reads.some((x) => x.market === r.name)) f.reads.push({ market: r.name, dir: s.dir, held: s.held, paused: s.paused, agrees: s.agrees });
-  }));
-  const newsbot = Object.values(feed).sort((a, b) => b.time - a.time).slice(0, 12);
-  return { reads: reads.map(({ stories: st, allStories, ...r }) => ({ ...r, stories: st.map(({ wt, ...s }) => s) })), newsbot, next: Math.floor(now / PULSE_SLOT) * PULSE_SLOT + PULSE_SLOT, aiStatus, log, updated: now };
+  return { reads: reads.map(({ stories: st, ...r }) => ({ ...r, stories: st.map(({ wt, ...s }) => s) })), next: Math.floor(now / PULSE_SLOT) * PULSE_SLOT + PULSE_SLOT, aiStatus, log, updated: now };
 }
 // Grade each lean after one hour (the Scorecard's "Live read" section)
 async function buildPulseScore() {

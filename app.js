@@ -853,23 +853,48 @@ function pulseCard(r) {
     ${(r.reasons || []).length ? `<ul class="pl-rs">${r.reasons.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}
   </article>`;
 }
+// The 3 strongest briefing headlines the bot is reading for this reader's markets
+function topThree(d) {
+  const reads = pulseOrder(d.reads), seen = new Map();
+  for (let i = 0; i < 3; i++) reads.forEach(r => {
+    const st = (r.stories || [])[i]; if (!st) return;
+    const k = st.link || st.headline;
+    if (!seen.has(k)) seen.set(k, { ...st, reads: [] });
+    const x = seen.get(k); if (!x.reads.some(y => y.market === r.name)) x.reads.push({ market: r.name, dir: st.dir, paused: st.paused });
+  });
+  return [...seen.values()].slice(0, 3);
+}
 function newsbotHTML(d) {
-  const names = pulseOrder(d.reads).map(r => r.name);
-  const items = (d.newsbot || []).map(n => ({ ...n, reads: n.reads.filter(x => names.includes(x.market) && (x.dir !== 'mixed' || x.paused)) })).filter(n => n.reads.length);
-  if (!items.length) return `<p class="faint small">No strong headlines for your markets in the last few hours.</p>`;
-  const chip = x => x.paused ? `<span class="pill paused">${esc(x.market)} paused</span>` : x.dir === 'up' ? `<span class="pill up">${esc(x.market)} ↑</span>` : x.dir === 'down' ? `<span class="pill down">${esc(x.market)} ↓</span>` : '';
-  return `<ol class="nb">${items.slice(0, 6).map(n => `<li${Date.now() - n.time < 15 * 60e3 ? ' class="nb-new"' : ''}>
-    <span class="nb-t">${Date.now() - n.time < 15 * 60e3 ? '<i class="nb-dot" aria-hidden="true"></i>' : ''}${esc(ago(n.time))}</span>
+  const items = topThree(d);
+  if (!items.length) return `<p class="faint small">The briefing has no strong headlines for your markets right now.</p>`;
+  const chip = x => x.paused ? `<span class="pill paused">${esc(x.market)} paused</span>` : x.dir === 'up' ? `<span class="pill up">${esc(x.market)} ↑</span>` : x.dir === 'down' ? `<span class="pill down">${esc(x.market)} ↓</span>` : `<span class="pill">${esc(x.market)} unclear</span>`;
+  return `<ol class="nb">${items.map((n, i) => `<li${Date.now() - n.time < 15 * 60e3 ? ' class="nb-new"' : ''}>
+    <span class="nb-t"><b class="nb-rank">${i + 1}</b>${esc(ago(n.time))}</span>
     <span class="nb-h"><a href="${esc(n.link)}" target="_blank" rel="noopener">${esc(n.headline)}</a><small>${esc(n.source)}${n.outlets > 1 ? ` and ${n.outlets - 1} more` : ''}</small></span>
     <span class="nb-r">${n.reads.map(chip).join('')}</span></li>`).join('')}</ol>`;
 }
 function pulseHTML(d) {
-  const next = d.next ? fmtTime(d.next) : '';
   const reads = pulseOrder(d.reads);
   return `<div class="pl-grid n${reads.length}">${reads.map(pulseCard).join('')}</div>
-    <p class="pl-fine">Which way price is more likely to drift over the <b>next hour</b>, from strong news, what price has done in the last hour, and upcoming releases. It's a lean, not a promise, and most of the time the honest answer is “no clear lean”. Every read is saved and graded on the <a href="/scorecard">Scorecard</a>.${next ? ` Next check ${next}.` : ''}</p>
-    <div class="sec-row nb-row"><h3 class="sec sm"><i class="nb-live" aria-hidden="true"></i>News bot</h3><span class="faint small">Strong headlines for your markets as they land</span></div>
+    <p class="pl-fine">Which way price is more likely to drift over the <b>next hour</b>, from the 3 strongest headlines in the briefing, what price has done in the last hour, and upcoming releases. It's a lean, not a promise, and most of the time the honest answer is “no clear lean”. Every read is saved and graded on the <a href="/scorecard">Scorecard</a>.</p>
+    <div class="sec-row nb-row"><h3 class="sec sm"><i class="nb-live" aria-hidden="true"></i>What the bot is reading</h3><span class="faint small">The 3 strongest headlines in your briefing</span></div>
     ${newsbotHTML(d)}`;
+}
+// Scan timer: a new read every 5 minutes, on the clock (:00, :05, :10…), a few seconds after for fresh prices
+const PULSE_MS = 5 * 60e3, PULSE_GRACE = 8e3;
+const pulseSlot = () => Math.floor((Date.now() - PULSE_GRACE) / PULSE_MS);
+let pulseShown = null, pulseTimer = null;
+function loadPulse() {
+  const slot = pulseSlot(); pulseShown = slot;
+  return fill('pulse', 'the live read', api('pulse?slot=' + slot, PULSE_MS), pulseHTML);
+}
+function tickPulse() {
+  const el = document.getElementById('pulseNext');
+  if (!el) { clearInterval(pulseTimer); pulseTimer = null; return; }
+  const left = (pulseShown + 1) * PULSE_MS + PULSE_GRACE - Date.now();
+  if (left <= 0) { el.innerHTML = `<i class="nb-live" aria-hidden="true"></i>Scanning…`; loadPulse(); return; }
+  const m = Math.floor(left / 60e3), sec = Math.floor(left / 1e3) % 60;
+  el.innerHTML = `Next scan in <b>${m}:${String(sec).padStart(2, '0')}</b>`;
 }
 PAGES.today = () => {
   const ws = windowStatus();
@@ -877,7 +902,7 @@ PAGES.today = () => {
     ${guideHTML()}
     <h1 class="page-h">${esc(greeting())}</h1>
     <p class="page-intro" id="todayIntro">${isLearning() ? 'Here’s how today’s news connects to the markets you’re learning about.' : ws.text ? esc(ws.text) : 'Here’s what matters for your markets today.'}</p>
-    <section class="pulse" id="pulseBlock"><div class="sec-row"><h2 class="sec">Live read</h2><span class="faint small" id="pulseNext">Re-checked every 5 minutes</span></div><div id="pulse">${skel(2)}</div></section>
+    <section class="pulse" id="pulseBlock"><div class="sec-row"><h2 class="sec">Live read</h2><span class="pl-timer" id="pulseNext" aria-live="off">Next scan in …</span></div><div id="pulse">${skel(2)}</div></section>
     <div class="front">
       <section class="briefing"><div class="sec-row"><h2 class="sec">Briefing for ${esc(sessionDay().long)}</h2><a href="/news">All news</a></div><ol class="bfeed" id="bfeed">${'<li>' + skel(3) + '</li>'}</ol></section>
       <aside class="rail">
@@ -904,7 +929,8 @@ PAGES.today = () => {
   }
   else fill('bfeed', 'today’s briefing', deskP, d => briefingHTML(d));
   fill('outlook', 'what’s next', deskP, nextHTML);
-  fill('pulse', 'the live read', api('pulse', 60e3), pulseHTML);
+  loadPulse();
+  if (!pulseTimer) pulseTimer = setInterval(tickPulse, 1000); tickPulse();
   {
     const ks = timingKeys(); let tk = store.get('timingKey', ks[0]); if (!ks.includes(tk)) tk = ks[0];
     const draw = () => {
