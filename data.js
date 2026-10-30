@@ -1693,46 +1693,238 @@ function callStrength(h, m) {
   }
   return { ok: true };
 }
+// ---------- Headline reader: works out WHAT moved and WHICH WAY, then what that means for NQ, Bitcoin and EUR/USD ----------
+// It only makes a call when a headline has a clear subject (US stocks, a giant tech company, the Fed, US inflation,
+// Treasury yields, oil, the dollar, the euro, crypto) doing a clear thing (rises, falls, hikes, cuts...).
+// Anything it can't place with confidence, it leaves as "no call". Questions, previews, opinion, "could/may/if" don't count.
+var RD_UP = "hits? (?:a |new |fresh )?(?:\\S+ )?highs?|rises?|rising|rose|risen|gain(?:s|ed|ing)?|climb(?:s|ed|ing)?|jump(?:s|ed|ing)?|surg(?:e|es|ed|ing)|soar(?:s|ed|ing)?|rall(?:y|ies|ied|ying)|leap(?:s|t|ed)?|advanc(?:e|es|ed)|rebound(?:s|ed)?|recover(?:s|ed)?|reclaim(?:s|ed)?|higher|up|record highs?|all-time highs?|highs|strengthen(?:s|ed)?|firm(?:s|er|ed)?|extends? gains|ticks? (?:back )?up|edges? up|spik(?:e|es|ed)|pops?|skyrocket(?:s|ed)?|accelerat(?:e|es|ed|ing)|heats? up|hott?(?:er)?|exceeds?|tops?|beats?|sticky";
+var RD_DOWN = "hits? (?:a |new |fresh )?(?:\\S+ )?lows?|fall(?:s|ing)?|fell|drop(?:s|ped|ping)?|slid(?:e|es|ing)?|slump(?:s|ed|ing)?|sink(?:s|ing)?|sank|sunk|tumbl(?:e|es|ed|ing)|plung(?:e|es|ed|ing)|dip(?:s|ped)?|slip(?:s|ped)?|declin(?:e|es|ed|ing)|retreat(?:s|ed|ing)?|lower|down|weak(?:en|ens|ened|er)?|eas(?:e|es|ed|ing)|crash(?:es|ed)?|sell-?off|selloff|rout|stumbl(?:e|es|ed)|extends? (?:losses|declines?)|lows?|worst|tank(?:s|ed)?|takes? (?:a |fresh )?(?:hit|beating)|hit by|skid(?:s|ded)?|sheds?|cool(?:s|ed|ing|er)?|slow(?:s|ed|ing|er)?|soft(?:er|ens)?|below|outflows?";
+var RD_FLAT = "mixed|flat|steady|stead(?:ies|ied)|little changed|unchanged|holds? (?:steady|near|at|around)|hover(?:s|ing)?|stuck|calm|treads? water";
+var RD_GAP = "(?:[\\s,]+[\\w.’'$%-]+){0,4}?[\\s,]+";
+var RD_VERB_UP = new RegExp("^(?:" + RD_UP + ")\\b", "i"), RD_VERB_DOWN = new RegExp("^(?:" + RD_DOWN + ")\\b", "i"), RD_VERB_FLAT = new RegExp("^(?:" + RD_FLAT + ")\\b", "i");
+var RD_PRE_UP = /\b(boost(?:s|ed)?|lift(?:s|ed)?|rising|higher|soaring|surging|climbing|jumping|spiking|hot|hotter|sticky|accelerating|strong(?:er)?)\s+(?:\S+\s+){0,3}?$/i;
+var RD_PRE_DOWN = /\b(falling|lower|sliding|easing|declining|dropping|retreating|tumbling|cooling|softer|soft|slowing|weak(?:er)?)\s+(?:\S+\s+){0,3}?$/i;
+var RD_HEDGE_ALL = /^\s*(why|how|what|is|are|should|can|could|will|does|do|here(?:’|')?s|here are|analysis|opinion|commentary|view|factbox|explainer|preview|live updates?|morning minute|stock market news today)\b|\?|\b(survey|poll|price forecast|forecast:)/i;
+var RD_HEDGE = /\b(could|might|may|would|if|likely|set (?:to|for)|poised|expects?|expected to|plans? to|aims? to|seen|to gain|won(?:’|')t|not|n(?:’|')t|how|why|what|outlook for|looms?|awaits?|ahead of (?:its|the)? ?(?:results|earnings))\b/i;
+var RD_FOREIGN = "asia(?:n)?|asia-pacific|europe(?:an)?|euro ?zone|japan(?:ese)?|tokyo|chin(?:a|ese)|hong kong|india(?:n)?|korea(?:n)?|south korea(?:n)?|taiwan(?:ese)?|german(?:y)?|french|france|uk|british|britain|london|italian|spanish|swiss|norwegian|swedish|australian?|canadian?|mexican|brazil(?:ian)?|saudi|turkish|russian|global|world";
+var RD_FOREIGN_EQ = new RegExp("\\b(?:" + RD_FOREIGN + ")\\s+(?:\\w+\\s+){0,2}?(?:stocks?|shares|equities|markets?|indexes|indices|bourses?|chip stocks)\\b|\\b(?:nikkei|kospi|sensex|nifty|ftse|dax|cac|stoxx|hang seng|asx|tsx|shanghai composite|csi 300|topix)\\b", "i");
+var RD_MEGA = "nvidia|apple|microsoft|amazon|alphabet|google|meta|tesla|broadcom|netflix|amd";
+var RD_EARN_STORY = /\b(earnings|revenue|profit|net income|results|guidance|eps|sales|q[1-4])\b/i;
+function rdClean(t) {
+  return String(t || "").replace(/^\s*[A-Z][\w .&-]{1,30}:\s+(?=\S)/, (m) => /^(financialjuice|breaking|update|exclusive|fj|wsj|bloomberg)\b/i.test(m.trim()) ? "" : m)
+    .replace(/\s+(?:By|-)\s+(?:Reuters|Bloomberg|AP|Kitco[^|]*|Investing\.com)\s*$/i, "").replace(/\s+-\s+[A-Z][\w’' ]+$/, "").replace(/[‘’]/g, "'").replace(/[“”]/g, '"').trim();
+}
+function rdClauses(t) {
+  // Main clause first, then the "because" parts. The main clause decides when it has an answer.
+  return t.split(/\s*(?:;|\s[—–]\s|:\s|(?<=[a-z]{3})\.\s|\bbut\b|\bwhile\b|\bthough\b|\balthough\b|\bas\b|\bafter\b|\bamid\b|\bdespite\b|\bfollowing\b|\bon\b(?=\s+(?:a\s|the\s)?[\w$])|\bwith\b|\bahead of\b|\bbefore\b|\bdragging\b(?=.*\b(nasdaq|stocks|s&p)\b))\s*/i).filter((x) => x && x.trim().length > 2);
+}
+// Find "<subject> ... <verb>" (verb within a few words) or "<rising/falling> ... <subject>"
+function rdMove(clause, subjRe, reach = 6) {
+  const re = new RegExp(subjRe, "ig");
+  let m, out = 0, flat = false, found = false;
+  while ((m = re.exec(clause))) {
+    const after = clause.slice(m.index + m[0].length);
+    if (/^(?:'s|’s)\s+(?!stock|shares|price|prices|futures)/i.test(after)) continue; // "Dow's best stock" is not the Dow moving
+    found = true;
+    const words = after.replace(/^(?:'s|’s)/, "").split(/[\s,]+/).filter(Boolean).slice(0, reach);
+    let d = 0;
+    for (let i = 0; i < words.length && !d; i++) {
+      const rest = words.slice(i).join(" ");
+      if (RD_VERB_FLAT.test(rest)) { flat = true; break; }
+      if (RD_VERB_UP.test(rest)) d = 1;
+      else if (RD_VERB_DOWN.test(rest)) d = -1;
+      if (/^(and|or|vs|versus|against)$/i.test(words[i]) && i > 0) break;
+    }
+    if (!d) {
+      const before = clause.slice(0, m.index);
+      if (RD_PRE_UP.test(before)) d = 1; else if (RD_PRE_DOWN.test(before)) d = -1;
+    }
+    if (d) { out = out && out !== d ? 2 : d; }
+  }
+  if (out === 2) return { d: 0, conflict: true, found };
+  return { d: out, flat: flat && !out, found };
+}
+var RD_SUBJ = {
+  equity: "\\b(?:(?:u\\.?s\\.?|us|american)\\s+)?(?:wall street|nasdaq(?: 100| composite)?|s&p(?: 500)?|dow(?: jones)?|(?:stock|equity|index) futures|stock market)\\b|(?:^|[,;]\\s*|\\band\\s+|\\b(?:u\\.?s\\.?|us|american|tech|technology|chip|chipmaker|semiconductor|software|ai|ai cloud|cloud|growth|megacap)\\s+)(?:stocks|equities|shares)\\b|\\b(?:tech|technology) (?:firms|companies|giants|names|sector|shares|stocks)\\b|\\bbig tech\\b|\\bmegacaps?\\b|\\bmagnificent seven\\b",
+  mega: "\\b(?:" + RD_MEGA + ")(?:(?:'s|’s)?\\s+(?:stock|shares|inc\\.?|corp\\.?))?\\b",
+  yields: "\\b(?:(?:u\\.?s\\.?|us|treasury|treasuries|bond|government|10-year|2-year|30-year|two-year|ten-year)\\s+){1,3}yields?\\b|\\byields\\b",
+  bonds: "\\b(?:u\\.?s\\.?\\s+)?(?:treasuries|treasury bonds|bonds)\\b",
+  oil: "\\b(?:oil|crude|brent|wti)(?: prices?| futures)?\\b",
+  inflation: "\\b(?:(?:u\\.?s\\.?|us|american|core|headline|consumer|september|october|november|december|january|february|march|april|may|june|july|august|pce|cpi|ppi)\\s+){0,3}(?:inflation|cpi|pce|ppi|consumer prices)\\b",
+  dollar: "\\b(?:u\\.?s\\.?\\s+)?(?:dollar(?: index)?|greenback|dxy)\\b",
+  euro: "\\b(?:euro(?!\\s?zone|pean|s\\b)|eur/usd|single currency)\\b",
+  crypto: "\\b(?:bitcoin|btc|ether(?:eum)?|eth|crypto(?:currenc(?:y|ies))?(?: market| markets| prices)?|cryptocurrencies|digital assets)\\b"
+};
+var RD_NOT_DOLLAR = /\b(canadian|australian|aussie|new zealand|kiwi|singapore|hong kong|taiwan|taiwanese|jamaican|zimbabwe)\s+$/i;
+var RD_NOT_CRYPTO = /^\s*(per share|miners?|treasury|treasuries|holdings|keys|options|etf issuers?|birthday|lending)\b/i;
+function rdFilter(clause, kind) {
+  // Remove subject uses we must ignore before matching
+  let c = clause;
+  if (kind === "dollar") c = c.replace(/\b(canadian|australian|aussie|new zealand|kiwi|singapore|hong kong|taiwan|taiwanese)\s+dollar\b/ig, "X").replace(/\bdollar[-\/ ](yen|bonds?|denominated)\b/ig, "X");
+  if (kind === "euro") c = c.replace(/\b(vs\.?|versus|against|to|over|than)\s+(the\s+)?euro\b/ig, "X");
+  if (kind === "crypto") c = c.replace(new RegExp("(\\b(?:strategy|microstrategy|coinbase)(?:'s|’s)?\\s+)?(" + RD_SUBJ.crypto + ")(?=\\s+(?:per share|miners?|treasur\\w+|holdings|keys|options|etf issuers?|lending))", "ig"), "X").replace(/\b(strategy|microstrategy|coinbase)(?:'s|’s)\s+bitcoin\b/ig, "X");
+  if (kind === "yields" || kind === "bonds") c = c.replace(new RegExp("\\b(?:" + RD_FOREIGN + "|jgb|bund|gilt|junk|dollar|corporate|municipal)\\s+(?:\\w+\\s+){0,2}?(?:bonds?\\s+yields?|yields?|bonds?)\\b", "ig"), "X");
+  if (kind === "inflation") c = c.replace(new RegExp("\\b(?:" + RD_FOREIGN + ")(?:'s|’s)?\\s+(?:\\w+\\s+){0,2}?(?:inflation|cpi|consumer prices)\\b", "ig"), "X");
+  if (kind === "oil") c = c.replace(/\b(big oil|oil (stocks|majors|companies|producers|firms)|oil price forecast)\b/ig, "X");
+  return c;
+}
+// Central-bank policy direction in a clause: +1 tighter (hawkish), -1 looser (dovish). Who it belongs to: fed / ecb / other.
+function rdPolicy(c, whole) {
+  const lc = c.toLowerCase(), wl = String(whole || c).toLowerCase();
+  const cbIn = (x) => /\b(ecb|lagarde|european central bank|boj|bank of japan|boe|bank of england|boc|bank of canada|rba|rbnz|snb|pboc|rbi|riksbank|norges|central banks|fed|fomc|federal reserve|powell|warsh)\b/.test(x);
+  const src = cbIn(lc) ? lc : wl;
+  let who = /\b(ecb|lagarde|european central bank)\b/.test(src) ? "ecb" : /\b(boj|bank of japan|boe|bank of england|boc|bank of canada|rba|rbnz|snb|pboc|rbi|riksbank|norges|central banks)\b/.test(src) ? "other" : "fed";
+  if (/\b(fed|fomc|federal reserve|powell|warsh|waller|williams|bowman|jefferson|logan|hammack|goolsbee)\b/.test(lc) && who !== "fed" && !/\bcentral banks\b/.test(lc)) who = "fed";
+  let d = 0;
+  const s = lc.replace(/['’]/g, "'");
+  if (/\b(no rush to cut|push(es|ed)? back (on|against) (rate )?cuts|unlikely to cut|higher for longer|cut (hopes|bets|odds|expectations) (fade|fades|dim|dims|wane|wanes|fall|falls|recede|recedes|evaporate)|hawkish|tighter (monetary )?policy|tightening (bets|odds|expectations))\b/.test(s)) d = 1;
+  else if (/\b(dovish|(hike|rate-hike|tightening) (bets|odds|expectations|fears|worries|concerns) (fade|fades|ease|eases|cool|cools|recede|recedes|fall|falls|drop|drops|dim|dims|wane|wanes))\b/.test(s)) d = -1;
+  else if (/\b(rate[- ]hike|hike|tightening) (bets|odds|expectations|concerns|fears|worries|case|calls)\b/.test(s) && /\b(revive[sd]?|rekindle[sd]?|bolster(s|ed)?|support(s|ed)?|reinforce[sds]?|firm|firmer|keeps?|lift(s|ed)?|boost(s|ed)?|fuel(s|ed)?|strengthen(s|ed)?|rise|rises|grow|grows|build|builds|increase[sd]?|jump|jumps)\b/.test(s)) d = 1;
+  else if (/\b(raises?|raised|raising|hikes?|hiked|lifts?|lifted)\s+(its |key |benchmark |the )?(interest )?rates?\b|\bdelivers? (a |another )?(rate )?hike\b/.test(s)) d = 1;
+  else if (/\b(cuts?|cutting|lowers?|lowered|lowering|slashes|slashed|trims?|trimmed)\s+(its |key |benchmark |the )?(interest )?rates?\b|\bdelivers? (a |another )?(rate )?cut\b|\b(rate[- ]cut|cut|easing) (bets|odds|hopes|expectations) (rise|rises|grow|grows|build|builds|jump|jumps|increase|increases|firm)\b/.test(s)) d = -1;
+  return d ? { d, who } : null;
+}
+function rdTrade(c) {
+  const s = c.toLowerCase();
+  if (/\b(reach(es|ed)?|sign(s|ed)?|strike|strikes|struck|agree[sd]?|clinch(es|ed)?|seal(s|ed)?)\b.{0,25}\btrade (deal|agreement|truce)\b|\btrade (deal|agreement|truce) (reached|signed|agreed|struck|sealed)\b|\b(cut(s|ting)?|lower(s|ing)?|remov\w+|scrap\w*|lift(s|ing)?|pause[sd]?|suspend\w*|delay\w*|postpone\w*|roll(s|ing)? back)\b.{0,15}\btariffs?\b/.test(s)) return 1;
+  if (/\b(new|higher|more|fresh|steeper|impose[sd]?|imposing|announces?|announced|slaps?|slapped|raises?|raised|hikes?|hiked|threatens?)\b.{0,20}\btariffs?\b/.test(s)) return -1;
+  return 0;
+}
+function rdAIFear(c) {
+  return /\b(spread(s|ing)?|deepen(s|ed|ing)?|reviv(e|es|ed|ing)|fan(s|ned)?|grow(s|ing)?|mount(s|ing)?|intensif\w+|stok\w+|spark\w*|rekindl\w+)\b(\W+\w+){0,5}?\W+(jitters|fears|worries|concerns|scare)\b/i.test(c) && /\b(ai|capex|tech|chip)\b/i.test(c)
+    || /\b(ai|capex|tech|ai bubble|ai spending) (jitters|fears|worries|concerns|scare) (spread|spreads|deepen|deepens|grow|grows|mount|mounts|intensify|intensifies|grip|grips|hit|hits|rattle|rattles|spook|spooks|weigh on|weighs on)\b/i.test(c) ? -1 : 0;
+}
+function rdCryptoEvent(c, whole) {
+  const s = c.toLowerCase();
+  if (/\b(pledge[sd]?|safe|cover (the )?losses|refund\w*|recover(ed|s)? (the )?funds|returns? (the )?funds|reimburse\w*)\b/.test(String(whole || c).toLowerCase())) return 0;
+  const venue = /\b(binance|coinbase|kraken|okx|bybit|bitfinex|crypto exchange|exchange|crypto)\b/.test(s);
+  if (venue && /\b(hack(s|ed)?|heist|breach|exploit(ed)?|drain(s|ed)?|stolen|freez(e|es)|froze|halts? withdrawals|pauses? withdrawals|suspends? (transactions|withdrawals|trading)|security (incident|issue|scare)|rush to pull funds)\b/.test(s)) return -1;
+  if (/\b(etfs?|funds?)\b.{0,20}\binflows?\b(?!.{0,10}\b(slow|fade|dry))/.test(s) && !/\boutflows?\b/.test(s)) return 1;
+  if (/\b(etfs?|funds?)\b.{0,20}\boutflows?\b/.test(s)) return -1;
+  if (/\bliquidat\w+\b.{0,30}\blongs\b/.test(s)) return -1;
+  if (/\bliquidat\w+\b.{0,30}\bshorts\b/.test(s)) return 1;
+  return 0;
+}
+function readHeadline(title) {
+  const t = rdClean(title);
+  const res = { NQ: null, BTC: null, USD: null, EUR: null, clean: t };
+  if (RD_HEDGE_ALL.test(t)) { res.skip = "question, preview or opinion"; return res; }
+  const clauses = rdClauses(t);
+  const first = clauses[0] || "";
+  if (RD_EARN_STORY.test(first) && !new RegExp(RD_SUBJ.equity + "|\\b(?:" + RD_MEGA + ")\\b", "i").test(first)) { res.skip = "a single company's results"; return res; }
+  const fm = t.search(RD_FOREIGN_EQ), um = t.search(new RegExp("\\b(?:(?:u\\.?s\\.?|us|american)\\s+(?:stocks|equit\\w+|stock futures|shares)|wall street|nasdaq|s&p|dow jones)\\b", "i"));
+  const foreignEq = fm >= 0 && (um < 0 || fm < um);
+  const done = {};
+  const set = (k, d, kind) => { if (!done[k] && d) { res[k] = { d, kind }; done[k] = true; } };
+  const block = (k, why) => { if (!done[k]) { res[k] = null; done[k] = true; res["why_" + k] = why; } };
+  if (foreignEq) block("NQ", "about another country's stock market");
+  // "SomeCompany shares plunge after..." is about one company: don't read market meaning into the reasons behind it
+  const oneCo = rdMove(first, "\\b(?:shares|stock)\\b");
+  if (oneCo.d && !new RegExp(RD_SUBJ.equity + "|\\b(?:" + RD_MEGA + ")\\b", "i").test(first)) block("NQ", "about one company's stock");
+  for (const c of clauses) {
+    if (RD_HEDGE.test(c) && !/\b(no rush to cut|unlikely to cut)\b/i.test(c)) continue;
+    const mv = {};
+    ["equity", "mega", "yields", "bonds", "oil", "inflation", "dollar", "euro", "crypto"].forEach((k) => { mv[k] = rdMove(rdFilter(c, k), RD_SUBJ[k], k === "mega" ? 1 : 6); });
+    const sell = c.match(/\b(?:u\.?s\.? )?(?:stock|equity|tech|share|market)[- ](selloff|sell-off|rout|rally|rebound)\b/i);
+    if (sell && !mv.equity.d) mv.equity = { d: /rally|rebound/i.test(sell[1]) ? 1 : -1, found: true };
+    let megaEarn = 0;
+    const me = c.match(new RegExp("\\b(?:" + RD_MEGA + ")(?:'s|’s)?\\s+(?:\\w+\\s+){0,2}?(?:earnings|results|revenue|sales|guidance|outlook)\\s+(miss(?:es|ed)?|disappoint\\w*|underwhelm\\w*|falls? short|beat(?:s)?|top(?:s|ped)?|surpass\\w*)", "i"));
+    if (me) megaEarn = /^(miss|disappoint|underwhelm|fall)/i.test(me[1]) ? -1 : 1;
+    const pol = rdPolicy(c, t), trade = rdTrade(c), ai = rdAIFear(c), cev = rdCryptoEvent(c, t);
+    const yld = mv.yields.d || (mv.bonds.d ? -mv.bonds.d : 0);
+    const usdMacro = pol && pol.who === "fed" ? pol.d : mv.inflation.d ? mv.inflation.d : yld ? yld : 0;
+    const usdKind = pol && pol.who === "fed" ? "fed" : mv.inflation.d ? "inflation" : yld ? "yields" : "";
+    // NQ: what US stocks / the giants did, else the Fed, inflation, yields, AI-spending fears, trade, oil
+    if (!done.NQ) {
+      if (mv.equity.flat && !mv.equity.d) block("NQ", "US stocks flat or mixed");
+      else if (mv.equity.d) set("NQ", mv.equity.d, "equity");
+      else if (mv.mega.d || megaEarn) set("NQ", mv.mega.d || megaEarn, "mega");
+      else if (usdMacro) set("NQ", -usdMacro, usdKind);
+      else if (ai) set("NQ", ai, "ai");
+      else if (trade) set("NQ", trade, "trade");
+      else if (mv.oil.d) set("NQ", -mv.oil.d, "oil");
+    }
+    // Bitcoin: crypto itself first (moves, hacks, ETF flows), else the Fed, inflation, yields; skip if stocks point the other way
+    if (!done.BTC) {
+      if (mv.crypto.flat && !mv.crypto.d && !cev) block("BTC", "crypto flat");
+      else if (cev) set("BTC", cev, "crypto-event");
+      else if (mv.crypto.d) set("BTC", mv.crypto.d, "crypto");
+      else if (usdMacro) { const eq = mv.equity.d; if (eq && eq !== -usdMacro) block("BTC", "stocks and rates point different ways"); else set("BTC", -usdMacro, usdKind); }
+    }
+    // Dollar and euro (EUR/USD = euro minus dollar)
+    if (!done.USD) {
+      if (mv.dollar.flat && !mv.dollar.d) block("USD", "dollar flat");
+      else if (mv.dollar.d) set("USD", mv.dollar.d, "dollar");
+      else if (usdMacro) set("USD", usdMacro, usdKind);
+    }
+    if (!done.EUR) {
+      const pair = c.match(/\beur\s*\/\s*usd\b/i);
+      if (mv.euro.flat && !mv.euro.d) block("EUR", "euro flat");
+      else if (mv.euro.d) { set("EUR", mv.euro.d, "euro"); if (pair) block("USD", "pair already counted"); }
+      else if (pol && pol.who === "ecb") set("EUR", pol.d, "ecb");
+    }
+  }
+  return res;
+}
+function headlineDirs(title) {
+  const r = readHeadline(title);
+  const g = (x) => x ? x.d : 0;
+  const eu = g(r.EUR) - g(r.USD);
+  return { NQ: g(r.NQ), BTC: g(r.BTC), EURUSD: eu > 0 ? 1 : eu < 0 ? -1 : 0, r };
+}
+
+// Plain-English reason for each kind of read
+var RD_WHY = {
+  equity: { up: "US stocks are already moving up on this.", down: "US stocks are already moving down on this." },
+  mega: { up: "One of the giant companies that drive the Nasdaq is jumping, and it pulls the index with it.", down: "One of the giant companies that drive the Nasdaq is falling, and it drags the index with it." },
+  fed: { up: "Talk of lower US rates usually helps stocks, tech the most.", down: "Talk of higher US rates usually weighs on stocks, tech the most." },
+  inflation: { up: "Cooler US inflation means less pressure to raise rates, which helps stocks.", down: "Hotter US inflation means higher rates for longer, which weighs on stocks." },
+  yields: { up: "Falling bond yields usually help stocks, tech the most.", down: "Rising bond yields usually weigh on stocks, tech the most." },
+  ai: { down: "Worries about AI spending are hitting the giant tech companies that drive the Nasdaq." },
+  trade: { up: "Easing trade tension usually helps stocks.", down: "New tariffs usually weigh on stocks." },
+  oil: { up: "Cheaper oil eases inflation worries, which helps stocks.", down: "Pricier oil feeds inflation worries, which weighs on stocks." },
+  "crypto-event": { up: "Money is flowing into crypto funds.", down: "A big exchange hack or forced selling shakes confidence and usually hits crypto prices." },
+  crypto: { up: "Crypto is already moving up on this.", down: "Crypto is already moving down on this." },
+  cfed: { up: "Talk of lower US rates tends to pull money into crypto.", down: "Talk of higher US rates tends to pull money out of crypto first." },
+  cinflation: { up: "Cooler US inflation means less rate pressure, which tends to help crypto.", down: "Hotter US inflation means higher rates for longer, which tends to hurt crypto." },
+  cyields: { up: "Falling bond yields tend to help crypto.", down: "Rising bond yields tend to pull money out of crypto." }
+};
+var RD_FX_WHY = { dollar: "The dollar itself is moving", fed: "Fed rate talk moves the dollar", inflation: "US inflation moves rate bets and the dollar", yields: "US yields pull the dollar with them", euro: "The euro itself is moving", ecb: "ECB rate talk moves the euro" };
 function effectsFor(h, prof) {
   const t = h.title, theme = h.theme;
   const out = [];
-  const tone = riskTone(t), hawk = hawkTone(t), ccy = ccyTone(t, theme), yld = yieldTone(t);
-  if (yld && !ccy.USD) ccy.USD = yld;
-  const oil = theme === "energy" ? (/\b(oil|crude|brent|opec)\b/i.test(t) ? riskTone(t.replace(/opec\+?/i, "")) : 0) : 0;
+  const r = readHeadline(t);
+  const ccy = {}; if (r.USD) ccy.USD = r.USD.d; if (r.EUR) ccy.EUR = r.EUR.d;
   prof.forEach((x) => {
     const m = x.m;
     if (m === "learning") return;
     const mine = relevantFor(h, m) || (h.markets || []).includes(m) || (m === "stocks" && (h.markets || []).includes("futures"));
     if (!mine) return;
     const labels = x.assets.length && !["memes"].includes(m) ? x.assets.filter((a) => !(/^M[A-Z]{1,3}$/.test(a) && x.assets.includes(a.slice(1)))).slice(0, 2).map(ASSET_LABEL).join(", ") : { stocks: "Stocks", futures: "Index futures", options: "Stocks", crypto: "Crypto", memes: "Memecoins", forex: "Dollar" }[m];
+    const cs = callStrength(h, m);
+    const push = (label, d, reason) => {
+      const dir = d > 0 ? "up" : d < 0 ? "down" : "mixed";
+      if (d && !cs.ok) out.push({ market: m, label, dir: "mixed", reason: cs.why, held: dir });
+      else out.push({ market: m, label, dir, reason: d ? reason : (r.skip ? `No call: this is ${r.skip}.` : "No clear direction for this market in the headline. Watch the first reaction.") });
+    };
     if (m === "forex") {
       const pairs = x.assets.filter((a) => /^[A-Z]{6}$/.test(a));
-      const list = pairs.length ? pairs : ["EURUSD"];
-      list.slice(0, 2).forEach((p) => {
+      (pairs.length ? pairs : ["EURUSD"]).slice(0, 2).forEach((p) => {
         const b = p.slice(0, 3), q = p.slice(3);
-        const d = (ccy[b] || 0) - (ccy[q] || 0);
-        const dir = d > 0 ? "up" : d < 0 ? "down" : "mixed";
-        const reason = ccy.USD && (b === "USD" || q === "USD") ? (ccy.USD > 0 ? WHY_DIR.ratesUp.fx : WHY_DIR.ratesDown.fx) : dir === "mixed" ? "No clear push on this pair yet. Watch the first reaction." : `The story points to a ${d > 0 ? "stronger " + b : "stronger " + q}.`;
-        const cs = callStrength(h, m);
-        out.push(cs.ok || dir === "mixed" ? { market: m, label: ASSET_LABEL(p), dir, reason } : { market: m, label: ASSET_LABEL(p), dir: "mixed", reason: cs.why, held: dir });
+        const d = Math.sign((ccy[b] || 0) - (ccy[q] || 0));
+        const k = (b === "EUR" || q === "EUR") && r.EUR ? r.EUR.kind : r.USD ? r.USD.kind : "";
+        const strong = d > 0 ? b : q;
+        push(ASSET_LABEL(p), d, `${RD_FX_WHY[k] || "The story moves one side of the pair"}: it points to a stronger ${strong}.`);
       });
       return;
     }
-    let d = 0, reason = "";
     const crypto = m === "crypto" || m === "memes";
-    const foreignCB = theme === "rates" && /\b(ecb|lagarde|boj|bank of japan|boe|bank of england|snb|rba|bank of canada|pboc)\b/i.test(t) && !/\b(fed|fomc|powell)\b/i.test(t);
-    if (foreignCB) {
-      if (/\b(boj|bank of japan)\b/i.test(t) && hawk > 0) { d = -1; reason = "A stronger yen can force traders to unwind bets funded in yen, which has hit stocks and crypto before."; }
-      else { d = 0; reason = "Mostly a currency story. Your market usually feels it only if the move is big."; }
-    }
-    else if (["rates", "inflation", "jobs"].includes(theme) && hawk) { d = -hawk; reason = (hawk > 0 ? WHY_DIR.ratesUp : WHY_DIR.ratesDown)[crypto ? "crypto" : "risk"]; }
-    else if (yld) { d = -yld; reason = (yld > 0 ? "Rising bond yields usually weigh on stocks, tech the most." : "Falling bond yields usually help stocks, tech the most."); if (crypto) reason = (yld > 0 ? WHY_DIR.ratesUp : WHY_DIR.ratesDown).crypto; }
-    else if (theme === "energy" && oil) { d = -oil; reason = (oil > 0 ? WHY_DIR.oilUp : WHY_DIR.oilDown).risk; }
-    else if (tone) { d = tone; reason = (tone > 0 ? WHY_DIR.good : WHY_DIR.bad)[crypto && ["crypto", "memes"].includes(theme) ? "crypto" : "risk"]; }
-    if (m === "memes" && !["memes", "crypto"].includes(theme) && d) reason += " Memecoins usually move more than the rest of crypto.";
-    const cs = callStrength(h, m);
-    if (d && !cs.ok) out.push({ market: m, label: labels, dir: "mixed", reason: cs.why, held: d > 0 ? "up" : "down" });
-    else out.push({ market: m, label: labels, dir: d > 0 ? "up" : d < 0 ? "down" : "mixed", reason: reason || "Direction unclear. Watch the first reaction." });
+    const rd = crypto ? r.BTC : r.NQ;
+    const d = rd ? rd.d : 0;
+    let reason = "";
+    if (rd) { const key = crypto && ["fed", "inflation", "yields"].includes(rd.kind) ? "c" + rd.kind : rd.kind; reason = (RD_WHY[key] || {})[d > 0 ? "up" : "down"] || ""; }
+    if (m === "memes" && d) reason += " Memecoins usually move more than the rest of crypto.";
+    push(labels, d, reason);
   });
   return out;
 }

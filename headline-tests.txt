@@ -1,0 +1,309 @@
+# The Open One: headline reader test set. Every line: headline | NQ | Bitcoin | EUR/USD  (u = up, d = down, 0 = no call)
+# Run: node headline-check.js   (must say 0 wrong before publishing a change to how headlines are read)
+# ---- real headlines from the site, Oct 29-30 2026 ----
+FinancialJuice: Japan September gasoline sales drop 8.5% year on year: meti | 0 | 0 | 0
+DOJ escalates Alaska Senate lawsuit over dueling Sullivan candidacies | 0 | 0 | 0
+Gold Price Forecast: XAU/USD falls below $4,000 as strong US data strengthen case for Fed rate hike | 0 | 0 | 0
+Factbox-Where Binance's $6.3 billion breach ranks in crypto's biggest hacks and heists | 0 | 0 | 0
+Lithium Miners Look Past Falling Prices to Expand Output | 0 | 0 | 0
+World’s largest crypto exchange hit by world’s largest heist | 0 | d | 0
+$6 billion Binance hack sends bitcoin, ether tumbling; Standard Chartered expects more pain | 0 | d | 0
+FinancialJuice: Japan finance minister Katayama: no remarks on today's BoJ decision | 0 | 0 | 0
+FinancialJuice: Saudi-led coalition: drone launched by Yemen's Houthis over Mecca destroyed | 0 | 0 | 0
+Binance hack could accelerate shift to DEXs: Standard Chartered | 0 | 0 | 0
+Nikkei Extends Losses, Yen Strengthens After BOJ Decisions | 0 | 0 | 0
+Chinese Junk Dollar Bonds Head for Worst Week in a Year on Huafa | 0 | 0 | 0
+Asia stocks tumble as AI spending concerns deepen; BOJ holds rates | 0 | 0 | 0
+Analysts react as Binance freezes assets after $6.3 billion security breach | 0 | d | 0
+Bank of Japan Holds Fire While Signaling Rate Hikes Ahead | 0 | 0 | 0
+Stocks slump, bonds leap as AI giants’ spending spooks investors By Reuters | d | 0 | u
+Is AI Killing Google's Golden Goose? | 0 | 0 | 0
+BOJ sets ETF sale pace at 860 billion yen a year | 0 | 0 | 0
+FinancialJuice: Dollar/yen extends losses, last down 0.37% at 157.115 | 0 | 0 | 0
+BOJ holds rates as underlying inflation aligns with 2% target for first time since 2013 | 0 | 0 | 0
+BOJ keeps interest rates steady, signals further rate hikes | 0 | 0 | 0
+Asian currencies mixed as dollar retreats, yen steadies ahead of BOJ decision | 0 | 0 | u
+British Pound remains almost steady against Japanese Yen after BoJ’s dovish hold | 0 | 0 | 0
+FinancialJuice: BOJ: will keep raising interest rates amid economic, price and financial condition changes | 0 | 0 | 0
+FinancialJuice: BOJ: demand for corporate funds is rising | 0 | 0 | 0
+FinancialJuice: BOJ: real interest rates have risen recently but short-term rates stay low | 0 | 0 | 0
+Bank of Japan leaves interest rates unchanged at 1.25%, as expected | 0 | 0 | 0
+Why Crocs Stock Skyrocketed Today | 0 | 0 | 0
+FinancialJuice: Oklahoma board: real GDP fiscal 2026 median forecast at +0.7% vs +0.6% in July | 0 | 0 | 0
+FinancialJuice: RBI keeps short-term interest rate target at 12.5% | 0 | 0 | 0
+Binance Suspends Transactions After It Is Targeted in Biggest-Ever Cyber Heist | 0 | d | 0
+CATL, Gotion to gain as oil prices drive energy-storage demand | 0 | 0 | 0
+Singapore Dollar Strengthens Amid Falling U.S. Treasury Yields | u | u | u
+Gold Steadies Near $4,000 as Inflation Keeps Rate-Hike Bets Firm | d | d | d
+KOSPI Falls Far Harder Than Nikkei as AI Earnings Scare Hits Chipmakers | 0 | 0 | 0
+Tech firms take fresh hit as earnings misses fan AI fears | d | 0 | 0
+Cryptocurrencies Slide as News of Major Hack Spooks Markets | 0 | d | 0
+FinancialJuice: South Korea's national security adviser: South Korea to strongly react to North Korea crossing military demarcation line | 0 | 0 | 0
+Institutional crypto investors rush to pull funds from exchanges after Binance hack | 0 | d | 0
+Biggest-ever crypto hack impacts $6.3 billion as Binance works to contain fallout | 0 | d | 0
+Gold Declines, Weighed by Tighter Monetary Policy Expectations | d | d | d
+Oil Ticks Back Up as Uncertainty Clouds Peace Hopes | d | 0 | 0
+Intel plunges on a major guidance miss. What went wrong — and how to proceed | 0 | 0 | 0
+Intel stock plunges 21% as chipmaker blames PC slowdown for weak guidance | 0 | 0 | 0
+Microsoft plans to raise $25 billion in debt as it pursues AI buildout | 0 | 0 | 0
+Reddit shares sink on weak sales guidance and plans login requirement test as Google search traffic shrinks | 0 | 0 | 0
+Amazon’s stock drops — even in the face of a bold new cloud forecast | d | 0 | 0
+A Starbucks turnaround is brewing — but perhaps not quickly enough for investors | 0 | 0 | 0
+Binance hack rattles markets as BNB falls 8%, Bitcoin nears $77K | 0 | d | 0
+Why Intel’s stock is sinking toward its worst drop in two years | 0 | 0 | 0
+Amazon posts negative free cash flow of $42.4 billion, holds 2026 capex unchanged | 0 | 0 | 0
+Amazon AWS posts 39% revenue growth as cloud rivals also accelerate | 0 | 0 | 0
+Rivian third-quarter earnings beat estimates as software revenue, R2 deliveries rise | 0 | 0 | 0
+Starbucks sales miss expectations, but its U.S. turnaround is gaining steam | 0 | 0 | 0
+WSJ Dollar Index Falls 0.09% to 97.09 | 0 | 0 | u
+Binance loses over $6 billion in 'biggest crypto hack in history' | 0 | d | 0
+Indian shares open flat as IT rally, earnings-led rebound counter higher oil prices | 0 | 0 | 0
+Indian shares seen opening higher after earnings-led rebound; higher oil to cap gains | 0 | 0 | 0
+ANZ Raises Oil Price Forecast as Market Tightens on Iran War | 0 | 0 | 0
+Kioxia Faces Test to Impress With Earnings After 60% Stock Slump | 0 | 0 | 0
+Glaukos (GKOS) Earnings, Outlook ‘Brighter’; Shares Soar to All-Time High | 0 | 0 | 0
+Amazon and Intel results deepen worries over AI boom costs as tech, chip stocks slide | d | 0 | 0
+Big Tech’s Deepening AI Funding Concerns Sink Asian Chip Stocks | 0 | 0 | 0
+FinancialJuice: Australia September housing credit rises 0.4% m/m, seasonally adjusted: central bank | 0 | 0 | 0
+Is Alphabet Stock a Buy After Its Post-Earnings Drop? | 0 | 0 | 0
+U.S. Stocks Fall as Alphabet Slide Weighs on AI Optimism | d | 0 | 0
+Oil Settles Lower As U.S. Seeks to Engage Iran in Talks | u | 0 | 0
+Alphabet Stumbles, U.S. Economy Surges | d | 0 | 0
+U.S. Natural Gas Futures Fall on Mild Weather Outlook | 0 | 0 | 0
+Alphabet earnings miss reflects first real sign that AI is taking a bite out of search | d | 0 | 0
+Norwegian shares surge 13% on earnings beat, guidance raise | 0 | 0 | 0
+Aon CEO warns AI data center insurance risks could threaten financing | 0 | 0 | 0
+ServiceNow shares plunge 27% to worst day ever after earnings revive AI disruption fears | 0 | 0 | 0
+Treasury Yields Fall Following Major Central Banks’ Hold | u | u | u
+Nvidia responds to report Jensen Huang was target of Chinese asset, says diversion allegations were 'investigated and debunked' | 0 | 0 | 0
+Alphabet Stock Sinks, Dragging Nasdaq Lower | d | 0 | 0
+Big Oil earnings are set to surge. Why investors may want to be cautious | 0 | 0 | 0
+Third-quarter U.S. GDP increases a better-than-expected 3.4% as September inflation accelerates | d | d | d
+Some investors have midterm election jitters. Here’s what history shows about stocks | 0 | 0 | 0
+European Central Bank keeps key interest rate on hold at 2.5% | 0 | 0 | 0
+Intercontinental Exchange Posts Higher Profit, Revenue | 0 | 0 | 0
+Oil set for fourth monthly gain as Hormuz tanker attack highlights supply risks from war | 0 | 0 | 0
+Dollar’s Rate-Fueled Rally Set to Ride Out US Midterm Gridlock | 0 | 0 | 0
+Gold hovers near $4,000 as PCE inflation, oil risks revive Fed hike concerns | d | d | d
+Tokyo Inflation Exceeds BOJ’s 2% Target Before Rate Decision | 0 | 0 | 0
+Gold falls to near $4,000 as US PCE data reinforces December Fed hike odds | d | d | d
+Equities and bond yields dip with AI jitters and economic data in focus | d | 0 | u
+Oil Futures Rise as Attacks on Saudi Arabia, U.S.-Iran Risks Persist | d | 0 | 0
+Mexican Peso drops as US growth, hot inflation rekindles Fed hike bets | d | d | d
+Gold, silver fall as strong U.S. GDP, inflation support Fed tightening bets - Kitco PM Report | d | d | d
+Bank of Japan to hold rates, signal further hikes | 0 | 0 | 0
+Oil Declines as Traders Parse Signs of Fresh Diplomacy on Iran | u | 0 | 0
+Oil Prices Ease as U.S. Seeks to Renew Diplomacy With Iran | u | 0 | 0
+European shares climb to near 2-month highs as ECB holds rates | 0 | 0 | 0
+‘The $100 level is ours for awhile’: Oil won’t be getting cheap anytime soon, no matter what happens in the Gulf | 0 | 0 | 0
+Canadian Dollar Poised for Best Month Since April After BOC Hike | 0 | 0 | 0
+Oil prices settles lower as diplomacy hopes offset some Mideast supply concerns | u | 0 | 0
+In Moving Gradually, Fed Risks Having to Play Catch-Up to Quell Inflation | 0 | 0 | 0
+Risk of more Mideast war boosts oil, threatens your wallet | d | 0 | 0
+Dollar dips and euro rises after Fed, ECB rate decisions; pound extends gains | 0 | 0 | u
+Oil Prices Fall as Traders Weigh U.S.-Iran Diplomacy, Saudi Attacks | u | 0 | 0
+Gold remains stuck as the Fed takes a hawkish pause - TDS’ Melek | d | d | d
+What is happening with US interest rates and the economy? | 0 | 0 | 0
+European Equities Rise in Thursday Trading; ECB Leaves Interest Rates Unchanged | 0 | 0 | 0
+U.S. Economy Accelerated This Summer Despite High Gas Prices | 0 | 0 | 0
+ECB's Lagarde steps down, saying she can't remain neutral on world events | 0 | 0 | 0
+This credit card is the ‘best weapon’ to fight debt while interest rates keep climbing | 0 | 0 | 0
+Wall Street falls back and Oil prices retreat | d | 0 | 0
+Canadian dollar strengthens as traders assess BoC hike, await US data | 0 | 0 | 0
+US economy grows faster than expected but inflation rises to 3.7% | d | d | d
+Hassett Sees Fed Acting If October Inflation Data Come in High | 0 | 0 | 0
+Oil Prices Rise on Fears of Middle East Conflict Escalation | d | 0 | 0
+Central banks take a breather, though more hikes are to come | 0 | 0 | 0
+Inflation Accelerated in October, PCE Index Shows | d | d | d
+PCE Inflation Report: How Rising Prices Could Lead to a Bigger Rate Hike in December | 0 | 0 | 0
+ECB Leaves Rates Unchanged, Cites Energy Shock as Inflation Driver as December Hike Moves Into Focus | 0 | 0 | 0
+Carlos Slim Sells $1.15 Billion of Oil Stocks as Prices Rally | 0 | 0 | 0
+Sterling hits 17-Month high vs Euro as ECB holds rates | 0 | 0 | 0
+US inflation heats up in September; consumer spending rises | d | d | d
+Fed Chair Kevin Warsh’s warning to AI investors: ‘Interest rates get in the cracks’ | 0 | 0 | 0
+U.S. yields steady on PCE lands in-line; Europe awaits ECb | 0 | 0 | 0
+Japanese Yen weakens against Pound Sterling as BoJ decision looms | 0 | 0 | 0
+Gold slips as higher oil, U.S. inflation data bolster Fed hike bets | d | d | d
+WSJ Dollar Index Falls 0.12% to 97.18 | 0 | 0 | u
+Canadian dollar holds gains after Bank of Canada delivers rate hike | 0 | 0 | 0
+Federal Reserve issues FOMC statement | 0 | 0 | 0
+Treasury yields nudge toward one-week highs; Fed decision, Big Tech earnings loom | d | d | d
+WSJ Dollar Index Rises 0.19% to 97.30 | 0 | 0 | d
+Binance pledges to cover losses after US$6 billion crypto hack | 0 | 0 | 0
+Bitcoin Drops on Binance Hack as Stock Selloff Also Weighs | d | d | 0
+Why is Bitcoin dropping today? | 0 | 0 | 0
+Bitcoin tumbles below $78,000, extending losses as Binance security scare rattles crypto markets | 0 | d | 0
+Binance Halts Withdrawals as Suspected Hack Spurs Crypto Selloff | 0 | d | 0
+Binance says customer money is safe after huge hack drains key reserve wallets | 0 | 0 | 0
+Coinbase net income surges 66% in third quarter, benefiting from bitcoin investment gains | 0 | 0 | 0
+Coinbase reports Q3 revenue decline amid crypto slump | 0 | 0 | 0
+Strategy's Bitcoin Per Share Falls 3.7%: Rapid Earnings Reaction | 0 | 0 | 0
+4M Bitcoin Bought Above $85K Could Cap Recovery: Glassnode | 0 | 0 | 0
+Bitcoin price jumps to $81.5K as US GDP data beats expectations | 0 | u | 0
+New quantum model slashes hardware needed to break bitcoin keys by 17 times | 0 | 0 | 0
+Bitcoin drops to $80,000 on Fed dissent, Samsung, Alphabet earnings; AI tokens slump | 0 | d | 0
+BTC price dips below $80,000, liquidating $356 million in crypto longs | 0 | d | 0
+Gold slips as higher oil, US inflation data bolster Fed hike bets | d | d | d
+Biopharma stocks climb on Merck and Eli Lilly earnings | 0 | 0 | 0
+U.S. stock futures sink, Nasdaq down 2% as Amazon, Intel earnings underwhelm | d | 0 | 0
+Mondelez climbs on earnings beat | 0 | 0 | 0
+Coinbase shares rise after Q3 earnings top expectations | 0 | 0 | 0
+Wall Street ends lower as Alphabet revenue miss revives AI capex jitters | d | 0 | 0
+Dow, S&P 500, Nasdaq Futures Fall As Weak Tech Earnings Trigger Selloff: INTC, IOVA, SLS, AMZN Stocks In Focus | d | 0 | 0
+Why Microsoft stock isn't getting crushed like Google stock after its earnings report | 0 | 0 | 0
+Apple's Q4 Earnings Loom: Buy or Sell AAPL Stock Ahead of Results? | 0 | 0 | 0
+AI Cloud Stocks Fall as Big Tech Capex Comes in Light: Fastly Sinks 6%, Oracle and Nebius Drop 3% | d | 0 | 0
+Alphabet tumbles, software and cybersecurity stocks sink as earnings disappoint: AlphaCheck | d | 0 | 0
+US Equity Futures Fall Pre-Bell As Fed Holds Rate Steady, Traders Assess Big Tech Earnings | d | 0 | 0
+US Stock Futures Mixed as Alphabet Falls, Microsoft Gains and Fed Comments Draw Attention to AI Spending: Dow Jones, S&P, Nasdaq, Wall Street | 0 | 0 | 0
+Treasury yields ease after Federal Reserve rate hold | u | u | u
+European Stock Indexes Mostly Higher | 0 | 0 | 0
+Bessent says 'not necessarily' a mistake if the Fed hikes again | 0 | 0 | 0
+Fed rate hikes are coming, but not this week: CNBC survey | 0 | 0 | 0
+Stock Market News, Oct. 29, 2026: AI Jitters Spread as Intel, Amazon Results Disappoint | d | 0 | 0
+# ---- test fixtures and classic shapes ----
+US 10-year yield rises to 4.31% after PPI | d | d | d
+Treasury yields slip ahead of CPI data | u | u | u
+Stock futures rise ahead of key inflation report as traders weigh Fed path | u | 0 | 0
+Nvidia shares climb as AI chip demand stays strong into earnings | u | 0 | 0
+Nvidia drops 3% as chip stocks retreat on export curbs | d | 0 | 0
+Fed’s Waller says more rate cuts likely if inflation cools | 0 | 0 | 0
+Fed cuts rates by a quarter point | u | u | u
+Powell signals no rush to cut rates | d | d | d
+Fed hike bets fade after soft CPI | u | u | u
+CPI comes in hotter than expected | d | d | d
+Inflation cools more than expected in September | u | u | u
+Bitcoin reclaims $108K as ETF inflows return | 0 | u | 0
+SEC delays decision on new crypto ETF applications | 0 | 0 | 0
+Bitcoin ETFs see record outflows | 0 | d | 0
+Here’s what Wall Street expects from Wednesday’s CPI report | 0 | 0 | 0
+White House says trade deal with China is close | 0 | 0 | 0
+US and China reach trade deal, cutting tariffs | u | 0 | 0
+Trump announces new tariffs on Chinese imports | d | 0 | 0
+Dollar steadies as traders brace for inflation figures | 0 | 0 | 0
+Dollar falls after weak jobs report | 0 | 0 | u
+Dollar rallies as yields climb | d | d | d
+EUR/USD holds near 1.1650 ahead of US CPI | 0 | 0 | 0
+EUR/USD rises to 1.17 after soft US data | 0 | 0 | u
+Euro slides as ECB signals more cuts | 0 | 0 | d
+ECB raises interest rates by 25 basis points | 0 | 0 | u
+Israel strikes Iran, oil jumps | d | 0 | 0
+Ceasefire agreed between Israel and Hamas | 0 | 0 | 0
+Gold hits record high as dollar weakens | 0 | 0 | u
+Treasuries rally as traders pile into haven bonds | u | u | u
+Nasdaq hits record high as tech rallies | u | 0 | 0
+Oil prices fall as OPEC weighs output increase | u | 0 | 0
+Tesla shares slip ahead of earnings after delivery miss | d | 0 | 0
+China’s economy grows 4.8% as exports offset weak spending | 0 | 0 | 0
+Jobless claims rise more than expected | 0 | 0 | 0
+US payrolls beat forecasts, unemployment falls | 0 | 0 | 0
+Dogecoin jumps 9% as meme coin traders pile in | 0 | 0 | 0
+Ether surges 8% as ETF inflows hit record | 0 | u | 0
+Nasdaq futures slide 1% as Treasury yields jump after hot jobs data | d | d | d
+S&P 500 closes at record as Nvidia rallies on blowout forecast | u | 0 | 0
+Stocks rally after Fed signals pause in rate hikes | u | 0 | 0
+Wall Street opens higher as oil retreats | u | 0 | 0
+Dow drops 500 points as bond yields surge | d | d | d
+Tech stocks rebound as yields ease | u | u | u
+Apple shares fall after iPhone sales disappoint | d | 0 | 0
+Microsoft stock jumps 6% after cloud growth beats estimates | u | 0 | 0
+Meta earnings beat; stock surges in after-hours trading | u | 0 | 0
+Tesla earnings miss, shares slide 8% | d | 0 | 0
+Amazon to hire 250,000 holiday workers | 0 | 0 | 0
+Nvidia unveils new AI chip at developer conference | 0 | 0 | 0
+Fed raises rates by 25 basis points, signals more to come | d | d | d
+Fed holds rates steady, as expected | 0 | 0 | 0
+FOMC minutes show officials leaned hawkish | d | d | d
+Powell: Fed prepared to hike further if inflation persists | 0 | 0 | 0
+Core PCE rises 0.4%, hotter than forecast | d | d | d
+CPI inflation slows to 2.9% in October | u | u | u
+US producer prices unexpectedly fall | 0 | 0 | 0
+Euro zone inflation rises to 2.6% | 0 | 0 | 0
+UK inflation cools, pound slips | 0 | 0 | 0
+10-year Treasury yield climbs to 4.6%, highest since July | d | d | d
+Two-year yields tumble as traders bet on Fed cuts | u | u | u
+Bonds sell off as deficit worries grow | 0 | 0 | 0
+Japanese bond yields hit record high | 0 | 0 | 0
+Dollar slides to two-month low | 0 | 0 | u
+Dollar index jumps as safe-haven demand rises | 0 | 0 | d
+Greenback firms ahead of payrolls | 0 | 0 | d
+Euro climbs above $1.18 after ECB hawkish surprise | 0 | 0 | u
+ECB cuts rates for third time this year | 0 | 0 | d
+EUR/USD slips below 1.16 as US data surprises | 0 | 0 | d
+Australian dollar jumps after RBA hike | 0 | 0 | 0
+Yen surges as Bank of Japan hikes rates | 0 | 0 | 0
+Oil jumps 4% after attack on Saudi facility | d | 0 | 0
+Crude tumbles as OPEC+ agrees to boost output | u | 0 | 0
+Brent hovers near $95 as traders await Iran talks | 0 | 0 | 0
+Gold hits record as dollar falls | 0 | 0 | u
+Bitcoin soars past $90,000 as ETF inflows surge | 0 | u | 0
+Bitcoin slides 5% as crypto liquidations top $1 billion | 0 | d | 0
+Ether falls after Ethereum network outage | 0 | d | 0
+Crypto market loses $200 billion in a day | 0 | 0 | 0
+Kraken hacked, $400 million in user funds drained | 0 | d | 0
+Bitcoin ETF outflows hit record as investors flee | 0 | d | 0
+Bitcoin steadies near $80,000 after volatile week | 0 | 0 | 0
+Solana jumps 12% on ETF approval | 0 | 0 | 0
+Coinbase stock surges on record trading volumes | 0 | 0 | 0
+Trump slaps 50% tariffs on European goods | d | 0 | 0
+US and China sign trade agreement to lower tariffs | u | 0 | 0
+Trump says tariffs on Mexico could come next week | 0 | 0 | 0
+European stocks fall as German factory data disappoints | 0 | 0 | 0
+Nikkei surges to record on weak yen | 0 | 0 | 0
+Chinese stocks rally on stimulus hopes | 0 | 0 | 0
+Asian shares track Wall Street higher | 0 | 0 | 0
+Stock futures are flat ahead of Fed decision | 0 | 0 | 0
+What the Fed decision means for your mortgage | 0 | 0 | 0
+Is the AI bubble about to burst? | 0 | 0 | 0
+3 stocks to buy before earnings season | 0 | 0 | 0
+Analysts warn Nasdaq could fall 20% next year | 0 | 0 | 0
+Nvidia could hit $6 trillion, analyst says | 0 | 0 | 0
+Chip stocks tumble after new export restrictions on China | d | 0 | 0
+Semiconductor stocks lead Nasdaq higher | u | 0 | 0
+AI fears grip Wall Street as Microsoft capex soars | d | 0 | 0
+Small caps rally as rate cut bets build | u | u | u
+Mortgage rates rise to 7% | 0 | 0 | 0
+Retail sales beat expectations | 0 | 0 | 0
+US GDP shrinks in first quarter | 0 | 0 | 0
+Government shutdown begins as Congress fails to pass funding bill | 0 | 0 | 0
+Stocks slip as government shutdown drags on | d | 0 | 0
+Nasdaq sinks 2% in worst day since April | d | 0 | 0
+Wall Street rallies as inflation fears ease | u | u | u
+US stocks end mixed after choppy session | 0 | 0 | 0
+Stock futures climb after soft CPI print | u | u | u
+S&P 500 slips from record as Apple weighs | d | 0 | 0
+Broadcom soars 15% on AI revenue outlook | u | 0 | 0
+Netflix plunges after subscriber miss | d | 0 | 0
+Google shares rise after antitrust ruling | u | 0 | 0
+Meta to cut 5% of workforce | 0 | 0 | 0
+Fed's Powell says rates will stay higher for longer | d | d | d
+Fed officials see room for rate cuts next year, minutes show | 0 | 0 | 0
+Fed cuts interest rates for first time since 2024 | u | u | u
+Rate-cut bets jump after weak payrolls | u | u | u
+Treasury yields hit 16-year high | d | d | d
+Long-dated Treasuries rally on haven demand | u | u | u
+US 30-year yield falls below 5% | u | u | u
+German bund yields climb on spending plans | 0 | 0 | 0
+Inflation heats up again in September, CPI shows | d | d | d
+PPI rises more than expected in October | d | d | d
+Consumer prices cool for third straight month | u | u | u
+Dollar weakens as traders price in Fed cuts | 0 | 0 | u
+US dollar strengthens on safe-haven flows | 0 | 0 | d
+Euro falls to three-week low | 0 | 0 | d
+ECB holds rates, Lagarde says no rush to cut | 0 | 0 | u
+Oil prices spike on Hormuz closure fears | d | 0 | 0
+Oil slumps 6% as Iran deal nears | u | 0 | 0
+Crude futures little changed after inventory data | 0 | 0 | 0
+Bitcoin hits new all-time high above $120,000 | 0 | u | 0
+Bitcoin falls below $70,000 for first time since March | 0 | d | 0
+Crypto prices rebound after Fed decision | 0 | u | 0
+Bybit exchange suffers $1.5 billion hack | 0 | d | 0
+Spot bitcoin ETFs log fifth day of inflows | 0 | u | 0
+Hong Kong stocks plunge as tech selloff deepens | 0 | 0 | 0
+FTSE 100 hits record high | 0 | 0 | 0
+Wall Street futures drop as tariff fears return | d | 0 | 0
+Trump delays tariffs on EU for 90 days | u | 0 | 0
+Microsoft and Alphabet lead tech rally | u | 0 | 0
+Bitcoin miners' stocks surge | 0 | 0 | 0
+How high can Bitcoin go? | 0 | 0 | 0
+Gold slips as yields rise | d | d | d
