@@ -1677,11 +1677,14 @@ var WHY_DIR = {
 // Can this story carry an up/down call? It must come from a strong outlet (or 2+ outlets) and be about something that moves whole markets.
 var MEGA = /\b(nvidia|apple|microsoft|amazon|alphabet|google|meta|tesla|broadcom|amd|netflix|oracle|tsmc|magnificent seven|mag 7|big tech)\b/i;
 var INDEX_WORDS = /\b(stocks?|shares|wall street|nasdaq|s&p|dow|futures|equities|markets?|fed|fomc|powell|treasur(y|ies)|yields?|inflation|cpi|pce|jobs|payrolls|gdp|tariffs?|recession|rate (cut|hike)s?|oil|crude|war|sanctions|china|white house|trump|congress|shutdown)\b/i;
+var FOREIGN_MKT = /\b(indian?|japan(ese)?|chin(a|ese)|hong kong|europe(an)?|asian?|australian?|korean?|german|french|british|uk|brazil(ian)?|ftse|nikkei|sensex|nifty|hang seng|dax|cac|stoxx|kospi|asx|tsx)\b[^.;]{0,25}\b(shares|stocks|markets?|equities|index|indices|bourses?)\b/i;
 function callStrength(h, m) {
   const tier = tierOf(h.source), outlets = [...new Set(h.sources || [h.source])].filter((x) => tierOf(x) !== "C").length;
   if (tier === "C") return { ok: false, why: "Source too weak to make a call on." };
   if (tier !== "A" && outlets < 2) return { ok: false, why: "Only one outlet so far. Waiting for a second before calling it." };
   const t = h.title;
+  if (FOREIGN_MKT.test(t) && !/\b(wall street|u\.?s\.? (stocks|shares|futures)|nasdaq|s&p|dow)\b/i.test(t)) return { ok: false, why: "About another country’s market. Usually not enough to move this one." };
+  if (["crypto", "memes"].includes(m) && !["crypto", "memes"].includes(h.theme) && !INDEX_WORDS.test(t)) return { ok: false, why: "Not a crypto or big-picture story, so no call." };
   if (["futures", "stocks", "options"].includes(m)) {
     if (["earnings", "ai"].includes(h.theme) && !MEGA.test(t) && !/\b(nasdaq|s&p|stocks|wall street|chip stocks|tech stocks)\b/i.test(t)) return { ok: false, why: "About a single smaller company. Unlikely to move the whole index." };
     if (!INDEX_WORDS.test(t) && !MEGA.test(t)) return { ok: false, why: "Not a big enough story to move the index on its own." };
