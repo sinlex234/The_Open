@@ -1640,6 +1640,8 @@ function riskTone(t) {
 // Bond yields: rising yields weigh on stocks and crypto and lift the dollar; falling yields do the opposite
 function yieldTone(t) {
   if (!/\byields?\b/i.test(t)) return 0;
+  if (/\b(rising|higher|surging|climbing|jumping|soaring|spiking)\s+(\S+\s+){0,3}yields?\b/i.test(t)) return 1;
+  if (/\b(falling|lower|sliding|easing|declining|dropping|retreating|tumbling)\s+(\S+\s+){0,3}yields?\b/i.test(t)) return -1;
   if (/\byields?\b[^.]{0,30}\b(rise[sd]?|rising|climb\w*|jump\w*|surge\w*|spike\w*|soar\w*|higher|up|top|hit \w+ high)\b/i.test(t)) return 1;
   if (/\byields?\b[^.]{0,30}\b(fall\w*|fell|slip\w*|drop\w*|eas(e|es|ing)|declin\w*|lower|down|retreat\w*|slide\w*)\b/i.test(t)) return -1;
   return 0;
