@@ -1021,7 +1021,7 @@ function pulseHTML(d) {
   const tops = topThree(d);
   const ar = x => x.paused ? '⏸' : x.dir === 'up' ? '<i class="up">↑</i>' : x.dir === 'down' ? '<i class="down">↓</i>' : '<i>↕</i>';
   return `<div class="pl-grid n${reads.length}">${reads.map(pulseCard).join('')}</div>
-    ${tops.length ? `<p class="pl-src">Reading the top ${tops.length} stories in your briefing: ${tops.map((n, i) => `<a href="${esc(n.link)}" target="_blank" rel="noopener" title="${esc(n.headline)}">${String(i + 1).padStart(2, '0')} ${n.reads.map(ar).join('')}</a>`).join('')}</p>` : ''}
+    ${tops.length ? `<div class="pl-src"><span>Based on the ${tops.length} strongest headlines for your markets</span>${tops.map(n => `<a href="${esc(n.link)}" target="_blank" rel="noopener"><span class="pl-ar">${n.reads.map(ar).join('')}</span><span class="pl-hl">${esc(n.headline)}</span></a>`).join('')}</div>` : ''}
     <p class="pl-fine">A lean for the next hour, not a promise. Every read is graded on the <a href="/scorecard">Scorecard</a>.</p>`;
 }
 // Scan timer: a new read at every 5-minute bar close (:00, :05, :10…), the same moment the chart's 5m bar closes.

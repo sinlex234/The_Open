@@ -2764,10 +2764,10 @@ function pulseRead(key, stories, px, events, now, upcoming) {
   const nd = news.score > 0.15 ? "up" : news.score < -0.15 ? "down" : null;
   const top = nd && news.stories.find((x) => x.dir === nd);
   const sides = news.stories.filter((x) => x.dir !== "mixed");
-  if (top) reasons.push(`The briefing’s top headlines lean ${nd} (${news.stories.filter((x) => x.dir === nd).length} of ${news.stories.length}), led by “${top.headline}” (${top.source}).`);
-  else if (sides.length) reasons.push("The briefing’s top headlines point both ways, so news isn’t tipping it.");
+  if (top) reasons.push(`The strongest headlines lean ${nd} (${news.stories.filter((x) => x.dir === nd).length} of ${news.stories.length}), led by “${top.headline}” (${top.source}).`);
+  else if (sides.length) reasons.push("The strongest headlines point both ways, so news isn’t tipping it.");
   else if (news.stories.some((x) => x.paused)) reasons.push("The latest strong story’s call was paused because price went the other way.");
-  else reasons.push("None of the briefing’s top headlines points clearly either way.");
+  else reasons.push("None of the strongest headlines points clearly either way.");
   reasons.push(Math.abs(price.ch60) < 1e-9 ? "Price is flat over the last hour." : `${name} is ${PX_WORD(price.ch60, price.unit)} in the last hour${Math.sign(price.ch30) !== Math.sign(price.ch60) && price.ch30 ? `, but ${PX_WORD(price.ch30, price.unit)} in the last 30 minutes` : ""}.`);
   if (hasNews && news.score * price.score < 0 && Math.abs(news.score) > 0.3 && Math.abs(price.score) > 0.3) return none("News and price disagree, so there’s no edge either way right now.", { reasons, score: +total.toFixed(2) });
   if (Math.abs(total) < 0.35) return none("Nothing pushing hard enough either way. Most of the time this is the honest answer.", { reasons, score: +total.toFixed(2) });
