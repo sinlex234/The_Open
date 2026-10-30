@@ -2572,7 +2572,7 @@ function pulseRead(key, stories, px, events, now, upcoming) {
   reasons.push(Math.abs(price.ch60) < 1e-9 ? "Price is flat over the last hour." : `${name} is ${PX_WORD(price.ch60, price.unit)} in the last hour${Math.sign(price.ch30) !== Math.sign(price.ch60) && price.ch30 ? `, but ${PX_WORD(price.ch30, price.unit)} in the last 30 minutes` : ""}.`);
   if (hasNews && news.score * price.score < 0 && Math.abs(news.score) > 0.3 && Math.abs(price.score) > 0.3) return none("News and price disagree, so there’s no edge either way right now.", { reasons, score: +total.toFixed(2) });
   if (Math.abs(total) < 0.35) return none("Nothing pushing hard enough either way. Most of the time this is the honest answer.", { reasons, score: +total.toFixed(2) });
-  return { ...base, lean: total > 0 ? "up" : "down", conf: Math.abs(total) >= 0.6 ? "medium" : "low", score: +total.toFixed(2), why: hasNews ? (Math.sign(news.score) === Math.sign(price.score) ? "News and price point the same way." : "News is doing most of the work; price hasn’t confirmed yet.") : "Price momentum only, with no news behind it, so treat it lightly.", reasons };
+  return { ...base, lean: total > 0 ? "up" : "down", conf: Math.abs(total) >= 0.6 ? "medium" : "low", score: +total.toFixed(2), why: hasNews ? (Math.abs(price.score) < 0.15 ? "The headlines are doing the work. Price hasn’t really moved yet." : Math.sign(news.score) === Math.sign(price.score) ? "News and price point the same way." : "News is doing most of the work; price hasn’t confirmed yet.") : "Price momentum only, with no news behind it, so treat it lightly.", reasons };
 }
 async function pulseAI(reads, events, now) {
   const live = reads.filter((r) => r.lean !== "none" || r.stories.length);
