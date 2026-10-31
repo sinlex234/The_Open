@@ -468,6 +468,15 @@ function gateHTML() {
       <div class="amsg" id="aMsg" role="status"></div>
       <button class="btn-primary" id="aSubmit">Create account</button>
     </div>
+    <div class="gate-form code-step" id="gateCode" hidden>
+      <h2>Check your email</h2>
+      <p>We sent a code to <b id="cEmail"></b>. Enter it here to finish creating your account.</p>
+      <label class="fld"><span>Code from the email</span><input type="text" id="aCode" class="code-in" inputmode="numeric" autocomplete="one-time-code" maxlength="12" placeholder="00000000" spellcheck="false"></label>
+      <div class="amsg" id="cMsg" role="status"></div>
+      <button class="btn-primary" id="cSubmit">Confirm and continue</button>
+      <div class="code-row"><button class="linkbtn" id="cResend" type="button">Send a new code</button><button class="linkbtn" id="cBack" type="button">Use a different email</button></div>
+      <p class="gate-fine">Can’t find it? Check your spam or promotions folder. The code works for one hour.</p>
+    </div>
     <div class="gate-form" id="gateReset" hidden>
       <h2>Choose a new password</h2>
       <label class="fld"><span>New password</span><input type="password" id="aNew" autocomplete="new-password" placeholder="At least 8 characters"></label>
@@ -489,8 +498,10 @@ function setMode(m) {
 const USER_RE = /^[a-z0-9_]{3,20}$/;
 function friendly(e) {
   const m = (e && e.message) || String(e);
+  if (/token has expired|token.*invalid|otp_expired|invalid otp/i.test(m)) return 'That code doesn’t match or has expired. Check the newest email, or send a new code.';
+  if (/only request this after|security purposes/i.test(m)) return 'A code was just sent. Wait a few seconds before asking for another.';
   if (/invalid login credentials/i.test(m)) return 'That email or username and password don’t match.';
-  if (/email not confirmed/i.test(m)) return 'Confirm your email first. Check your inbox for the link.';
+  if (/email not confirmed/i.test(m)) return 'Confirm your email first. Enter the code we emailed you.';
   if (/already registered/i.test(m)) return 'An account with that email already exists. Sign in instead.';
   if (/not authorized/i.test(m)) return 'Email sign-up isn’t open to new addresses yet. Use Continue with Google.';
   if (/rate limit|too many/i.test(m)) return 'Too many attempts. Wait a minute and try again.';
@@ -515,7 +526,7 @@ async function submit() {
       const { data, error } = await sb.auth.signUp({ email, password: pass, options: { data: { username: user }, emailRedirectTo: redirectURL() } });
       if (error) throw error;
       if (data.user && Array.isArray(data.user.identities) && !data.user.identities.length) return msg('aMsg', 'An account with that email already exists. Sign in instead.');
-      if (!data.session) return msg('aMsg', `Check ${email} for a confirmation link, then come back here.`, true);
+      if (!data.session) return showCode(email);
     } else if (authMode === 'forgot') {
       const id = $('#aId').value.trim(); if (!id) return msg('aMsg', 'Enter your email or username.');
       const email = await resolveEmail(id);
@@ -525,9 +536,75 @@ async function submit() {
       const id = $('#aId').value.trim(), pass = $('#aPass').value;
       if (!id || !pass) return msg('aMsg', 'Enter your email or username and your password.');
       const email = await resolveEmail(id); if (!email) return msg('aMsg', 'No account found with that username.');
-      const { error } = await sb.auth.signInWithPassword({ email, password: pass }); if (error) throw error;
+      const { error } = await sb.auth.signInWithPassword({ email, password: pass });
+      if (error && /email not confirmed/i.test(error.message || '')) {
+        // Signed up but never confirmed: send a fresh code and ask for it right here
+        await sb.auth.resend({ type: 'signup', email }).catch(() => {});
+        return showCode(email, 'Your email isn’t confirmed yet, so we sent you a new code.');
+      }
+      if (error) throw error;
     }
   } catch (e) { msg('aMsg', friendly(e)); } finally { b.disabled = false; }
+}
+// ---------- the emailed sign-up code ----------
+// The code is typed on the same screen, so it works even when the email is opened on another device.
+const PENDING = 'pendingCode';
+let resendTimer = null;
+function codeCooldown(s) {
+  const b = $('#cResend'); if (!b) return;
+  clearInterval(resendTimer);
+  let left = s;
+  const draw = () => { if (!b.isConnected) return clearInterval(resendTimer); b.disabled = left > 0; b.textContent = left > 0 ? `Send a new code in ${left}s` : 'Send a new code'; };
+  draw();
+  resendTimer = setInterval(() => { left--; draw(); if (left <= 0) clearInterval(resendTimer); }, 1000);
+}
+function showCode(email, note = '', { justSent = true } = {}) {
+  if (justSent) ls.set(PENDING, { email, t: Date.now() });
+  $('#gateForm').hidden = true; $('#gateReset').hidden = true; $('#gateCode').hidden = false;
+  $('#cEmail').textContent = email;
+  msg('cMsg', note, !!note);
+  const inp = $('#aCode'); inp.value = ''; setTimeout(() => inp.focus(), 60);
+  if (justSent) codeCooldown(60);
+}
+async function verifyCode() {
+  const b = $('#cSubmit'); if (b.disabled) return;
+  const email = $('#cEmail').textContent.trim(), token = $('#aCode').value.replace(/\D/g, '');
+  if (token.length < 6) return msg('cMsg', 'Enter the code from the email.');
+  b.disabled = true; msg('cMsg', 'Checking the code…', true);
+  try {
+    const { error } = await sb.auth.verifyOtp({ email, token, type: 'email' });
+    if (error) throw error;
+    ls.set(PENDING, null);
+    msg('cMsg', 'Email confirmed. Setting up your account…', true);
+    // The new session fires onAuthStateChange, which carries on to the setup questions
+  } catch (e) { msg('cMsg', friendly(e)); $('#aCode').select(); } finally { b.disabled = false; }
+}
+async function resendCode() {
+  const email = $('#cEmail').textContent.trim(); if (!email) return;
+  const b = $('#cResend'); b.disabled = true;
+  try {
+    const { error } = await sb.auth.resend({ type: 'signup', email }); if (error) throw error;
+    ls.set(PENDING, { email, t: Date.now() });
+    msg('cMsg', `New code sent to ${email}. Use the newest email.`, true);
+    $('#aCode').value = ''; $('#aCode').focus();
+    codeCooldown(60);
+  } catch (e) {
+    msg('cMsg', friendly(e));
+    const w = /after (\d+) seconds?/i.exec((e && e.message) || ''); codeCooldown(w ? +w[1] : 10);
+  }
+}
+function bindCode() {
+  const inp = $('#aCode');
+  inp.addEventListener('input', e => {
+    const digits = inp.value.replace(/\D/g, '');
+    if (digits !== inp.value) inp.value = digits;
+    // Pasted or filled in from the email (phones offer the code above the keyboard): check it straight away
+    if (digits.length >= 6 && (!e.inputType || /paste|replacement/i.test(e.inputType))) verifyCode();
+  });
+  inp.addEventListener('keydown', e => { if (e.key === 'Enter') verifyCode(); });
+  $('#cSubmit').onclick = verifyCode;
+  $('#cResend').onclick = resendCode;
+  $('#cBack').onclick = () => { ls.set(PENDING, null); clearInterval(resendTimer); $('#gateCode').hidden = true; $('#gateForm').hidden = false; setMode('signup'); };
 }
 function showGate(reset = false) {
   const g = $('#gate'); g.innerHTML = gateHTML(); g.hidden = false; document.body.classList.add('locked');
@@ -541,7 +618,11 @@ function showGate(reset = false) {
     const { error } = await sb.auth.updateUser({ password: p }); if (error) return msg('rMsg', friendly(error));
     msg('rMsg', 'Password saved.', true); setTimeout(() => afterSignIn(me.user), 800);
   };
-  if (reset) { $('#gateForm').hidden = true; $('#gateReset').hidden = false; } else setMode(ls.get('seen', false) ? 'signin' : 'signup');
+  bindCode();
+  const pend = ls.get(PENDING, null);
+  if (reset) { $('#gateForm').hidden = true; $('#gateReset').hidden = false; }
+  else if (pend && pend.email && Date.now() - pend.t < 3600e3) { setMode('signup'); showCode(pend.email, '', { justSent: false }); }
+  else setMode(ls.get('seen', false) ? 'signin' : 'signup');
 }
 function hideGate() { const g = $('#gate'); g.hidden = true; g.innerHTML = ''; document.body.classList.remove('locked'); }
 
@@ -727,7 +808,7 @@ function startWizardIfNeeded() {
 async function afterSignIn(user) {
   me.user = user;
   await loadName();
-  ls.set('seen', true);
+  ls.set('seen', true); ls.set(PENDING, null);
   const saved = await loadAnswers();
   if (saved) { me.answers = saved; if (saved.alerts) me.alerts = { ...me.alerts, ...saved.alerts }; }
   hideGate(); renderAccount();

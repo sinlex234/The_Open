@@ -250,6 +250,8 @@ function startTape() {
 
 // ---------- TradingView live charts and heatmaps ----------
 const tvTheme = () => document.documentElement.dataset.theme === 'light' ? 'light' : 'dark';
+// The page grows with the screen (app.css sizes everything in rem); pixel sizes set from here follow the same scale
+const remScale = () => (parseFloat(getComputedStyle(document.documentElement).fontSize) || 16) / 16;
 function tvWidget(el, kind, cfg, height) {
   if (typeof el === 'string') el = document.getElementById(el);
   if (!el) return;
@@ -594,13 +596,13 @@ function leadHTML(d) {
 function guideHTML() {
   if (store.get('guideDone', false)) return '';
   return `<section class="guide" id="guide"><button class="x" id="guideX" aria-label="Hide this guide">×</button>
-    <h2>How to use The Open One</h2>
-    <p>Everything is built around one question: what’s happening in the world, and what will it likely do to the market you trade?</p>
+    <div class="guide-t"><h2>How to use The Open One</h2>
+    <p>What’s happening in the world, and what it will likely do to the market you trade.</p></div>
     <ol>
-      <li><b>Read the briefing</b>The 3 stories that matter most for you, what they’ll likely do to your market, and what to watch next.</li>
-      <li><b>Check your prices</b>Your markets and a live chart sit right next to the briefing.</li>
-      <li><b>See what’s going to happen next</b>The most likely path for your markets, and a game plan for the strategies you use.</li>
-      <li><b>Go deeper in your tab</b>Tabs with a blue dot are your markets. Each opens with its own briefing. Stuck on a word? Try the <a href="/glossary">Glossary</a>.</li>
+      <li><b>Read the briefing</b>The 3 stories that matter most for your markets.</li>
+      <li><b>Watch the chart</b>Your market, live, right next to the news.</li>
+      <li><b>See what’s next</b>What’s likely to happen, and a game plan for your strategy.</li>
+      <li><b>Go deeper</b>Blue-dot tabs are your markets. Stuck on a word? <a href="/glossary">Glossary</a>.</li>
     </ol></section>`;
 }
 // Where a story came from, and whether more than one outlet has it
@@ -1073,7 +1075,7 @@ function saveSeen(ids) {
   store.set('lastSeen', { t: Date.now(), ids: ids || sinceIds, px, lean });
 }
 addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden' && sinceIds.length && main.dataset.page === 'today') saveSeen(sinceIds); });
-const TODAY_TABS = [['next', 'What’s next'], ['timing', 'When price moves'], ['play', 'Your game plan'], ['topics', 'More news'], ['world', 'World markets']];
+const TODAY_TABS = [['next', 'What’s next'], ['timing', 'When price moves'], ['play', 'Game plan'], ['topics', 'More news'], ['world', 'World markets']];
 function bindTabs() {
   const bar = main.querySelector('.tabbar'); if (!bar) return;
   const vis = k => { const p = main.querySelector(`.tabp[data-panel="${k}"]`); return p && !p.classList.contains('wk-off'); };
@@ -1090,29 +1092,31 @@ PAGES.today = () => {
   const ws = windowStatus();
   if (layout(`
     ${guideHTML()}
-    <h1 class="page-h">${esc(greeting())}</h1>
-    <p class="page-intro" id="todayIntro">${isLearning() ? 'Here’s how today’s news connects to the markets you’re learning about.' : ws.text ? esc(ws.text) : 'Here’s what matters for your markets today.'}</p>
+    <div class="today-head">
+      <h1 class="page-h">${esc(greeting())}</h1>
+      <p class="page-intro" id="todayIntro">${isLearning() ? 'Here’s how today’s news connects to the markets you’re learning about.' : ws.text ? esc(ws.text) : 'Here’s what matters for your markets today.'}</p>
+    </div>
     <div class="since" id="since" hidden></div>
-    <div class="front front2">
-      <div class="maincol">
-      <section class="briefing"><div class="sec-row"><h2 class="sec">Briefing for ${esc(sessionDay().long)}</h2><a href="/news">All news</a></div><ol class="bfeed" id="bfeed">${'<li>' + skel(3) + '</li>'}</ol></section>
-    <section class="block more-tabs">
-        <div class="chips tabbar" role="tablist" aria-label="More for today">${TODAY_TABS.map(([k, l]) => `<button class="chip" role="tab" data-tab="${k}" aria-selected="false" aria-pressed="false">${l}</button>`).join('')}</div>
-        <div class="tabp" data-panel="next"><div class="tab-links"><a class="more" href="/calendar">Full calendar</a></div><h2 class="sr-only" id="outlookH">What’s going to happen next</h2><div id="outlook"></div></div>
-        <div class="tabp" data-panel="timing"><div class="tab-links"><div class="chips tight" id="tmPick"></div></div><div id="timing"></div></div>
-        <div class="tabp wknd-hide" data-panel="play"><div class="tab-links"><button class="linkbtn" type="button" data-edit>Change strategies</button></div><div id="todayPlay"></div></div>
-        <div class="tabp wknd-hide" data-panel="topics"><div class="tab-links"><a class="more" href="/news">All news</a></div><div class="topics" id="topics"></div></div>
-        <div class="tabp" data-panel="world"><div class="tab-links"><a class="more" href="/markets">All markets</a></div><div id="worldMini"></div></div>
-      </section>
+    <div class="front3">
+      <div class="t-left">
+        <section class="briefing t-news"><div class="sec-row"><h2 class="sec">Briefing for ${esc(sessionDay().long)}</h2><a href="/news">All news</a></div><ol class="bfeed" id="bfeed">${'<li>' + skel(3) + '</li>'}</ol></section>
+        <section class="more-tabs t-more">
+          <div class="chips tabbar" role="tablist" aria-label="More for today">${TODAY_TABS.map(([k, l]) => `<button class="chip" role="tab" data-tab="${k}" aria-selected="false" aria-pressed="false">${l}</button>`).join('')}</div>
+          <div class="tabp" data-panel="next"><div class="tab-links"><a class="more" href="/calendar">Full calendar</a></div><h2 class="sr-only" id="outlookH">What’s going to happen next</h2><div id="outlook"></div></div>
+          <div class="tabp" data-panel="timing"><div class="tab-links"><div class="chips tight" id="tmPick"></div></div><div id="timing"></div></div>
+          <div class="tabp wknd-hide" data-panel="play"><div class="tab-links"><button class="linkbtn" type="button" data-edit>Change strategies</button></div><div id="todayPlay"></div></div>
+          <div class="tabp wknd-hide" data-panel="topics"><div class="tab-links"><a class="more" href="/news">All news</a></div><div class="topics" id="topics"></div></div>
+          <div class="tabp" data-panel="world"><div class="tab-links"><a class="more" href="/markets">All markets</a></div><div id="worldMini"></div></div>
+        </section>
       </div>
-      <div class="now">
-        <section class="now-sec" id="sessBlock"><div class="sec-row"><h2 class="sec">Your sessions</h2><span class="faint small">${esc(tzAbbr())}</span></div><div id="sessions" class="ssc-list"></div></section>
-        <section class="now-sec pulse" id="pulseBlock"><div class="sec-row"><h2 class="sec">Live read</h2><span class="pl-timer" id="pulseNext" aria-live="off">…</span></div><div id="pulse">${skel(2)}</div></section>
+      <div class="t-right">
+        <section class="hero-chart t-chart"><div class="chart-h"><h2 class="sec">Live chart</h2><div class="chips tight" id="todayChartPick"></div></div><div id="todayChart" class="tvbox"></div></section>
+        <div class="now t-now">
+          <section class="now-sec" id="sessBlock"><div class="sec-row"><h2 class="sec">Your sessions</h2><span class="faint small">${esc(tzAbbr())}</span></div><div id="sessions" class="ssc-list"></div></section>
+          <section class="now-sec pulse" id="pulseBlock"><div class="sec-row"><h2 class="sec">Live read</h2><span class="pl-timer" id="pulseNext" aria-live="off">…</span></div><div id="pulse">${skel(2)}</div></section>
+        </div>
+        <section class="t-prices card" id="myPrices"></section>
       </div>
-      <aside class="rail">
-        <section id="myPrices"></section>
-        <section class="rail-chart"><div class="chart-h"><h2 class="sec">Live chart</h2></div><div class="chips tight" id="todayChartPick"></div><div id="todayChart" class="tvbox"></div></section>
-      </aside>
     </div>
 `)) {
     chartPicker('todayChart', 'todayChartPick', todayChartOptions());
@@ -1261,8 +1265,8 @@ PAGES.heatmaps = () => {
   const save = (k, v) => { store.set('hm', { ...store.get('hm', {}), map: pickId, tf, [k]: v }); refreshing = false; PAGES.heatmaps(); };
   main.querySelectorAll('[data-map]').forEach(b => b.onclick = () => save('map', b.dataset.map));
   main.querySelectorAll('[data-tf]').forEach(b => b.onclick = () => save('tf', b.dataset.tf));
-  const tall = innerWidth < 640 ? 460 : 640;
-  tvWidget('hmMap', h.kind, { ...HM_BASE, ...h.cfg(tf), colorTheme: tvTheme() }, h.id === 'fx' ? (innerWidth < 640 ? 360 : 460) : tall);
+  const tall = Math.round((innerWidth < 640 ? 460 : 640) * remScale());
+  tvWidget('hmMap', h.kind, { ...HM_BASE, ...h.cfg(tf), colorTheme: tvTheme() }, h.id === 'fx' ? Math.round((innerWidth < 640 ? 360 : 460) * remScale()) : tall);
   if (h.id === 'ndx' || h.id === 'spx' || h.id === 'etf') {
     const mv = api('movers', 2 * 60e3);
     fill('hmSay', 'the summary', mv, x => {
