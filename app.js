@@ -264,8 +264,9 @@ function tvWidget(el, kind, cfg, height) {
   const tries = +(el.dataset.tvTries || 0);
   const check = () => {
     if (el.dataset.tvToken !== token || !el.isConnected) return;
+    // An iframe means TradingView answered and is drawing (it can be hidden in a closed tab, so don't judge by size)
     const f = el.querySelector('iframe');
-    if (f && f.offsetHeight > 20) { el.dataset.tvTries = '0'; return; }
+    if (f) { el.dataset.tvTries = '0'; return; }
     if (kind === 'ticker-tape') return;
     if (tries < 1) { el.dataset.tvTries = String(tries + 1); tvWidget(el, kind, cfg, height); return; }
     el.dataset.tvTries = '0';
@@ -273,7 +274,7 @@ function tvWidget(el, kind, cfg, height) {
     el.querySelector('button').onclick = () => tvWidget(el, kind, cfg, height);
   };
   sc.onerror = () => setTimeout(check, 500);
-  setTimeout(check, 9000);
+  setTimeout(check, 15000);
 }
 // ---------- countdown to bar close (TradingView's embed forces its own one off, so we draw it) ----------
 const TFS = [['1', '1m', 1], ['5', '5m', 5], ['60', '1h', 60], ['240', '4h', 240], ['D', '1D', 1440]];

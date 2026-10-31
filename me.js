@@ -66,8 +66,8 @@ export const ASSETS = {
     { id: 'CL', label: 'Crude oil (CL)', ysym: 'CL=F', short: 'Oil', pt: 1000, tv: 'TVC:USOIL', kw: /\boil\b|crude|opec/i },
     { id: 'GC', label: 'Gold (GC)', ysym: 'GC=F', lv: 'fx', short: 'Gold', pt: 100, tv: 'OANDA:XAUUSD', kw: /\bgold\b/i },
     { id: 'SI', label: 'Silver (SI)', ysym: 'SI=F', short: 'Silver', pt: 5000, tv: 'OANDA:XAGUSD', kw: /silver/i },
-    { id: 'NG', label: 'Natural gas (NG)', ysym: 'NG=F', short: 'Gas', pt: 10000, tv: 'TVC:NATURALGAS', kw: /natural gas|\blng\b/i },
-    { id: 'ZN', label: 'Treasury notes (ZN)', ysym: '^TNX', short: '10Y', tv: 'TVC:US10Y', kw: /treasur|bond|yield/i },
+    { id: 'NG', label: 'Natural gas (NG)', ysym: 'NG=F', short: 'Gas', pt: 10000, tv: 'OANDA:NATGASUSD', kw: /natural gas|\blng\b/i },
+    { id: 'ZN', label: 'Treasury notes (ZN)', ysym: '^TNX', short: '10Y', tv: 'OANDA:USB10YUSD', kw: /treasur|bond|yield/i },
   ],
   forex: [
     { id: 'EURUSD', label: 'EUR/USD', ysym: 'EURUSD=X', lv: 'fx', short: 'EUR/USD', pip: 0.0001, ccy: ['EUR', 'USD'], tv: 'FX:EURUSD', kw: /\beuro\b|eur\/usd|ecb/i },
