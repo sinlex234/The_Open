@@ -1224,7 +1224,11 @@ function newsroomHTML(items, ranked, mineFirst = true, cap = 10) {
   const solid = i => { const d = i.dirs || {}; return !!(d.NQ || d.BTC || d.EURUSD) || (i.outlets || i.count || 1) >= 2 || moved(i) >= 0.2; };
   const sorted = [...items].sort((a, b) => rank(b) - rank(a)).filter(i => i.impact !== 'low' || (mineFirst && mine(i)));
   const pool = sorted.filter(solid).length >= 3 ? sorted.filter(solid) : sorted;
-  const top = (pool.length >= 3 ? pool : ranked).slice(0, 3), topIds = new Set(top.map(i => i.id));
+  // Three different stories up front: one per topic, so three oil headlines can't take every slot
+  const top = [], topics = new Set();
+  for (const i of (pool.length >= 3 ? pool : ranked)) { const k = i.theme || i.section || i.id; if (topics.has(k)) continue; topics.add(k); top.push(i); if (top.length === 3) break; }
+  for (const i of (pool.length >= 3 ? pool : ranked)) { if (top.length >= 3) break; if (!top.includes(i)) top.push(i); }
+  const topIds = new Set(top.map(i => i.id));
   const seenWhy = new Set();
   const why = i => { if (!i.why || seenWhy.has(i.why)) return ''; seenWhy.add(i.why); return esc(i.why); };
   const [lead, ...side] = top;
