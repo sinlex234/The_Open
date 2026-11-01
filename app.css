@@ -1199,3 +1199,37 @@ table.t,.mytable,.wm-g table{max-width:100%}
   .nr-lead{padding:1.125rem 1.125rem}
   .nr-row{grid-template-columns:1fr;gap:0.125rem;padding-left:0.75rem}
 }
+
+/* lead story: no dead space; facts strip like the release card; details pinned to the bottom */
+.nr-lead,.nr-side{display:flex;flex-direction:column}
+.nr-lead>.nr-meta,.nr-side>.nr-meta{margin-top:auto;padding-top:0.875rem}
+.nr-lead{background:linear-gradient(180deg,color-mix(in srgb,var(--panel-2) 55%,var(--panel)) 0%,var(--panel) 55%)}
+.nr-stats{margin:1.25rem 0 0;padding:1rem 0 0;border-top:1px solid var(--rule);gap:0.75rem 2rem}
+.nr-stats b{font-size:1.05rem}
+.nr-stats b.flat{color:var(--ink-3)}
+.nr-stats b.up{color:var(--up)} .nr-stats b.down{color:var(--down)}
+.nr-chip{display:inline-flex;align-items:center;gap:0.25rem;font:500 0.7188rem/1 var(--mono);color:var(--ink-2);border:1px solid var(--rule-2);border-radius:99px;padding:0.25rem 0.5rem}
+.nr-chip i{font-style:normal;font-weight:700}
+.nr-chip i.up{color:var(--up)} .nr-chip i.down{color:var(--down)}
+.nr-side{transition:border-color .2s ease} .nr-side:hover,.nr-lead:hover{border-color:var(--rule-2)}
+.nr-row{transition:background-color .15s ease} .nr-row:hover{background:color-mix(in srgb,var(--panel) 60%,transparent)}
+.nr-lead .nr-stats{margin-top:auto}
+.nr-lead>.nr-meta{margin-top:0;padding-top:0.875rem}
+.nr-lead .nr-h1{font-size:1.75rem}
+
+/* ---------- Cleaner type: one font everywhere (Geist), numbers in neat columns, crisper contrast ---------- */
+:root{--mono:'Geist','Inter',system-ui,-apple-system,'Segoe UI',sans-serif}
+:root:not([data-theme="light"]){--ink-2:#b4b4bc;--ink-3:#8a8a94}
+html{text-rendering:optimizeLegibility;font-optical-sizing:auto}
+body{font-feature-settings:"cv11" 1,"ss01" 1;letter-spacing:-0.005em}
+/* numbers line up without looking like code */
+.rel-nums b,.ssc-nums b,.pl-px,.react,.chg,.act,.ev .t,.ev .fp,.qcell .r,.nr-row time,.nr-chip,.tm-t,.tm-when,.cd b,.mytable td,.wm-g td,table.t td,.em-c .rng,.earn b,.leader-h .big,.lrow span,.gb .v,.tl .tt,.tok .stats,.bm-moved,.pl-src a,.now .ssc-pills .pill,.tk-p,.tk-c,.ms-next,.pl-timer,.stamp,.wz-count,.nb-t,.bn,.ff-v,.ff-t{font-variant-numeric:tabular-nums;letter-spacing:-0.01em}
+.rel-nums b,.ssc-nums b{font-weight:600;letter-spacing:-0.02em}
+/* small uppercase labels: sans, a touch bolder, evenly spaced */
+.eyebrow,.kicker,.chips-label,.bl,.rel-top,.bsum-h,.since-h,.nr-eye,.nr-gh,.nr-fy b,.slist .fy b,.fyl b,.th-sec h4,.xp dt,.across dt,.glance h2,.ol-top,.wm-g h3,.ff-head,.pl-ai,.newtag,.nr-brk,.slist .brk{font-weight:600;letter-spacing:.07em}
+.rel-top{text-transform:none;letter-spacing:0;font-weight:500}
+.code-in{font-family:'Geist Mono',ui-monospace,monospace}
+/* headings: tighter and crisper */
+.page-h{letter-spacing:-0.035em}
+.sec{letter-spacing:-0.015em}
+.bh,.nr-h1,.nr-h2,.nr-t{letter-spacing:-0.02em}

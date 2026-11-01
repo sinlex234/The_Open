@@ -1205,11 +1205,16 @@ function matters(i) {
   const moved = r && r.from ? Math.abs((r.now - r.from) / r.from * 100) : 0;
   return i.impact === 'high' || !!(d.NQ || d.BTC || d.EURUSD) || moved >= 0.2 || (i.impact === 'medium' && forYouStrength(i) >= 1);
 }
+const NR_MK = { NQ: 'NQ', BTC: 'Bitcoin', EURUSD: 'EUR/USD' };
+function nrMarkets() { const k = [...new Set(myMarkets().map(m => PULSE_KEY[m]).filter(Boolean))]; return k.length ? k : ['NQ', 'BTC', 'EURUSD']; }
+const nrArrow = d => d > 0 ? '<i class="up">↑</i>' : d < 0 ? '<i class="down">↓</i>' : '<i>↕</i>';
+const nrWord = d => d > 0 ? 'Likely up' : d < 0 ? 'Likely down' : 'Unclear';
+function nrChips(i) { const d = i.dirs || {}; return nrMarkets().filter(k => d[k]).map(k => `<span class="nr-chip">${esc(NR_MK[k])} ${nrArrow(d[k])}</span>`).join(''); }
 // ---------- News: a newsroom front page ----------
 // Top stories first (one lead, two beside it), then everything else by time. Each row: time, headline, one quiet line.
 function nrMeta(i, explain) {
   const src = `${esc(i.source)}${(i.outlets || i.count) > 1 ? ` +${(i.outlets || i.count) - 1}` : i.confirmed === false && i.impact === 'high' ? ' only' : ''}`;
-  return `<p class="nr-meta">${i.breaking ? '<span class="nr-brk">Breaking</span>' : ''}<span>${src}</span><span>${esc(SECTION_NAMES[i.section] || i.themeLabel || '')}</span>${reactTxt(i.reaction)}${explain ? `<button class="linkbtn wi-x" data-x="${esc(i.id)}" aria-expanded="false">Explain this</button>` : ''}</p>${explain ? `<div class="wi-explain" id="x-${esc(i.id)}" hidden></div>` : ''}`;
+  return `<p class="nr-meta">${i.breaking ? '<span class="nr-brk">Breaking</span>' : ''}${nrChips(i)}<span>${src}</span><span>${esc(SECTION_NAMES[i.section] || i.themeLabel || '')}</span>${reactTxt(i.reaction)}${explain ? `<button class="linkbtn wi-x" data-x="${esc(i.id)}" aria-expanded="false">Explain this</button>` : ''}</p>${explain ? `<div class="wi-explain" id="x-${esc(i.id)}" hidden></div>` : ''}`;
 }
 function newsroomHTML(items, ranked, mineFirst = true, cap = 10) {
   if (!items.length) return '<p class="empty">No stories match those filters right now.</p>';
@@ -1238,7 +1243,11 @@ function newsroomHTML(items, ranked, mineFirst = true, cap = 10) {
       <a class="nr-h1" href="${esc(lead.link)}" target="_blank" rel="noopener">${esc(lead.title)}</a>
       ${why(lead) ? `<p class="nr-why">${esc(lead.why)}</p>` : ''}
       ${fy ? `<p class="nr-fy"><b>For you</b> ${esc(fy)}</p>` : ''}
-      ${nrMeta(lead, true)}
+      <div class="rel-nums nr-stats">${nrMarkets().map(k => { const d = (lead.dirs || {})[k] || 0; return `<div><small>${esc(NR_MK[k])}</small><b class="${d > 0 ? 'up' : d < 0 ? 'down' : 'flat'}">${d > 0 ? '↑' : d < 0 ? '↓' : '↕'} ${nrWord(d)}</b></div>`; }).join('')}
+        <div><small>Price since</small><b class="${lead.reaction ? (lead.reaction.change > 0 ? 'up' : lead.reaction.change < 0 ? 'down' : '') : 'flat'}">${lead.reaction ? esc(`${lead.reaction.label} ${lead.reaction.change > 0 ? '+' : lead.reaction.change < 0 ? '−' : ''}${Math.abs(lead.reaction.change).toLocaleString('en-US', { maximumFractionDigits: 1 })}${lead.reaction.unit === '$' ? '' : ' ' + lead.reaction.unit}`) : '—'}</b></div>
+        <div><small>Reported by</small><b>${(lead.outlets || lead.count || 1)} ${(lead.outlets || lead.count || 1) === 1 ? 'outlet' : 'outlets'}</b></div>
+      </div>
+      ${nrMeta({ ...lead, reaction: null, dirs: {} }, true)}
     </article>` : '';
   const sideHTML = side.map(i => `<article class="nr-side${mine(i) ? ' mine' : ''}"><p class="nr-eye">${ago(i.time)}</p><a class="nr-h2" href="${esc(i.link)}" target="_blank" rel="noopener">${esc(i.title)}</a>${why(i) ? `<p class="nr-why sm">${esc(i.why)}</p>` : ''}${nrMeta(i, true)}</article>`).join('');
   // At most 10 stories in all: the 3 up top plus the 7 most important of the rest, shown newest first
