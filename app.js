@@ -772,13 +772,52 @@ function playbookHTML(d) {
 }
 function marketBriefing(id, focus, label) {
   const shut = !showWeekendNews() && marketShut(focus);
-  if (shut) return { html: `<section class="mbrief"><div class="sec-row"><h2 class="sec">Briefing for ${esc(label)}</h2></div>${closedHTML(shut, `The ${label} market`)}</section>
-    <section class="mbrief"><div class="sec-row"><h2 class="sec">What’s coming when it reopens</h2><a href="/calendar">Full calendar</a></div><div id="${id}Next"></div></section>`,
-    load: () => { fill(id + 'Next', 'what’s next', api('desk?' + profileQuery() + '&focus=' + focus, 5 * 60e3), nextHTML); bindWeekend(); } };
-  return { html: `<section class="mbrief"><div class="sec-row"><h2 class="sec">Briefing for ${esc(label)}</h2><a href="/news">All news</a></div><ol class="bfeed" id="${id}"></ol></section>
-    <section class="mbrief"><div class="sec-row"><h2 class="sec">What’s going to happen next</h2><a href="/calendar">Full calendar</a></div><div id="${id}Next"></div></section>
-    <section class="mbrief"><div class="sec-row"><h2 class="sec">How to trade this with your strategy</h2><button class="linkbtn" type="button" data-edit>Change strategies</button></div><div id="${id}Play"></div></section>`,
-    load: () => { const p = api('desk?' + profileQuery() + '&focus=' + focus, 5 * 60e3); fill(id, 'the briefing', p, d => briefingHTML(d)); fill(id + 'Next', 'what’s next', p, nextHTML); fill(id + 'Play', 'your game plan', p, playbookHTML); main.querySelectorAll('[data-edit]').forEach(b => b.onclick = editSetup); } };
+  const nextP = `<div class="tab-links"><a class="more" href="/calendar">Full calendar</a></div><div id="${id}Next"></div>`;
+  if (shut) {
+    const brief = `<section class="mbrief t-news"><div class="sec-row"><h2 class="sec">Briefing for ${esc(label)}</h2></div>${closedHTML(shut, `The ${label} market`)}</section>`;
+    return { brief, next: nextP, play: '', html: brief + `<section class="mbrief"><div id="${id}Next"></div></section>`,
+      load: () => { fill(id + 'Next', 'what’s next', api('desk?' + profileQuery() + '&focus=' + focus, 5 * 60e3), nextHTML); bindWeekend(); } };
+  }
+  const brief = `<section class="mbrief t-news"><div class="sec-row"><h2 class="sec">Briefing for ${esc(label)}</h2><a href="/news">All news</a></div><ol class="bfeed" id="${id}">${'<li>' + skel(3) + '</li>'}</ol></section>`;
+  const play = `<div class="tab-links"><button class="linkbtn" type="button" data-edit>Change strategies</button></div><div id="${id}Play"></div>`;
+  return { brief, next: nextP, play, html: brief,
+    load: () => { const p = api('desk?' + profileQuery() + '&focus=' + focus, 5 * 60e3); fill(id, 'the briefing', Promise.all([p, api('calls', 5 * 60e3).catch(() => null)]), ([d, c]) => briefingHTML(d, { rec: c })); fill(id + 'Next', 'what’s next', p, nextHTML); fill(id + 'Play', 'your game plan', p, playbookHTML); main.querySelectorAll('[data-edit]').forEach(b => b.onclick = editSetup); } };
+}
+// ---------- One page frame for every section: news on the left; chart, your session and the Live read on the right; the rest in tabs ----------
+function tabset(name, tabs) {
+  const list = tabs.filter(t => t && t[2]);
+  return `<section class="more-tabs t-more tabset" data-set="${name}">
+    <div class="chips tabbar" role="tablist">${list.map(([k, l]) => `<button class="chip" role="tab" data-tab="${k}" aria-selected="false" aria-pressed="false">${esc(l)}</button>`).join('')}</div>
+    ${list.map(([k, , h]) => `<div class="tabp" data-panel="${k}">${h}</div>`).join('')}
+  </section>`;
+}
+function bindTabSets() {
+  main.querySelectorAll('.tabset').forEach(set => {
+    const key = 'tab:' + set.dataset.set, btns = [...set.querySelectorAll('[data-tab]')];
+    if (!btns.length) return;
+    const show = k => { if (!btns.some(b => b.dataset.tab === k)) k = btns[0].dataset.tab; store.set(key, k); btns.forEach(b => { const on = b.dataset.tab === k; b.setAttribute('aria-selected', on); b.setAttribute('aria-pressed', on); }); set.querySelectorAll('.tabp').forEach(p => p.classList.toggle('on', p.dataset.panel === k)); };
+    btns.forEach(b => b.onclick = () => show(b.dataset.tab));
+    show(store.get(key, btns[0].dataset.tab));
+  });
+}
+const nowHTML = (sessKey, pulseKey) => `<div class="now t-now">
+    <section class="now-sec" id="sessBlock"><div class="sec-row"><h2 class="sec">${sessKey ? 'Session' : 'Your sessions'}</h2><span class="faint small">${esc(tzAbbr())}</span></div><div id="sessions" class="ssc-list"${sessKey ? ` data-keys="${sessKey}"` : ''}></div></section>
+    <section class="now-sec pulse" id="pulseBlock"><div class="sec-row"><h2 class="sec">Live read</h2><span class="pl-timer" id="pulseNext" aria-live="off">…</span></div><div id="pulse"${pulseKey ? ` data-keys="${pulseKey}"` : ''}>${skel(2)}</div></section>
+  </div>`;
+function shellHTML({ left, chartId, sessKey, pulseKey, right = '', noChart = false }) {
+  return `<div class="front3${noChart ? ' front3-news' : ''}">
+    <div class="t-left">${left}</div>
+    <div class="t-right">
+      ${noChart ? '' : `<section class="hero-chart t-chart"><div class="chart-h"><h2 class="sec">Live chart</h2><div class="chips tight" id="${chartId}Pick"></div></div><div id="${chartId}" class="tvbox"></div></section>`}
+      ${nowHTML(sessKey, pulseKey)}
+      ${right}
+    </div>
+  </div>`;
+}
+function startNow() {
+  loadPulse(); mountSessions();
+  if (!pulseTimer) pulseTimer = setInterval(tickPulse, 1000); tickPulse();
+  bindTabSets();
 }
 function pricesHTML(D) {
   const views = myAssets().map(a => assetView(a, D)).filter(Boolean).slice(0, 8);
@@ -910,8 +949,8 @@ function cdText(ms) {
   return d ? `${d}d ${h}:${pad(m)}:${pad(x)}` : h ? `${h}:${pad(m)}:${pad(x)}` : `${m}:${pad(x)}`;
 }
 let sessTimer = null, sessState = {};
-function sessionsHTML() {
-  const keys = [...new Set(myMarkets().map(m => SESS_OF[m]).filter(Boolean))];
+function sessionsHTML(only) {
+  const keys = only ? only.split(',') : [...new Set(myMarkets().map(m => SESS_OF[m]).filter(Boolean))];
   return (keys.length ? keys : ['futures']).map(k => `<article class="ssc" data-sk="${k}">
       <p class="rel-top"><span class="ssc-dot"></span><span class="ssc-eye"></span></p>
       <div class="ssc-body"><div class="rel-nums ssc-nums"></div></div>
@@ -972,7 +1011,7 @@ function tickSessions() {
 function dayIn(t) { return new Date(t).toLocaleDateString('en-US', { timeZone: TZ }); }
 function mountSessions() {
   const el = document.getElementById('sessions'); if (!el) return;
-  if (!el.querySelector('.ssc')) { el.innerHTML = sessionsHTML(); sessState = {}; }
+  if (!el.querySelector('.ssc')) { el.innerHTML = sessionsHTML(el.dataset.keys); sessState = {}; }
   tickSessions();
   if (!sessTimer) sessTimer = setInterval(() => { if (document.visibilityState === 'visible') tickSessions(); }, 1000);
 }
@@ -982,7 +1021,7 @@ const PULSE_DP = { NQ: 2, BTC: 0, EURUSD: 4 };
 // Only the markets this reader trades (everything if they haven't picked any we cover yet)
 const pulseMine = () => [...new Set(myMarkets().map(m => PULSE_KEY[m]).filter(Boolean))];
 function pulseOrder(reads) {
-  const mine = pulseMine();
+  const only = (document.getElementById('pulse') || {}).dataset; const mine = only && only.keys ? only.keys.split(',') : pulseMine();
   return mine.length ? mine.map(k => reads.find(r => r.key === k)).filter(Boolean) : reads;
 }
 const unitAmt = (n, u) => `${n > 0 ? '+' : n < 0 ? '−' : ''}${u === '$' ? '$' : ''}${num(Math.abs(n), u === 'pts' ? (Math.abs(n) >= 100 ? 0 : 1) : 0)}${u === 'pts' ? ' pts' : u === 'pips' ? ' pips' : ''}`;
@@ -1153,22 +1192,72 @@ PAGES.today = () => {
   });
   if (!shut) fill('topics', 'news sections', Promise.all([wireP, deskP.catch(() => null)]), ([d, desk]) => {
     const used = new Set(desk ? (desk.briefing || []).map(b => b.link) : []);
-    return topicsHTML(d.items.filter(i => !used.has(i.link)));
+    return topicsHTML(usefulOnly(d.items, myMarkets()).keep.filter(i => !used.has(i.link)));
   });
   fill('worldMini', 'world markets', api('world', 120e3), d => worldHTML({ groups: d.groups.filter(g => g.id !== 'fut' && g.id !== 'vol') }, { rowsPer: 3, sparks: false }));
 };
 
-// ---------- News ----------
+// Does a story matter for markets? Big stories, anything the headline reader can give a direction for, anything price clearly moved on,
+// and notable stories about your markets. Personal finance, advice, listicles, opinion and small-company results never do.
+function matters(i) {
+  if (i.noise) return false;
+  const d = i.dirs || {}, r = i.reaction;
+  const moved = r && r.from ? Math.abs((r.now - r.from) / r.from * 100) : 0;
+  return i.impact === 'high' || !!(d.NQ || d.BTC || d.EURUSD) || moved >= 0.2 || (i.impact === 'medium' && forYouStrength(i) >= 1);
+}
+// ---------- News: a newsroom front page ----------
+// Top stories first (one lead, two beside it), then everything else by time. Each row: time, headline, one quiet line.
+function nrMeta(i, explain) {
+  const src = `${esc(i.source)}${(i.outlets || i.count) > 1 ? ` +${(i.outlets || i.count) - 1}` : i.confirmed === false && i.impact === 'high' ? ' only' : ''}`;
+  return `<p class="nr-meta">${i.breaking ? '<span class="nr-brk">Breaking</span>' : ''}<span>${src}</span><span>${esc(SECTION_NAMES[i.section] || i.themeLabel || '')}</span>${reactTxt(i.reaction)}${explain ? `<button class="linkbtn wi-x" data-x="${esc(i.id)}" aria-expanded="false">Explain this</button>` : ''}</p>${explain ? `<div class="wi-explain" id="x-${esc(i.id)}" hidden></div>` : ''}`;
+}
+function newsroomHTML(items, ranked, mineFirst = true, cap = 10) {
+  if (!items.length) return '<p class="empty">No stories match those filters right now.</p>';
+  const mine = i => forYouStrength(i) >= 1;
+  // Most influential first: how big the story is, how many outlets carry it, how far price has actually moved since, and whether it touches your markets
+  const moved = i => { const r = i.reaction; return r && r.from ? Math.abs((r.now - r.from) / r.from * 100) : 0; };
+  const influence = i => (i.score || 0) + 1.2 * Math.min(Math.max((i.outlets || i.count || 1) - 1, 0), 4) + 4 * Math.min(moved(i) / 0.5, 1) + (mine(i) ? 1.5 : 0) + (i.confirmed === false ? -1.5 : 0) + (now0 - i.time < 3 * 36e5 ? 1 : now0 - i.time < 12 * 36e5 ? 0.3 : 0);
+  const now0 = Date.now();
+  // "My markets first" on: stories that affect your markets lead (most influential of those first). Off: the biggest stories overall.
+  const rank = i => influence(i) + (mineFirst ? 100 * Math.min(forYouStrength(i), 3) : 0);
+  const pool = [...items].sort((a, b) => rank(b) - rank(a)).filter(i => i.impact !== 'low' || (mineFirst && mine(i)));
+  const top = (pool.length >= 3 ? pool : ranked).slice(0, 3), topIds = new Set(top.map(i => i.id));
+  const seenWhy = new Set();
+  const why = i => { if (!i.why || seenWhy.has(i.why)) return ''; seenWhy.add(i.why); return esc(i.why); };
+  const [lead, ...side] = top;
+  const fy = lead ? forYouHeadline(lead) : null;
+  const leadHTML = lead ? `<article class="nr-lead${mine(lead) ? ' mine' : ''}">
+      <p class="nr-eye">${mineFirst && mine(lead) ? 'Top story for your markets' : 'Most influential right now'} · ${ago(lead.time)}</p>
+      <a class="nr-h1" href="${esc(lead.link)}" target="_blank" rel="noopener">${esc(lead.title)}</a>
+      ${why(lead) ? `<p class="nr-why">${esc(lead.why)}</p>` : ''}
+      ${fy ? `<p class="nr-fy"><b>For you</b> ${esc(fy)}</p>` : ''}
+      ${nrMeta(lead, true)}
+    </article>` : '';
+  const sideHTML = side.map(i => `<article class="nr-side${mine(i) ? ' mine' : ''}"><p class="nr-eye">${ago(i.time)}</p><a class="nr-h2" href="${esc(i.link)}" target="_blank" rel="noopener">${esc(i.title)}</a>${why(i) ? `<p class="nr-why sm">${esc(i.why)}</p>` : ''}${nrMeta(i, true)}</article>`).join('');
+  // At most 10 stories in all: the 3 up top plus the 7 most important of the rest, shown newest first
+  const restAll = items.filter(i => !topIds.has(i.id));
+  const rest = (cap ? [...restAll].sort((a, b) => rank(b) - rank(a)).slice(0, Math.max(cap - top.length, 0)) : restAll).sort((a, b) => (b.time || 0) - (a.time || 0));
+  const now = Date.now();
+  const groups = [['Last hour', i => now - i.time < 36e5], ['Earlier today', i => now - i.time < 12 * 36e5], ['Waiting for the open', () => true]];
+  const used = new Set();
+  const feed = groups.map(([name, test]) => {
+    const g = rest.filter(i => !used.has(i.id) && i.time && test(i)); g.forEach(i => used.add(i.id));
+    if (!g.length) return '';
+    return `<section class="nr-group"><h3 class="nr-gh">${name}</h3><ol class="nr-list">${g.map(i => { const w = i.impact === 'high' ? why(i) : ''; return `<li class="nr-row${mine(i) ? ' mine' : ''}" data-id="${esc(i.id)}"><time>${fmtTime(i.time)}</time><div><a class="nr-t" href="${esc(i.link)}" target="_blank" rel="noopener">${esc(i.title)}</a>${w ? `<p class="nr-why sm">${w}</p>` : ''}${nrMeta(i, true)}</div></li>`; }).join('')}</ol></section>`;
+  }).join('');
+  return `<div class="nr-top">${leadHTML}<div class="nr-sides">${sideHTML}</div></div>${feed}`;
+}
 PAGES.news = () => {
-  const f = store.get('newsFilter', { market: 'all', impact: 'all', topic: '', mine: true });
+  const f = store.get('newsFilter', { market: 'all', impact: 'matters', topic: '', mine: true });
+  if (f.impact === 'medium' || (f.impact === 'all' && !f.v2)) { f.impact = 'matters'; f.v2 = 1; }
   const wasRefresh = refreshing;
   layout(`<h1 class="page-h">News</h1>
-    <p class="page-intro">Every market-moving story from <span id="srcCount">dozens of</span> sources, grouped when several outlets report the same thing, with how prices moved since it broke. Stories that touch your markets are marked <mark>for you</mark>.</p>
+    <p class="page-intro">The stories moving markets right now, from <span id="srcCount">dozens of</span> sources. Stories that touch your markets have a blue line.</p>
     <div class="chips" role="group" aria-label="Market"><span class="chips-label">Market</span>${[['all', 'Everything'], ['futures', 'Stocks and futures'], ['forex', 'Forex'], ['crypto', 'Crypto'], ['memes', 'Memecoins']].map(([k, l]) => `<button class="chip" data-mk="${k}" aria-pressed="${f.market === k}">${l}</button>`).join('')}</div>
     <div class="chips" role="group" aria-label="Topic"><span class="chips-label">Topic</span><button class="chip" data-tp="" aria-pressed="${!f.topic}">All topics</button>${Object.entries(SECTION_NAMES).map(([k, l]) => `<button class="chip" data-tp="${k}" aria-pressed="${f.topic === k}">${l}</button>`).join('')}</div>
-    <div class="chips" role="group" aria-label="Show"><span class="chips-label">Show</span>${[['all', 'All stories'], ['medium', 'Notable and big'], ['high', 'Big stories only']].map(([k, l]) => `<button class="chip" data-im="${k}" aria-pressed="${f.impact === k}">${l}</button>`).join('')}<button class="chip" id="mineFirst" aria-pressed="${f.mine}">My markets first</button></div>
-    <div class="newbar" id="newBar" hidden></div>
-    <ul class="slist wire" id="wireList"></ul>`);
+    <div class="chips" role="group" aria-label="Show"><span class="chips-label">Show</span>${[['matters', 'Market-moving'], ['high', 'Big stories only'], ['all', 'Everything']].map(([k, l]) => `<button class="chip" data-im="${k}" aria-pressed="${f.impact === k}">${l}</button>`).join('')}<button class="chip" id="mineFirst" aria-pressed="${f.mine}">My markets first</button></div>
+    ${shellHTML({ noChart: true, left: '<div class="newbar" id="newBar" hidden></div><div class="newsroom" id="wireList"></div><p class="stale-note" id="staleNote" hidden></p>' })}`);
+  startNow();
   const rer = () => { store.set('newsFilter', f); refreshing = false; PAGES.news(); };
   main.querySelectorAll('[data-mk]').forEach(b => b.onclick = () => { f.market = b.dataset.mk; rer(); });
   main.querySelectorAll('[data-tp]').forEach(b => b.onclick = () => { f.topic = b.dataset.tp; rer(); });
@@ -1191,9 +1280,15 @@ PAGES.news = () => {
     const wl = $('#wireList'); if (wl && !main.querySelector('.closed-note')) wl.before(nb);
   }
   fill('wireList', 'the news', P, d => {
-    let items = d.items.filter(i => f.impact === 'all' || (f.impact === 'high' ? i.impact === 'high' : i.impact !== 'low')).filter(i => !f.topic || i.section === f.topic);
-    if (f.mine) items = rankStories(items);
-    return items.length ? storyList(items, { explain: true, notes: 'all' }) : '<li class="empty">No stories match those filters right now.</li>';
+    const u = usefulOnly(d.items, f.market === 'all' ? myMarkets() : [f.market]), sn = $('#staleNote');
+    if (sn) { sn.hidden = !u.hidden; sn.textContent = u.hidden ? `${u.hidden} older ${u.hidden === 1 ? 'story is' : 'stories are'} hidden: more than 12 hours old and your market has already traded through ${u.hidden === 1 ? 'it' : 'them'}.` : ''; }
+    let items = u.keep.filter(i => f.impact === 'all' || (f.impact === 'high' ? i.impact === 'high' && !i.noise : matters(i))).filter(i => !f.topic || i.section === f.topic);
+    const quiet = f.impact === 'all' ? 0 : u.keep.filter(i => !(f.impact === 'high' ? i.impact === 'high' && !i.noise : matters(i))).length;
+    if (sn && f.impact !== 'all' && quiet > 0) { sn.hidden = false; sn.textContent = `${sn.textContent ? sn.textContent + ' ' : ''}${quiet} ${quiet === 1 ? 'story' : 'stories'} that don’t move markets ${quiet === 1 ? 'is' : 'are'} hidden. Pick “Everything” to see all.`; }
+    const ranked = f.mine ? rankStories(items) : [...items].sort((a, b) => (b.score || 0) - (a.score || 0));
+    const capN = f.impact === 'all' ? 0 : 10;
+    if (sn && capN && items.length > capN) { sn.hidden = false; sn.textContent = `Showing the ${capN} that matter most. ${sn.textContent ? sn.textContent + ' ' : ''}${items.length - capN} more market-moving ${items.length - capN === 1 ? 'story is' : 'stories are'} under “Everything”.`; }
+    return newsroomHTML(items, ranked, f.mine, capN);
   }).then(() => P.then(d => bindExplain($('#wireList') || main, d.items)).catch(() => {}));
 };
 
@@ -1327,29 +1422,34 @@ function recapSection(boxId, pickId, keys) {
 const recapBlock = (id, title = 'How today has played out') => intraday() || levelTrader() ? `<section class="block"><div class="chart-h"><h2 class="sec">${title}</h2><div class="chips tight" id="${id}Pick"></div></div><div id="${id}"></div></section>` : '';
 const chartBlock = id => `<section class="block"><div class="chart-h"><h2 class="sec">Live chart</h2><div class="chips tight" id="${id}Pick"></div></div><div id="${id}" class="tvbox"></div></section>`;
 const newsBlock = (id, title) => `<section class="block"><div class="sec-row"><h2 class="sec">${title}</h2><a href="/news">All news</a></div><ul class="slist" id="${id}"></ul></section>`;
-function marketNews(id, section, n = 8) { fill(id, 'news', api('wire?section=' + section, 60e3), d => storyList(rankStories(d.items).slice(0, n), { notes: 3 }) || '<li class="empty">No fresh stories right now.</li>'); }
+// Still useful? Under 12 hours old, or the reader's market hasn't traded since it broke (weekend news still waiting for the open)
+const WEEKEND_H = { futures: 49, stocks: 49, options: 49, forex: 48 };
+function stillUseful(i, mkts) {
+  if (!i.time || Date.now() - i.time <= 12 * 36e5) return true;
+  if (Date.now() - i.time > 3 * 864e5) return false;
+  return (mkts.length ? mkts : ['futures']).some(m => { const r = marketShut(m); return r != null && i.time > r - (WEEKEND_H[m] || 49) * 36e5; });
+}
+function usefulOnly(items, mkts) { const keep = items.filter(i => stillUseful(i, mkts)); return { keep, hidden: items.length - keep.length }; }
+function marketNews(id, section, n = 8) { fill(id, 'news', api('wire?section=' + section, 60e3), d => storyList(rankStories(usefulOnly(d.items, [section]).keep).slice(0, n), { notes: 3 }) || '<li class="empty">No fresh stories right now.</li>'); }
 
 // ---------- Stocks & futures ----------
 PAGES.futures = () => {
   const lv = levelTrader();
   const mkF = myMarkets();
   const fb = marketBriefing('futBrief', !mkF.includes('futures') && mkF.includes('stocks') ? 'stocks' : 'futures', 'stocks and futures');
-  if (layout(`<h1 class="page-h">Stocks and futures</h1>
-    <p class="page-intro" id="futIntro"></p>
-    ${fb.html}
-    <div id="futQuotes"></div>
-    ${chartBlock('futChart')}
-    ${lv ? '<section class="block"><h2 class="sec">Key levels</h2><div id="futLevels"></div></section>' : ''}
-    ${recapBlock('futRecap')}
-    <div class="grid2 block">
-      <section><h2 class="sec">What’s driving the indexes</h2><div id="futGiants"></div></section>
-      <section><h2 class="sec">US news this week</h2><div id="futCal"></div></section>
-    </div>
-    ${newsBlock('futNews', 'Stories moving stocks')}`)) {
+  if (layout(`<div class="today-head"><h1 class="page-h">Stocks and futures</h1>
+    <p class="page-intro" id="futIntro"></p></div>
+    ${shellHTML({ chartId: 'futChart', sessKey: 'futures', pulseKey: 'NQ', left: fb.brief + tabset('fut', [
+      ['next', 'What’s next', fb.next], ['play', 'Your game plan', fb.play],
+      ['prices', 'Prices', '<div id="futQuotes"></div>'],
+      ['levels', 'Levels', lv || recapBlock('futRecap') ? `${lv ? '<div id="futLevels"></div>' : ''}${recapBlock('futRecap')}` : ''],
+      ['movers', 'Movers and calendar', '<div class="grid2"><section><h2 class="sec">What’s driving the indexes</h2><div id="futGiants"></div></section><section><h2 class="sec">US news this week</h2><div id="futCal"></div></section></div>'],
+      ['news', 'More news', '<div class="tab-links"><a class="more" href="/news">All news</a></div><ul class="slist" id="futNews"></ul>']]) })}`)) {
     const mine = myAssets().filter(a => a.tv && !a.ccy && a.chain === undefined && !/^(BTC|ETH|SOL|XRP|BNB|DOGE|alts)$/.test(a.id));
     chartPicker('futChart', 'futChartPick', [...mine.map(a => ({ id: shortName(a), tv: a.tv })), { id: 'S&P 500', tv: 'OANDA:SPX500USD' }, { id: 'Nasdaq 100', tv: 'OANDA:NAS100USD' }, { id: 'Dow', tv: 'OANDA:US30USD' }, { id: 'Russell 2000', tv: 'OANDA:US2000USD' }]);
   }
   fb.load();
+  startNow();
   if (intraday() || lv) recapSection('futRecap', 'futRecapPick', ['NQ', 'ES']);
   const d = api('markets?section=futures');
   fill('futIntro', 'summary', d, x => esc(x.macro.join(' ') || 'Here’s how US stocks and index futures are trading.'));
@@ -1367,21 +1467,19 @@ PAGES.futures = () => {
 PAGES.forex = () => {
   const lv = levelTrader();
   const fb = marketBriefing('fxBrief', 'forex', 'forex');
-  if (layout(`<h1 class="page-h">Forex</h1>
-    <p class="page-intro" id="fxIntro"></p>
-    ${fb.html}
-    <div class="grid2"><section><h2 class="sec">Strongest to weakest today</h2><div id="fxStrength"></div></section><section><h2 class="sec">Pairs</h2><div class="qgrid" id="fxQuotes"></div></section></div>
-    ${chartBlock('fxChart')}
-    ${lv ? '<section class="block"><h2 class="sec">Key levels</h2><div id="fxLevels"></div></section>' : ''}
-    ${recapBlock('fxRecap')}
-    <div class="grid2 block">
-      <section><h2 class="sec">Central banks and big releases</h2><div id="fxCal"></div></section>
-      <section><h2 class="sec">Currency stories</h2><ul class="slist" id="fxNews"></ul></section>
-    </div>`)) {
+  if (layout(`<div class="today-head"><h1 class="page-h">Forex</h1>
+    <p class="page-intro" id="fxIntro"></p></div>
+    ${shellHTML({ chartId: 'fxChart', sessKey: 'forex', pulseKey: 'EURUSD', left: fb.brief + tabset('fx', [
+      ['next', 'What’s next', fb.next], ['play', 'Your game plan', fb.play],
+      ['strength', 'Strongest to weakest', '<div class="grid2"><section><h2 class="sec">Strongest to weakest today</h2><div id="fxStrength"></div></section><section><h2 class="sec">Pairs</h2><div class="qgrid" id="fxQuotes"></div></section></div>'],
+      ['levels', 'Levels', lv || recapBlock('fxRecap') ? `${lv ? '<div id="fxLevels"></div>' : ''}${recapBlock('fxRecap')}` : ''],
+      ['cal', 'Central banks', '<div id="fxCal"></div>'],
+      ['news', 'Currency stories', '<div class="tab-links"><a class="more" href="/news">All news</a></div><ul class="slist" id="fxNews"></ul>']]) })}`)) {
     const mine = myAssets().filter(a => a.ccy);
     chartPicker('fxChart', 'fxChartPick', [...mine.map(a => ({ id: a.short, tv: a.tv })), { id: 'EUR/USD', tv: 'FX:EURUSD' }, { id: 'GBP/USD', tv: 'FX:GBPUSD' }, { id: 'USD/JPY', tv: 'FX:USDJPY' }, { id: 'Gold', tv: 'OANDA:XAUUSD' }]);
   }
   fb.load();
+  startNow();
   if (intraday() || lv) recapSection('fxRecap', 'fxRecapPick', ['EURUSD', 'GBPUSD', 'USDJPY', 'GOLD']);
   const d = api('markets?section=forex');
   fill('fxIntro', 'summary', d, x => esc((x.strength && x.strength.length > 1 ? `The ${x.strength[0].ccy} is the strongest currency today and the ${x.strength[x.strength.length - 1].ccy} the weakest. ` : '') + x.macro.join(' ')));
@@ -1398,21 +1496,19 @@ PAGES.forex = () => {
 // ---------- Crypto ----------
 PAGES.crypto = () => {
   const fb = marketBriefing('cBrief', 'crypto', 'crypto');
-  if (layout(`<h1 class="page-h">Crypto</h1>
-    <div class="front"><div><div class="page-intro" id="cIntro"></div></div><aside><h2 class="sec">Crypto mood</h2><div id="cMood"></div></aside></div>
-    ${fb.html}
-    ${chartBlock('cChart')}
-    ${levelTrader() ? '<section class="block"><h2 class="sec">Bitcoin levels</h2><div id="cBtc"></div></section>' : ''}
-    ${recapBlock('cRecap')}
-    <div class="grid2 block">
-      <section><h2 class="sec">Biggest coins</h2><div id="cCoins"></div></section>
-      <section><h2 class="sec">What people are searching for</h2><div id="cTrend"></div></section>
-    </div>
-    ${newsBlock('cNews', 'Crypto stories')}`)) {
+  if (layout(`<div class="today-head"><h1 class="page-h">Crypto</h1>
+    <div class="page-intro" id="cIntro"></div></div>
+    ${shellHTML({ chartId: 'cChart', sessKey: 'crypto', pulseKey: 'BTC', right: '<section class="card t-prices"><h2 class="sec">Crypto mood</h2><div id="cMood"></div></section>', left: fb.brief + tabset('crypto', [
+      ['next', 'What’s next', fb.next], ['play', 'Your game plan', fb.play],
+      ['coins', 'Biggest coins', '<div id="cCoins"></div>'],
+      ['trend', 'Trending', '<div id="cTrend"></div>'],
+      ['levels', 'Bitcoin levels', levelTrader() || recapBlock('cRecap') ? `${levelTrader() ? '<div id="cBtc"></div>' : ''}${recapBlock('cRecap')}` : ''],
+      ['news', 'More news', '<div class="tab-links"><a class="more" href="/news">All news</a></div><ul class="slist" id="cNews"></ul>']]) })}`)) {
     const mine = myAssets().filter(a => /^(BTC|ETH|SOL|XRP|BNB|DOGE|alts)$/.test(a.id));
     chartPicker('cChart', 'cChartPick', [...mine.map(a => ({ id: a.label, tv: a.tv })), { id: 'Bitcoin', tv: 'BINANCE:BTCUSDT' }, { id: 'Ethereum', tv: 'BINANCE:ETHUSDT' }, { id: 'Solana', tv: 'BINANCE:SOLUSDT' }]);
   }
   fb.load();
+  startNow();
   if (intraday() || levelTrader()) recapSection('cRecap', 'cRecapPick', ['BTC']);
   const d = api('crypto');
   fill('cIntro', 'summary', d, x => x.lines.map(l => esc(l)).join(' ') + (x.summary ? ` All crypto together is worth ${big(x.summary.mcap)}.` : ''));
@@ -1456,19 +1552,21 @@ function tokenCard(t, news, mine, aiThesis) {
 }
 PAGES.memes = () => {
   const fb = marketBriefing('mBrief', 'memes', 'memecoins');
-  layout(`<h1 class="page-h">Memecoins</h1>
-    <p class="page-intro">What each coin is about, the news moving memecoins, and what it means for the market you trade. Most new tokens go to zero, so read the warnings on each card.</p>
+  if (layout(`<div class="today-head"><h1 class="page-h">Memecoins</h1>
+    <p class="page-intro">What each coin is about, the news moving memecoins, and what it means for the market you trade. Most new tokens go to zero, so read the warnings on each card.</p></div>
     <div class="mood" id="mMood"></div>
-    ${fb.html}
-    <section class="block card"><h2 class="sec">What it means for you</h2><ul class="fyl" id="mFor"></ul><p class="small faint" id="mIntro" style="margin-top:14px"></p></section>
-    <section class="block"><div class="sec-row"><h2 class="sec">The established names</h2><button class="linkbtn" id="thToggle" type="button"></button></div><div class="mgrid" id="mMajors"></div></section>
-    <section class="block"><div class="sec-row"><h2 class="sec">Getting the most attention right now</h2></div><p class="small faint" style="margin:-6px 0 14px">“Promoted” tokens are ones someone paid to put in front of buyers on DexScreener. That’s attention, not quality.</p><div class="mgrid" id="mHot"></div></section>`);
+    ${shellHTML({ chartId: 'mChart', sessKey: 'crypto', pulseKey: 'BTC', left: fb.brief + tabset('memes', [
+      ['next', 'What’s next', fb.next], ['play', 'Your game plan', fb.play],
+      ['for', 'What it means for you', '<ul class="fyl" id="mFor"></ul><p class="small faint" id="mIntro" style="margin-top:14px"></p>'],
+      ['majors', 'Established names', '<div class="tab-links"><button class="linkbtn" id="thToggle" type="button"></button></div><div class="mgrid" id="mMajors"></div>'],
+      ['hot', 'Getting attention', '<p class="small faint" style="margin:0 0 14px">“Promoted” tokens are ones someone paid to put in front of buyers on DexScreener. That’s attention, not quality.</p><div class="mgrid" id="mHot"></div>']]) })}`)) chartPicker('mChart', 'mChartPick', [{ id: 'Bitcoin', tv: 'BINANCE:BTCUSDT' }, { id: 'Solana', tv: 'BINANCE:SOLUSDT' }, { id: 'Dogecoin', tv: 'BINANCE:DOGEUSDT' }, { id: 'Pepe', tv: 'BINANCE:PEPEUSDT' }]);
   const chains = myAssets().map(a => a.chain).filter(Boolean);
   const tg = $('#thToggle'); if (tg) { tg.textContent = store.get('thesisOpen', true) ? 'Collapse all theses' : 'Expand all theses'; tg.onclick = () => { const v = !store.get('thesisOpen', true); store.set('thesisOpen', v); main.querySelectorAll('.th-wrap').forEach(x => x.open = v); tg.textContent = v ? 'Collapse all theses' : 'Expand all theses'; }; }
   const d = api('memes');
   const md = api('memedesk?' + profileQuery(), 3 * 60e3);
   fill('mMood', 'the memecoin mood', md, x => `<span class="gauge ${esc(x.mood.word)}">${esc(x.mood.word)}</span><div><p>${esc(x.mood.text)}</p>${x.summary ? `<p>${esc(x.summary)}</p>` : ''}</div>`);
   fb.load();
+  startNow();
   fill('mFor', 'your notes', md, x => x.forYou.length ? x.forYou.map(f => `<li><b>${esc(marketLabel(f.market))}</b>${esc(f.text)}</li>`).join('') : '<li class="empty">Add your markets in setup to see what memecoin news means for them.</li>');
   fill('mIntro', 'summary', d, x => esc(x.lines.join(' ')));
   const both = Promise.all([d, md.catch(() => ({ tokenNews: {} }))]);
@@ -1479,16 +1577,15 @@ PAGES.memes = () => {
 // ---------- Options ----------
 PAGES.options = () => {
   const fb = marketBriefing('oBrief', 'options', 'options');
-  layout(`<h1 class="page-h">Options</h1>
-    <p class="page-intro" id="oIntro"></p>
-    ${fb.html}
-    <section><h2 class="sec">How far the market is expected to move today</h2><div id="oEM"></div></section>
-    <div class="grid2 block">
-      <section><h2 class="sec">Fear gauges</h2><div class="qgrid" id="oVol"></div></section>
-      <section><h2 class="sec">Expiration dates</h2><div id="oOpex"></div></section>
-    </div>
-    ${newsBlock('oNews', 'Stories moving options')}`);
+  if (layout(`<div class="today-head"><h1 class="page-h">Options</h1>
+    <p class="page-intro" id="oIntro"></p></div>
+    ${shellHTML({ chartId: 'oChart', sessKey: 'stocks', pulseKey: 'NQ', left: fb.brief + tabset('opt', [
+      ['next', 'What’s next', fb.next], ['play', 'Your game plan', fb.play],
+      ['em', 'Expected move', '<div id="oEM"></div>'],
+      ['vol', 'Fear gauges', '<div class="grid2"><section><h2 class="sec">Fear gauges</h2><div class="qgrid" id="oVol"></div></section><section><h2 class="sec">Expiration dates</h2><div id="oOpex"></div></section></div>'],
+      ['news', 'More news', '<div class="tab-links"><a class="more" href="/news">All news</a></div><ul class="slist" id="oNews"></ul>']]) })}`)) chartPicker('oChart', 'oChartPick', [{ id: 'S&P 500', tv: 'OANDA:SPX500USD' }, { id: 'Nasdaq 100', tv: 'OANDA:NAS100USD' }]);
   fb.load();
+  startNow();
   const d = api('markets?section=options');
   fill('oIntro', 'summary', d, x => esc([...(x.structure || []), ...x.macro].join(' ')));
   fill('oEM', 'expected move', d, x => x.expectedMove.length ? `<div class="em">${x.expectedMove.map(e => `<div class="em-c"><h3 class="sec" style="border:none;padding:0;margin:0">${esc(e.name)}</h3><p class="rng">± ${num(e.move, 0)} points</p><p class="muted">About ${(e.move / e.price * 100).toFixed(2)}% either way: ${num(e.price - e.move, 0)} to ${num(e.price + e.move, 0)}.</p></div>`).join('')}</div><p class="muted small">Roughly two days in three stay inside this range. Days that break well past it are unusual, and that’s often when trends start.</p>` : '<p class="empty">Not available.</p>');

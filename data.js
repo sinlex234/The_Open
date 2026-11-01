@@ -1070,6 +1070,54 @@ var TIER_A = /^(reuters|bloomberg|bloomberg\.com|associated press|ap news|ap|the
 // Tier B: solid outlets. They count as a source, but a call on them needs a second outlet.
 var TIER_B = /^(yahoo finance|investing\.com|investing\.com forex|fox business|cnn|cnn business|the new york times|new york times|the washington post|washington post|bbc|bbc business|bbc news|npr|npr economy|axios|politico|fortune|business insider|morningstar|the guardian|kitco( news)?|fxstreet|s&p global|oilprice\.com|forbes|the hill|semafor|south china morning post|scmp|the japan times|handelsblatt|les echos|coindesk|the block|decrypt|cointelegraph|blockworks|dl news|the information|techcrunch|the verge|wired|ars technica)$/i;
 function tierOf(src) { const x = String(src || "").trim(); return TIER_A.test(x) ? "A" : TIER_B.test(x) ? "B" : "C"; }
+// ---------- Noise: stories that don't move markets (personal finance, advice, listicles, opinion, small-company results) ----------
+var NOISE_RE = /\b(opinion|commentary|column|my (?:husband|wife|ex|son|daughter|mother|father|kids?)|our (?:church|family|kids?)|should i|is it time to|best (?:place|way|stocks?|etfs?|time)|retire(?:ment|es|d)?|social security|mortgage|credit card|savings account|personal finance|how to|tips? for|ways to|stocks? to (?:buy|watch|own)|buy or sell|is .{1,40} a (?:buy|sell)|key takeaways|what .{1,40} said on its|earnings call|rapid earnings reaction|earnings snapshot|q[1-4] (?:earnings )?snapshot|valuation|fair value|price target|analyst (?:says|sees)|here(?:'|’)s (?:why|what|how)|quiz|podcast|video:|watch:|newsletter|morning (?:bid|minute|report)|the morning risk report|live updates|deathtrap|celebrity|lottery|horoscope)\b/i;
+// ---------- Freshness: is this story still useful? ----------
+// A preview ("ahead of CPI", "what Wall Street expects from the jobs report") is out of date once that release has happened.
+var PREVIEW_RE = /\b(ahead of|before|awaits?|await|braces? for|bracing for|expects?|expected from|eyes|looms?|preview|what to (?:watch|expect)|on deck|countdown to|set for|due)\b/i;
+var EVENT_KEYS = [
+  [/\bcpi\b|consumer price|inflation (?:report|data|figures|print)/i, /\bcpi\b/i],
+  [/\bpce\b/i, /\bpce\b/i],
+  [/\bppi\b|producer price/i, /\bppi\b/i],
+  [/\bjobs report|payrolls|non-?farm|employment report/i, /non-?farm|employment change/i],
+  [/jobless claims|unemployment claims/i, /unemployment claims/i],
+  [/\bgdp\b/i, /\bgdp\b/i],
+  [/retail sales/i, /retail sales/i],
+  [/\b(fed|fomc)\b.{0,30}\b(decision|meeting|announcement|statement)\b|\bfomc\b|rate decision/i, /federal funds rate|fomc statement/i],
+  [/\becb\b.{0,30}\b(decision|meeting)\b|\becb (?:rate|policy)/i, /main refinancing rate|ecb/i],
+  [/\b(boj|bank of japan)\b.{0,30}\b(decision|meeting)\b/i, /boj policy rate|bank of japan/i]
+];
+function dropPassedPreviews(items, events, now) {
+  return items.filter((h) => {
+    if (!PREVIEW_RE.test(h.title)) return true;
+    for (const [inTitle, inCal] of EVENT_KEYS) {
+      if (!inTitle.test(h.title)) continue;
+      // the release this story was waiting for came out after the story and is now in the past
+      const done = events.some((e) => inCal.test((e.name || "") + " " + (e.title || "")) && e.time > (h.time || 0) && e.time <= now);
+      if (done) return false;
+    }
+    return true;
+  });
+}
+// Has this market been open at any point since time t? (then the story is already in the price)
+var lastOpenCache = {};
+function lastOpenAt(m, now) {
+  const k = m + Math.floor(now / 6e4);
+  if (lastOpenCache[k] != null) return lastOpenCache[k];
+  let x = Math.floor(now / 6e4) * 6e4;
+  for (let i = 0; i < 4 * 24 * 4 && !marketOpenAt(x, m); i++) x -= 15 * 6e4;
+  return (lastOpenCache[k] = x);
+}
+function tradedSince(t, m, now = Date.now()) {
+  if (["crypto", "memes"].includes(m)) return true;
+  return lastOpenAt(m, now) > t;
+}
+// Keep a story if it is less than 12 hours old, or if the reader's market has not traded since it broke
+function stillUseful(h, mkts, now = Date.now()) {
+  if (!h.time || now - h.time <= 12 * 36e5) return true;
+  if (now - h.time > 3 * 864e5) return false;
+  return (mkts.length ? mkts : ["futures"]).some((m) => m !== "learning" && !tradedSince(h.time, m === "stocks" || m === "options" ? "futures" : m, now));
+}
 async function build8(section = "all") {
   const names = SECTION_FEEDS[section] || SECTION_FEEDS.all;
   const { res, errors } = await settle(Object.fromEntries(names.map((n) => [n, getText(FEEDS3[n]).then((x) => parseRSS(x, n))])));
@@ -1111,6 +1159,15 @@ async function build8(section = "all") {
     if (h.markets.includes("futures") && !h.markets.includes("stocks")) h.markets.push("stocks");
   });
   items.sort((a, b) => (b.time || 0) - (a.time || 0));
+  // Drop previews of releases that have already come out ("ahead of CPI" after CPI is out): the news has moved on
+  const calNow = await build().catch(() => null);
+  items = dropPassedPreviews(items, calNow && calNow.events || [], Date.now());
+  // Does it matter for markets? Tag each story: which way it points for NQ / Bitcoin / EUR/USD, and whether it's noise
+  items.forEach((h) => {
+    const g = headlineDirs(h.title);
+    h.dirs = { NQ: g.NQ, BTC: g.BTC, EURUSD: g.EURUSD };
+    h.noise = NOISE_RE.test(h.title) || (!MEGA.test(h.title) && (g.r.skip === "a single company's results" || (!!g.r.skip && h.impact !== "high")));
+  });
   items = items.slice(0, 80);
   const keys = [...new Set(items.map(reactKey))];
   const charts = await settle(Object.fromEntries(keys.map((k) => [k, yahooChart(REACT[k].sym, { interval: "5m", range: "2d" })])));
@@ -2179,7 +2236,7 @@ async function build11(q = {}) {
   const now = Date.now(), today = ny(now).date;
   const rows = res.world ? res.world.groups.flatMap((g) => g.rows.map((r) => ({ ...r, group: g.name, gid: g.id }))) : [];
   const pick = (sym) => rows.find((r) => r.sym === sym);
-  const stories = (res.news && res.news.items || []).filter((h) => h.time && now - h.time < 14 * 36e5).sort((a, b) => b.score - a.score).slice(0, 18);
+  const stories = (res.news && res.news.items || []).filter((h) => h.time && stillUseful(h, prof.map((x) => x.m), now)).sort((a, b) => b.score - a.score).slice(0, 18);
   const refs = stories.map((h, i) => ({ i: i + 1, title: h.title, link: h.link, source: h.source, time: h.time, theme: h.themeLabel, section: h.section, reaction: h.reaction }));
   const events = (res.cal && res.cal.events || []).filter((e) => ny(e.time).date === today && e.impact !== "Low" && (e.country === "USD" || e.impact === "High"));
   const seenNext = /* @__PURE__ */ new Set();
@@ -2235,7 +2292,7 @@ Pick the 4-6 most important stories, world events first. effects should only lis
   if (!out) out = rules2(prof, stories, refs, rows, pick, events, nextUp, res);
   if (!out.outlook) out.outlook = outlook;
   const upcoming = (res.cal && res.cal.events || []).filter((e) => e.time > now && e.impact !== "Low" && (e.country === "USD" || e.impact === "High"));
-  const allStories = (res.news && res.news.items || []).filter((h) => h.time && now - h.time < 18 * 36e5);
+  const allStories = (res.news && res.news.items || []).filter((h) => h.time && stillUseful(h, focus ? [focus] : prof.map((x) => x.m), now));
   const px = await priceBars().catch(() => null);
   out.briefing = briefingFor(allStories, prof, upcoming, focus, px);
   // When each story is most likely to hit price: its test time, with how much that slot usually moves
@@ -2713,7 +2770,7 @@ var PULSE_SLOT = 5 * 6e4;
 // The bot reads the briefing: the 3 strongest headlines for this market, in the same order the briefing shows them
 function pulseNews(stories, key, px, upcoming) {
   const c = CALL_MKTS[key], prof = [{ m: c.m, assets: c.assets, strats: [], hold: [] }], now = Date.now();
-  const top = briefingFor(stories, prof, upcoming, c.m, px).slice(0, 3);
+  const top = briefingFor(stories.filter((h) => stillUseful(h, [c.m], now)), prof, upcoming, c.m, px).slice(0, 3);
   let s = 0;
   const used = top.map((b, i) => {
     const e = (b.effects || []).find((x) => x.market === c.m) || { dir: "mixed", reason: "" };
