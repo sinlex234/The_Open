@@ -1220,7 +1220,10 @@ function newsroomHTML(items, ranked, mineFirst = true, cap = 10) {
   const now0 = Date.now();
   // "My markets first" on: stories that affect your markets lead (most influential of those first). Off: the biggest stories overall.
   const rank = i => influence(i) + (mineFirst ? 100 * Math.min(forYouStrength(i), 3) : 0);
-  const pool = [...items].sort((a, b) => rank(b) - rank(a)).filter(i => i.impact !== 'low' || (mineFirst && mine(i)));
+  // The front cards must be stories that actually move a market: the headline reader gives a direction, two or more outlets carry it, or price moved on it
+  const solid = i => { const d = i.dirs || {}; return !!(d.NQ || d.BTC || d.EURUSD) || (i.outlets || i.count || 1) >= 2 || moved(i) >= 0.2; };
+  const sorted = [...items].sort((a, b) => rank(b) - rank(a)).filter(i => i.impact !== 'low' || (mineFirst && mine(i)));
+  const pool = sorted.filter(solid).length >= 3 ? sorted.filter(solid) : sorted;
   const top = (pool.length >= 3 ? pool : ranked).slice(0, 3), topIds = new Set(top.map(i => i.id));
   const seenWhy = new Set();
   const why = i => { if (!i.why || seenWhy.has(i.why)) return ''; seenWhy.add(i.why); return esc(i.why); };
@@ -1284,10 +1287,16 @@ PAGES.news = () => {
     if (sn) { sn.hidden = !u.hidden; sn.textContent = u.hidden ? `${u.hidden} older ${u.hidden === 1 ? 'story is' : 'stories are'} hidden: more than 12 hours old and your market has already traded through ${u.hidden === 1 ? 'it' : 'them'}.` : ''; }
     let items = u.keep.filter(i => f.impact === 'all' || (f.impact === 'high' ? i.impact === 'high' && !i.noise : matters(i))).filter(i => !f.topic || i.section === f.topic);
     const quiet = f.impact === 'all' ? 0 : u.keep.filter(i => !(f.impact === 'high' ? i.impact === 'high' && !i.noise : matters(i))).length;
-    if (sn && f.impact !== 'all' && quiet > 0) { sn.hidden = false; sn.textContent = `${sn.textContent ? sn.textContent + ' ' : ''}${quiet} ${quiet === 1 ? 'story' : 'stories'} that don’t move markets ${quiet === 1 ? 'is' : 'are'} hidden. Pick “Everything” to see all.`; }
+    const staleTxt = sn ? sn.textContent : '';
     const ranked = f.mine ? rankStories(items) : [...items].sort((a, b) => (b.score || 0) - (a.score || 0));
     const capN = f.impact === 'all' ? 0 : 10;
-    if (sn && capN && items.length > capN) { sn.hidden = false; sn.textContent = `Showing the ${capN} that matter most. ${sn.textContent ? sn.textContent + ' ' : ''}${items.length - capN} more market-moving ${items.length - capN === 1 ? 'story is' : 'stories are'} under “Everything”.`; }
+    if (sn) {
+      const bits = [];
+      if (capN && items.length > capN) bits.push(`${items.length - capN} more market-moving`);
+      if (quiet > 0) bits.push(`${quiet} that don’t move markets`);
+      const txt = [capN && items.length > capN ? `Showing the ${capN} stories that matter most.` : '', bits.length ? `${bits.join(' and ')} are under “Everything”.` : '', staleTxt].filter(Boolean).join(' ');
+      sn.hidden = !txt; sn.textContent = txt;
+    }
     return newsroomHTML(items, ranked, f.mine, capN);
   }).then(() => P.then(d => bindExplain($('#wireList') || main, d.items)).catch(() => {}));
 };
