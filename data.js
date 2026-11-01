@@ -769,7 +769,7 @@ async function build5() {
       eps: r.epsForecast || "",
       lastEps: r.lastYearEPS || "",
       heavy: HEAVY.includes(r.symbol)
-    })).filter((r) => r.heavy || (r.mcap || 0) >= 2e10).sort((a, b) => b.heavy - a.heavy || (b.mcap || 0) - (a.mcap || 0));
+    })).filter((r, i, all) => !(r.symbol === "GOOG" && all.some((x) => x.symbol === "GOOGL")) && !(r.symbol === "BRK.A" && all.some((x) => x.symbol === "BRK.B"))).filter((r) => r.heavy || (r.mcap || 0) >= 2e10).sort((a, b) => b.heavy - a.heavy || (b.mcap || 0) - (a.mcap || 0));
     return { date: d, rows };
   });
   const reported = await earnReported(today).catch(() => []);
@@ -830,6 +830,8 @@ async function earnReported(today) {
     const eps = epsNum(r.eps), fc = epsNum(r.epsForecast);
     rows.push({ symbol: r.symbol, name: r.name, date: d, when: w, mcap, heavy, weight: giantWeight(r.symbol), eps: eps, fc: fc, epsTxt: r.eps || "", fcTxt: r.epsForecast || "", surprise: r.surprise && r.surprise !== "N/A" ? parseFloat(r.surprise) : (eps != null && fc ? (eps - fc) / Math.abs(fc) * 100 : null) });
   }));
+  // Alphabet has two share classes: keep one
+  rows = rows.filter((r) => !(r.symbol === "GOOG" && rows.some((x) => x.symbol === "GOOGL")) && !(r.symbol === "BRK.A" && rows.some((x) => x.symbol === "BRK.B")));
   rows.sort((a, b) => b.heavy - a.heavy || (b.mcap || 0) - (a.mcap || 0));
   rows = rows.slice(0, 10);
   const charts = await settle(Object.fromEntries(["NQ=F", ...rows.map((r) => r.symbol)].map((s) => [s, yahooChart(s, { interval: "15m", range: "5d" })])));

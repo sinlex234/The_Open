@@ -1704,7 +1704,7 @@ function earnTracker(x, all) {
   const dLab = ds => ds === today ? 'Today' : ds === addDay(today, 1) ? 'Tomorrow' : dayFmt(ds, { weekday: 'short', month: 'short', day: 'numeric' });
   return `<div class="ff-top"><h2 class="sec">Earnings</h2><button type="button" class="linkbtn" id="ceHide">Hide earnings</button></div>
     <p class="ce-intro">${esc((x.lines || []).slice(0, 2).join(' '))}</p>
-    ${rep.length ? `<h3 class="ce-h">Just reported <span class="ce-hs">· price moves since each report</span></h3><div class="ce-cards">${rep.map(earnCard).join('')}</div>` : ''}
+    ${rep.length ? `<h3 class="ce-h">Just reported <span class="ce-hs">· price moves since the close before each report</span></h3><div class="ce-cards">${rep.map(earnCard).join('')}</div>` : ''}
     <h3 class="ce-h">Coming up</h3>
     ${up.length ? `<div class="ce-up">${up.slice(0, all ? 14 : 8).map(r => `<div class="ce-row"><span class="ce-d">${esc(dLab(r.date))}</span><span class="ce-n"><b>${esc(r.symbol)}</b> ${esc(coName(r.name))}${r.weight ? `<span class="tag-heavy">~${r.weight}% of Nasdaq 100</span>` : r.heavy ? '<span class="tag-heavy">Moves the index</span>' : ''}</span><span class="ce-t">${esc(whenTxtE(r.when))}${r.eps ? `<small>Expected ${esc(r.eps)} a share</small>` : ''}</span></div>`).join('')}</div>` : `<p class="ff-none ce-none">${all ? 'No companies worth $20 billion or more report in the next five trading days.' : 'None of the companies that move the index report in the next five trading days. Switch to “All big companies” to see the rest.'}</p>`}
     ${stamp(x)}`;
