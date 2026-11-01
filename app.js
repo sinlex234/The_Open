@@ -358,8 +358,8 @@ function tvChart(el, symbol) {
   const dark = tvTheme() === 'dark';
   const tf = chartTf();
   const shell = el.parentElement;
-  let cd = shell && shell.querySelector(':scope > .cd');
-  if (shell && !cd) { cd = document.createElement('div'); cd.className = 'cd'; cd.setAttribute('aria-live', 'off'); shell.appendChild(cd); }
+  let cd = shell && shell.querySelector(':scope > .cd, :scope > .tfrow > .cd');
+  if (shell && !cd) { cd = document.createElement('div'); cd.className = 'cd'; cd.setAttribute('aria-live', 'off'); (shell.querySelector(':scope > .tfrow') || shell).appendChild(cd); }
   if (cd) { cd.dataset.sym = symbol; cd.dataset.tf = tf; tickCountdowns(); ensureCdTimer(); }
   tvWidget(el, 'advanced-chart', { autosize: true, symbol, interval: tf, timezone: 'America/New_York', theme: tvTheme(), style: '1', locale: 'en', allow_symbol_change: true, hide_volume: true, save_image: false, calendar: false, support_host: 'https://www.tradingview.com', backgroundColor: dark ? 'rgba(18,18,21,1)' : 'rgba(255,255,255,1)', gridColor: dark ? 'rgba(42,42,49,0.45)' : 'rgba(9,9,11,0.06)' }, 500);
 }
@@ -371,12 +371,15 @@ function chartPicker(boxId, pickId, options) {
   pick.querySelectorAll('button[data-tv]').forEach(b => b.onclick = () => { pick.querySelectorAll('button[data-tv]').forEach(x => x.setAttribute('aria-pressed', x === b)); tvChart(boxId, b.dataset.tv); });
   addFullscreen(boxId, pick);
   const box = document.getElementById(boxId), shell = box && box.parentElement;
-  if (shell && !shell.querySelector(':scope > .tfbar')) {
+  if (shell && !shell.querySelector(':scope > .tfrow')) {
     const bar = document.createElement('div'); bar.className = 'tfbar'; bar.setAttribute('role', 'group'); bar.setAttribute('aria-label', 'Timeframe');
     bar.innerHTML = TFS.map(([v, l]) => `<button type="button" data-tf="${v}" aria-pressed="${v === chartTf()}">${l}</button>`).join('') + `<button type="button" class="tf-reload" title="Reload chart" aria-label="Reload chart"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 4v5h-5"/></svg></button>`;
     bar.querySelector('.tf-reload').onclick = () => tvChart(boxId, box.dataset.sym);
     bar.querySelectorAll('button[data-tf]').forEach(b => b.onclick = () => { store.set('chartTf', b.dataset.tf); document.querySelectorAll('.tfbar button[data-tf]').forEach(x => x.setAttribute('aria-pressed', x.dataset.tf === b.dataset.tf)); tvChart(boxId, box.dataset.sym); });
-    shell.insertBefore(bar, box);
+    // The bar-close countdown sits right next to the timeframe buttons
+    const row = document.createElement('div'); row.className = 'tfrow'; row.appendChild(bar);
+    const oldCd = shell.querySelector(':scope > .cd'); if (oldCd) row.appendChild(oldCd);
+    shell.insertBefore(row, box);
   }
   tvChart(boxId, uniq[0].tv);
 }
@@ -1659,11 +1662,60 @@ function ffRow(e, act, today, now, nextT, showT) {
     </summary>${body ? `<div class="ff-body">${body}</div>` : ''}</details>`;
 }
 
+// ---------- Earnings tracker (inside the Calendar, can be hidden) ----------
+const coName = n => String(n || '').replace(/,? (Inc|Corp|Corporation|Incorporated|Co|Company|Ltd|plc|N\.V|S\.A)\.?$/i, '').replace(/ Platforms$/, '');
+const pctTxt = (v, d = 1) => v == null ? '—' : (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(v).toFixed(d) + '%';
+const upDn = v => v == null ? '' : v > 0.05 ? 'up' : v < -0.05 ? 'down' : '';
+const whenTxtE = w => w === 'before' ? 'Before the open' : w === 'after' ? 'After the close' : 'Time not set';
+const earnKeep = (r, all) => all || r.heavy;
+function earnByDay(x, all) {
+  const by = {};
+  (x.days || []).forEach(d => d.rows.filter(r => earnKeep(r, all)).forEach(r => (by[d.date] = by[d.date] || []).push(r)));
+  (x.reported || []).filter(r => earnKeep(r, all)).forEach(r => { by[r.date] = by[r.date] || []; if (!by[r.date].some(y => y.symbol === r.symbol)) by[r.date].push(r); });
+  return by;
+}
+function earnRead(r) {
+  if (r.eps == null) return 'The numbers aren’t in yet.';
+  const s = r.surprise, m = r.move && r.move.pct;
+  const res = s == null ? 'Reported' : s > 2 ? 'Beat estimates' : s < -2 ? 'Missed estimates' : 'Roughly in line';
+  if (m == null) return res + '.';
+  if (s != null && s > 2 && m < -1.5) return `${res}, but the stock fell. Investors often care more about the outlook than the last quarter.`;
+  if (s != null && s < -2 && m > 1.5) return `${res}, yet the stock rose. The outlook or guidance likely mattered more.`;
+  return `${res}, and the stock is ${m > 0.3 ? 'higher' : m < -0.3 ? 'lower' : 'little changed'} since.`;
+}
+function earnCard(r) {
+  const day = dayFmt(r.date, { weekday: 'short' });
+  return `<article class="ce-card">
+    <p class="rel-top"><b class="ce-sym">${esc(r.symbol)}</b>${esc(coName(r.name))}<span class="ce-when">${esc(day)}, ${r.when === 'after' ? 'after close' : r.when === 'before' ? 'before open' : 'reported'}</span></p>
+    <div class="rel-nums">
+      <div><small>Per share</small><b>${r.eps != null ? esc(r.epsTxt) : '—'}</b></div>
+      <div><small>Expected</small><b class="ce-dim">${r.fcTxt ? esc(r.fcTxt) : '—'}</b></div>
+      <div><small>Stock</small><b class="${upDn(r.move && r.move.pct)}">${pctTxt(r.move && r.move.pct)}</b></div>
+      <div><small>NQ</small><b class="${upDn(r.nq && r.nq.pct)}">${pctTxt(r.nq && r.nq.pct, 2)}</b></div>
+    </div>
+    <p class="ce-read">${r.surprise != null && r.eps != null ? `<span class="pill ${r.surprise > 2 ? 'up' : r.surprise < -2 ? 'down' : ''}">${r.surprise > 0 ? 'Beat' : r.surprise < 0 ? 'Missed' : 'Matched'} by ${Math.abs(r.surprise).toFixed(1)}%</span>` : ''}${esc(earnRead(r))}</p>
+    ${r.weight ? `<p class="ce-w">About ${r.weight}% of the Nasdaq 100, so its move shows up in NQ.</p>` : ''}
+  </article>`;
+}
+function earnTracker(x, all) {
+  const rep = (x.reported || []).filter(r => earnKeep(r, all)).slice(0, 4);
+  const up = (x.days || []).flatMap(d => d.rows.filter(r => earnKeep(r, all)).map(r => ({ ...r, date: d.date })));
+  const today = nyParts().date;
+  const dLab = ds => ds === today ? 'Today' : ds === addDay(today, 1) ? 'Tomorrow' : dayFmt(ds, { weekday: 'short', month: 'short', day: 'numeric' });
+  return `<div class="ff-top"><h2 class="sec">Earnings</h2><button type="button" class="linkbtn" id="ceHide">Hide earnings</button></div>
+    <p class="ce-intro">${esc((x.lines || []).slice(0, 2).join(' '))}</p>
+    ${rep.length ? `<h3 class="ce-h">Just reported <span class="ce-hs">· price moves since each report</span></h3><div class="ce-cards">${rep.map(earnCard).join('')}</div>` : ''}
+    <h3 class="ce-h">Coming up</h3>
+    ${up.length ? `<div class="ce-up">${up.slice(0, all ? 14 : 8).map(r => `<div class="ce-row"><span class="ce-d">${esc(dLab(r.date))}</span><span class="ce-n"><b>${esc(r.symbol)}</b> ${esc(coName(r.name))}${r.weight ? `<span class="tag-heavy">~${r.weight}% of Nasdaq 100</span>` : r.heavy ? '<span class="tag-heavy">Moves the index</span>' : ''}</span><span class="ce-t">${esc(whenTxtE(r.when))}${r.eps ? `<small>Expected ${esc(r.eps)} a share</small>` : ''}</span></div>`).join('')}</div>` : `<p class="ff-none ce-none">${all ? 'No companies worth $20 billion or more report in the next five trading days.' : 'None of the companies that move the index report in the next five trading days. Switch to “All big companies” to see the rest.'}</p>`}
+    ${stamp(x)}`;
+}
+
 PAGES.calendar = () => {
   const mine = [...new Set(['USD', ...myAssets().flatMap(a => a.ccy || [])])].filter(c => FF_CCY.includes(c));
   const f = store.get('ffFilter', { imp: ['High', 'Medium', 'Low', 'Holiday'], ccy: mine.length ? mine : ['USD'] });
   const today = nyParts().date;
   if (!CAL.sel) { CAL.sel = today; CAL.month = monthKey(today); }
+  const ce = { on: store.get('calEarnings', true), all: store.get('calEarnAll', false), data: null };
   layout(`<h1 class="page-h">Calendar</h1>
     <p class="page-intro">Every economic release and central-bank event, with what it is, how markets usually react and what it means for your markets. Pick a day on the calendar, or see the whole week. Times are ${esc(tzCity())} time (${esc(tzAbbr())}); change it in your account menu.</p>
     <div class="cal-grid">
@@ -1674,13 +1726,31 @@ PAGES.calendar = () => {
           <div class="chips" role="group" aria-label="Currency"><span class="chips-label">Currency</span>${FF_CCY.map(c => `<button class="chip" data-fc="${c}" aria-pressed="${f.ccy.includes(c)}">${c}</button>`).join('')}</div>
           <button type="button" class="linkbtn" id="ffMine">Just my currencies</button>
         </div>
+        <div class="ce-side">
+          <div class="ce-sw-row"><div><b>Earnings</b><small>Big company reports and how the stock reacted</small></div>
+            <button type="button" class="sw" role="switch" id="ceSw" aria-checked="${ce.on}" aria-label="Show earnings in the calendar"><i></i></button></div>
+          <div class="seg ce-scope" role="group" aria-label="Which companies"${ce.on ? '' : ' hidden'}><button type="button" data-ce="movers" aria-pressed="${!ce.all}">Index movers</button><button type="button" data-ce="all" aria-pressed="${ce.all}">All big companies</button></div>
+        </div>
       </aside>
-      <section class="cal-main"><div class="ff" id="ff"><p class="loading">Loading the calendar…</p></div></section>
+      <section class="cal-main"><div class="ce" id="ce"${ce.on ? '' : ' hidden'}></div><div class="ff" id="ff"><p class="loading">Loading the calendar…</p></div></section>
     </div>`);
   const rer = () => { store.set('ffFilter', f); draw(); };
   main.querySelectorAll('[data-fi]').forEach(b => b.onclick = () => { const k = b.dataset.fi; f.imp = f.imp.includes(k) ? f.imp.filter(x => x !== k) : [...f.imp, k]; b.setAttribute('aria-pressed', f.imp.includes(k)); rer(); });
   main.querySelectorAll('[data-fc]').forEach(b => b.onclick = () => { const k = b.dataset.fc; f.ccy = f.ccy.includes(k) ? f.ccy.filter(x => x !== k) : [...f.ccy, k]; b.setAttribute('aria-pressed', f.ccy.includes(k)); rer(); });
   $('#ffMine').onclick = () => { f.ccy = mine.length ? mine.slice() : ['USD']; main.querySelectorAll('[data-fc]').forEach(b => b.setAttribute('aria-pressed', f.ccy.includes(b.dataset.fc))); rer(); };
+
+  const ceDraw = () => { const box = $('#ce'); if (!box) return; box.hidden = !ce.on; if (ce.on) box.innerHTML = ce.data ? earnTracker(ce.data, ce.all) : '<p class="loading">Loading earnings…</p>'; const h = $('#ceHide'); if (h) h.onclick = () => setCe(false); };
+  const ceLoad = () => { if (ce.data || ce.loading) return; ce.loading = true; api('earnings', 15 * 60e3).then(x => { ce.data = x; ceDraw(); if (data) list(); }).catch(() => { const box = $('#ce'); if (box) box.innerHTML = '<p class="empty">Couldn’t load earnings. Try again in a minute.</p>'; }); };
+  function setCe(on) {
+    ce.on = on; store.set('calEarnings', on);
+    const sw = $('#ceSw'); if (sw) sw.setAttribute('aria-checked', on);
+    const sc = main.querySelector('.ce-scope'); if (sc) sc.hidden = !on;
+    if (on) ceLoad();
+    ceDraw(); if (data) list();
+  }
+  $('#ceSw').onclick = () => setCe(!ce.on);
+  main.querySelectorAll('[data-ce]').forEach(b => b.onclick = () => { ce.all = b.dataset.ce === 'all'; store.set('calEarnAll', ce.all); main.querySelectorAll('[data-ce]').forEach(x => x.setAttribute('aria-pressed', x === b)); ceDraw(); if (data) list(); });
+  if (ce.on) { ceLoad(); ceDraw(); }
 
   let data = null;
   const keep = e => f.imp.includes(impOf(e)) && (f.ccy.includes(e.country) || !FF_CCY.includes(e.country));
@@ -1724,11 +1794,13 @@ PAGES.calendar = () => {
     const shown = CAL.mode === 'day' ? days : days.filter(k => byDay[k] || k === today || k === CAL.sel || ![0, 6].includes(ymd(k).getUTCDay()));
     const now = Date.now(), nextT = (all.filter(keep).find(e => e.time > now && !e.allDay) || {}).time;
     const head = k => `<div class="ff-day${k === today ? ' today' : ''}${k === CAL.sel && CAL.mode === 'week' ? ' sel' : ''}" id="d-${k}"><b>${dayFmt(k, { weekday: 'short' })}</b> ${dayFmt(k, { month: 'short', day: 'numeric' })}${k === today ? ' <span class="pill acc">Today</span>' : ''}</div>`;
+    const er = ce.on && ce.data ? earnByDay(ce.data, ce.all) : {};
+    const eLine = k => er[k] ? `<div class="ff-earn"><span class="ff-earn-l">Earnings</span>${er[k].map(r => `<span class="ff-earn-i${r.weight ? ' big' : ''}" title="${esc(r.name)}"><b>${esc(r.symbol)}</b> ${r.when === 'before' ? 'before open' : r.when === 'after' ? 'after close' : ''}</span>`).join('')}</div>` : '';
     const rows = shown.map(k => {
       const evs = byDay[k];
-      if (!evs) return head(k) + `<div class="ff-none">${all.some(e => nyParts(e.time).date === k) ? 'Nothing for your filters on this day' : 'No events scheduled'}</div>`;
+      if (!evs) return head(k) + eLine(k) + `<div class="ff-none">${all.some(e => nyParts(e.time).date === k) ? 'Nothing for your filters on this day' : 'No events scheduled'}</div>`;
       let lastT = null;
-      return head(k) + evs.map(e => { const showT = e.time !== lastT; lastT = e.time; return ffRow(e, act, today, now, nextT, showT); }).join('');
+      return head(k) + eLine(k) + evs.map(e => { const showT = e.time !== lastT; lastT = e.time; return ffRow(e, act, today, now, nextT, showT); }).join('');
     }).join('');
     const title = CAL.mode === 'day' ? dayFmt(CAL.sel, { weekday: 'long', month: 'long', day: 'numeric' }) : `Week of ${dayFmt(wk, { month: 'long', day: 'numeric' })}`;
     box.innerHTML = `<div class="ff-top"><h2 class="sec">${esc(title)}</h2>
@@ -1740,16 +1812,6 @@ PAGES.calendar = () => {
   }
   function draw() { if (!data) return; grid(); list(); }
   api('calendar', 10 * 60e3).then(d => { data = d; draw(); }).catch(() => { const box = $('#ff'); if (box) box.innerHTML = '<p class="empty">Couldn’t load the calendar. Try again in a minute.</p>'; });
-};
-
-// ---------- Earnings ----------
-PAGES.earnings = () => {
-  layout(`<h1 class="page-h">Earnings</h1>
-    <p class="page-intro" id="eIntro"></p>
-    <div id="eList"></div>`);
-  const d = api('earnings', 15 * 60e3);
-  fill('eIntro', 'summary', d, x => esc(x.lines.join(' ')));
-  fill('eList', 'earnings', d, x => x.days.map(day => `<div class="cal-day"><h3>${esc(dayLabel(day.date))}</h3>${day.rows.length ? day.rows.map(r => `<div class="earn"><b>${esc(r.symbol)}</b><span>${esc(r.name)}${r.heavy ? '<span class="tag-heavy">Moves the index</span>' : ''}<span class="small faint" style="display:block">${r.mcap ? big(r.mcap) + ' company' : ''}${r.eps ? ', expected ' + esc(r.eps) + ' a share' : ''}</span></span><span class="w">${r.when === 'before' ? 'Before the open' : r.when === 'after' ? 'After the close' : 'Time not set'}</span></div>`).join('') : '<p class="empty" style="padding:10px 0">No big companies reporting.</p>'}</div>`).join('') + '<p class="small faint">Companies worth $20 billion or more, plus the heavyweights that drive the Nasdaq and S&P 500.</p>' + stamp(x));
 };
 
 // ---------- Glossary ----------
@@ -1820,7 +1882,7 @@ PAGES.scorecard = () => {
 };
 
 // ---------- router ----------
-const ALIASES = { movers: 'markets', memecoins: 'memes', economy: 'calendar' };
+const ALIASES = { movers: 'markets', memecoins: 'memes', economy: 'calendar', earnings: 'calendar' };
 const SLUG = { memes: 'memecoins' };
 const pagePath = key => key === 'today' ? '/' : '/' + (SLUG[key] || key);
 function currentPage() {
@@ -1829,6 +1891,7 @@ function currentPage() {
   if (h && (PAGES[h] || ALIASES[h])) history.replaceState(null, '', pagePath(ALIASES[h] || h));
   const p = location.pathname.replace(/^\/+|\/+$/g, '').split('/')[0] || 'today';
   const key = ALIASES[p] || p;
+  if (p === 'earnings') store.set('calEarnings', true);
   if (ALIASES[p] && PAGES[key]) history.replaceState(null, '', pagePath(key) + location.search);
   // Keep one address per page, e.g. /memes becomes /memecoins
   if (PAGES[key] && SLUG[key] && p !== SLUG[key]) history.replaceState(null, '', pagePath(key) + location.search);

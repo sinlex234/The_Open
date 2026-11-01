@@ -772,9 +772,74 @@ async function build5() {
     })).filter((r) => r.heavy || (r.mcap || 0) >= 2e10).sort((a, b) => b.heavy - a.heavy || (b.mcap || 0) - (a.mcap || 0));
     return { date: d, rows };
   });
+  const reported = await earnReported(today).catch(() => []);
   const heavyNext = out.flatMap((d) => d.rows.filter((r) => r.heavy).map((r) => ({ ...r, date: d.date })));
   const lines = heavyNext.length ? heavyNext.slice(0, 4).map((r) => `${r.name.replace(/,? (Inc|Corp|Corporation|Incorporated|Co)\.?$/i, "")} (${r.symbol}) reports ${r.date === today ? "today" : (/* @__PURE__ */ new Date(r.date + "T12:00:00Z")).toLocaleDateString("en-US", { weekday: "long", timeZone: "UTC" })} ${r.when === "after" ? "after the close. The reaction shows up in futures that evening" : r.when === "before" ? "before the open, so it\u2019s part of the morning picture" : ""}.`) : ["None of the index heavyweights report in the next few days."];
-  return { days: out, lines, errors, updated: Date.now() };
+  out.forEach((d) => d.rows.forEach((r) => r.weight = giantWeight(r.symbol)));
+  return { days: out, reported, lines, errors, updated: Date.now() };
+}
+var giantWeight = (sym) => {
+  const g = GIANTS.find((x) => x[0] === sym || sym === "GOOG" && x[0] === "GOOGL");
+  return g ? g[2] : null;
+};
+var NQ_HDR = { headers: { Accept: "application/json, text/plain, */*", Origin: "https://www.nasdaq.com", Referer: "https://www.nasdaq.com/" } };
+var regBar = (b) => {
+  const n = ny(b.t);
+  return n.mins >= 570 && n.mins < 960 && n.dow !== "Sat" && n.dow !== "Sun";
+};
+// The price just before the report: the 4 PM close that day for after-close reports, the prior day's close otherwise
+function refBefore(bars, date, w) {
+  let ref = null;
+  for (const b of bars) {
+    if (!regBar(b)) continue;
+    const d = ny(b.t).date;
+    if (w === "after" ? d <= date : d < date) ref = b;
+  }
+  return ref;
+}
+function moveSince(chart, date, w) {
+  if (!chart || !chart.bars.length) return null;
+  const ref = refBefore(chart.bars, date, w);
+  if (!ref) return null;
+  const last = chart.bars[chart.bars.length - 1];
+  if (last.t <= ref.t) return null;
+  return { from: ref.c, now: last.c, pct: (last.c / ref.c - 1) * 100, at: last.t };
+}
+var epsNum = (s) => {
+  const t = String(s || "").replace(/[$,\s]/g, "").replace(/^\((.*)\)$/, "-$1");
+  const n = parseFloat(t);
+  return isNaN(n) ? null : n;
+};
+// Big companies that reported in the last few trading days, with how the stock and NQ moved since
+async function earnReported(today) {
+  const nowNy = ny(Date.now());
+  const days = [];
+  for (let i = 0; days.length < 3 && i < 8; i++) {
+    const d = addDays(today, -i);
+    const w = (/* @__PURE__ */ new Date(d + "T12:00:00Z")).getUTCDay();
+    if (w > 0 && w < 6) days.push(d);
+  }
+  const { res } = await settle(Object.fromEntries(days.map((d) => [d, getJSON(`https://api.nasdaq.com/api/calendar/earnings?date=${d}`, NQ_HDR)])));
+  let rows = [];
+  days.forEach((d) => (res[d] && res[d].data && res[d].data.rows || []).forEach((r) => {
+    const w = when(r.time);
+    // Today's reports only count once they are out
+    if (d === today && (w === "after" ? nowNy.mins < 965 : w === "before" ? nowNy.mins < 480 : true)) return;
+    const heavy = HEAVY.includes(r.symbol), mcap = money(r.marketCap);
+    if (!heavy && (mcap || 0) < 5e10) return;
+    const eps = epsNum(r.eps), fc = epsNum(r.epsForecast);
+    rows.push({ symbol: r.symbol, name: r.name, date: d, when: w, mcap, heavy, weight: giantWeight(r.symbol), eps: eps, fc: fc, epsTxt: r.eps || "", fcTxt: r.epsForecast || "", surprise: r.surprise && r.surprise !== "N/A" ? parseFloat(r.surprise) : (eps != null && fc ? (eps - fc) / Math.abs(fc) * 100 : null) });
+  }));
+  rows.sort((a, b) => b.heavy - a.heavy || (b.mcap || 0) - (a.mcap || 0));
+  rows = rows.slice(0, 10);
+  const charts = await settle(Object.fromEntries(["NQ=F", ...rows.map((r) => r.symbol)].map((s) => [s, yahooChart(s, { interval: "15m", range: "5d" })])));
+  const nq = charts.res["NQ=F"];
+  rows.forEach((r) => {
+    r.move = moveSince(charts.res[r.symbol], r.date, r.when);
+    r.nq = moveSince(nq, r.date, r.when);
+    if (r.surprise != null && !isFinite(r.surprise)) r.surprise = null;
+  });
+  return rows;
 }
 
 // api/news.js
@@ -2180,7 +2245,7 @@ var PLAY = {
   growth: (st) => [`Growth stocks are the most sensitive to bond yields. The 10-year yield is ${st.tnx ? st.tnx.price.toFixed(2) + "%" : "worth watching"}${st.tnx && st.tnx.change ? `, ${st.tnx.change > 0 ? "up" : "down"} today` : ""}.`, st.bias === "up" ? "Today’s news leans supportive for growth names." : st.bias === "down" ? "Today’s news leans against growth names. Expect them to underperform if it holds." : "No clear push for growth names today."],
   dividends: (st) => [`Higher bond yields make dividend stocks less attractive by comparison. The 10-year yield is ${st.tnx ? st.tnx.price.toFixed(2) + "%" : "the number to watch"}.`, "Dividend investing is a long game. A single news day rarely matters unless it threatens a company’s payout."],
   index: (st) => ["For index investors, today’s news is mostly noise. The long-term drivers are earnings, interest rates and the economy.", st.volWord === "high" ? "Volatile days test discipline. Sticking to your regular schedule usually beats reacting." : "Calm markets are a good time to check your plan, not to change it."],
-  earnings: (st) => [st.ev && st.ev.kind === "Earnings" ? `Next big report: ${st.ev.title}, ${st.ev.when}.` : "Check the Earnings tab for the next big reports.", "Options usually price in a big move before results. A result that only matches expectations can still drop the stock.", "What the company says about the next quarter usually moves the price more than the last quarter’s numbers."],
+  earnings: (st) => [st.ev && st.ev.kind === "Earnings" ? `Next big report: ${st.ev.title}, ${st.ev.when}.` : "Turn on Earnings in the Calendar to see the next big reports.", "Options usually price in a big move before results. A result that only matches expectations can still drop the stock.", "What the company says about the next quarter usually moves the price more than the last quarter’s numbers."],
   buy: (st) => [st.ev ? `Options get pricier ahead of ${st.ev.title} and lose value right after it. Buying just before a big event means paying top price.` : "No big event soon, so option prices should be calmer. That favours buyers.", `VIX ${st.vixLvl != null ? st.vixLvl.toFixed(1) : "n/a"}: ${st.vixLvl > 25 ? "options are expensive, so you need a bigger move to profit." : st.vixLvl < 15 ? "options are cheap, which favours buying." : "option prices are normal."}`],
   sell: (st) => [`VIX ${st.vixLvl != null ? st.vixLvl.toFixed(1) : "n/a"}: ${st.vixLvl > 25 ? "premium is rich, but moves are big. Wider strikes or smaller size." : st.vixLvl < 15 ? "premium is thin. Selling pays less for the same risk." : "premium is normal."}`, st.ev ? `${st.ev.title} (${st.ev.when}) is the risk event. Selling premium through it means accepting a possible big move.` : "Quiet calendar, which is when premium selling tends to work best."],
   spreads: (st) => ["Expected moves are bigger on news days. Widths that worked last week may be too tight today.", st.bias !== "mixed" ? `News leans ${st.bias}, which favours ${st.bias === "up" ? "bullish" : "bearish"} spreads if price confirms.` : "No clear lean, so neutral structures fit better than directional ones."],
