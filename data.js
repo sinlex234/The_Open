@@ -336,8 +336,45 @@ var FEEDS = {
   thisWeek: "https://nfs.faireconomy.media/ff_calendar_thisweek.json",
   nextWeek: "https://nfs.faireconomy.media/ff_calendar_nextweek.json"
 };
-async function build() {
+// ForexFactory rate-limits hard (429). Every page used to fetch it on its own, so: fetch it once through our own
+// CDN-cached route (shared by every server instance), keep it in memory, and fall back to the last good copy.
+async function ffRaw() {
   const { res, errors } = await settle({ thisWeek: getJSON(FEEDS.thisWeek), nextWeek: getJSON(FEEDS.nextWeek) });
+  if (!res.thisWeek) throw new Error("Calendar feed: " + (errors.thisWeek || "unavailable"));
+  return { thisWeek: res.thisWeek, nextWeek: res.nextWeek || [], at: Date.now() };
+}
+var FF_SELF = process.env.VERCEL ? "https://the-open-one.vercel.app/api/data?fn=ffraw" : null;
+var ffLast = null;
+var ffFailAt = 0, ffFailMsg = "";
+async function ffFeeds() {
+  // After a failure, wait 5 minutes before asking again (asking again while rate-limited keeps the block going)
+  if (Date.now() - ffFailAt < 5 * 6e4) {
+    if (ffLast) return ffLast;
+    throw new Error(ffFailMsg);
+  }
+  try {
+    return await memo("ffraw", 15 * 6e4, async () => {
+      let raw = null;
+      if (FF_SELF) raw = await getJSON(FF_SELF).catch(() => null);
+      if (!raw || !raw.thisWeek) raw = await ffRaw();
+      ffLast = raw;
+      return raw;
+    });
+  } catch (e) {
+    ffFailAt = Date.now();
+    ffFailMsg = String(e && e.message || e);
+    if (ffLast) return ffLast;
+    throw e;
+  }
+}
+async function build() {
+  let res = {}, errors = {};
+  try {
+    const raw = await ffFeeds();
+    res = { thisWeek: raw.thisWeek, nextWeek: raw.nextWeek };
+  } catch (e) {
+    errors.thisWeek = String(e && e.message || e);
+  }
   if (!res.thisWeek && !res.nextWeek) throw new Error("Calendar unavailable: " + Object.values(errors).join("; "));
   const seen = /* @__PURE__ */ new Set();
   const events = [...res.thisWeek || [], ...res.nextWeek || []].map((e) => ({ ...e, time: Date.parse(e.date) })).filter((e) => !isNaN(e.time)).filter((e) => {
@@ -2966,6 +3003,7 @@ async function buildPulseScore() {
 }
 var ROUTES = {
   calendar: [() => build(), 900],
+  ffraw: [() => ffRaw(), 1800],
   markets: [(q) => build2(String(q.section || "futures")), 120],
   crypto: [() => build3(), 180],
   memes: [() => build4(), 120],
