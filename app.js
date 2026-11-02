@@ -1266,6 +1266,130 @@ function newsroomHTML(items, ranked, mineFirst = true, cap = 10) {
   }).join('');
   return `<div class="nr-top">${leadHTML}<div class="nr-sides">${sideHTML}</div></div>${feed}`;
 }
+// ---------- Trade the news? A day-by-day read of how much news risk each trading day carries ----------
+const TN_MAJOR = /\bcpi\b|consumer price|non-farm|nonfarm|payroll|federal funds|fomc|fed chair|powell|\bpce\b|core pce/i;
+const TN_KIND = [
+  [/\bcpi\b|consumer price|\bppi\b|producer price|\bpce\b/i, 'inflation'],
+  [/non-farm|nonfarm|payroll|unemployment|jobless|jolts|adp|employment/i, 'jobs'],
+  [/federal funds|fomc|fed chair|powell|fed .*speaks|fomc member/i, 'fed'],
+  [/gdp|retail sales|pmi|ism|consumer (confidence|sentiment)|durable/i, 'growth'],
+  [/main refinancing|ecb|lagarde|boe|official bank rate|boj|policy rate|cash rate|overnight rate|snb|rba|boc/i, 'cb'],
+];
+const tnKind = t => (TN_KIND.find(([re]) => re.test(t)) || [])[1] || 'other';
+// What a surprise usually does: hotter/stronger/more hawkish than expected
+const TN_SURPRISE = {
+  inflation: { hot: 'inflation comes in hotter than forecast', soft: 'A cooler number', NQ: 'down', BTC: 'down', EURUSD: 'down', why: 'Hot inflation pushes rate cuts further out. Yields and the dollar rise, and stocks and crypto usually fall.' },
+  jobs: { hot: 'hiring comes in stronger than forecast', soft: 'A weaker number', NQ: 'mixed', BTC: 'down', EURUSD: 'down', why: 'Strong hiring means the Fed can keep rates high. The dollar usually rises. Stocks can go either way: a strong economy helps profits, but higher rates hurt.' },
+  fed: { hot: 'the Fed sounds tougher than expected', soft: 'A softer tone', NQ: 'down', BTC: 'down', EURUSD: 'down', why: 'A tougher-sounding Fed means higher rates for longer. The dollar rises and stocks and crypto usually fall. Moves can flip during the press conference.' },
+  growth: { hot: 'the data comes in stronger than forecast', soft: 'A weaker number', NQ: 'mixed', BTC: 'mixed', EURUSD: 'down', why: 'Strong growth data lifts the dollar. For stocks it cuts both ways: good for profits, but it can keep rates high.' },
+  cb: { hot: 'the central bank sounds tougher than expected', soft: 'A softer tone', NQ: 'mixed', BTC: 'mixed', EURUSD: 'up', why: 'A tougher central bank lifts its own currency.' },
+  other: { hot: 'it surprises', soft: 'The opposite surprise', NQ: 'mixed', BTC: 'mixed', EURUSD: 'mixed', why: 'Big surprises cause fast moves. The direction depends on the details.' },
+};
+const TN_SYM = { futures: 'NQ', stocks: 'NQ', options: 'NQ', crypto: 'BTC', memes: 'BTC', forex: 'EURUSD' };
+const TN_NAME = { NQ: 'NQ', BTC: 'Bitcoin', EURUSD: 'EUR/USD' };
+const TN_ARROW = { up: '↑', down: '↓', mixed: '↕' };
+function tnSyms() { const s = [...new Set(myMarkets().map(m => TN_SYM[m]).filter(Boolean))]; return s.length ? s : ['NQ']; }
+function tnCcys() {
+  const c = new Set(['USD']);
+  myAssets().forEach(a => (a.ccy || []).forEach(x => c.add(x)));
+  if (tnSyms().includes('EURUSD')) c.add('EUR');
+  return c;
+}
+function tnDays(events) {
+  const today = nyParts().date, out = [];
+  for (let i = 0; out.length < 5 && i < 10; i++) { const d = addDay(today, i), w = ymd(d).getUTCDay(); if (w > 0 && w < 6) out.push(d); }
+  const hi = events.length ? nyParts(events[events.length - 1].time).date : today;
+  return out.map(d => ({ date: d, known: d <= hi }));
+}
+function tnRead(date, events, earn) {
+  const ccy = tnCcys(), now = Date.now();
+  const evs = events.filter(e => nyParts(e.time).date === date && ccy.has(e.country));
+  const holiday = evs.find(e => e.impact === 'Holiday' && e.country === 'USD' && /holiday/i.test(e.title));
+  const high = evs.filter(e => e.impact === 'High' && !e.allDay);
+  const med = evs.filter(e => e.impact === 'Medium' && !e.allDay);
+  const major = high.filter(e => TN_MAJOR.test(e.title + ' ' + (e.name || '')));
+  const reps = ((earn && earn.days || []).find(d => d.date === date) || { rows: [] }).rows.filter(r => r.weight);
+  let level, word, line;
+  if (holiday && !high.length) { level = 0; word = 'Holiday'; line = 'US markets are closed or thin. Moves on low volume can be misleading.'; }
+  else if (major.length) { level = 3; word = 'Big news day'; line = `${major.map(e => e.name || e.title).filter((v, i, a) => a.indexOf(v) === i).slice(0, 2).join(' and ')} can swing everything. Many traders sit out the release and trade the reaction after.`; }
+  else if (high.length || reps.length) { level = 2; word = 'Trade with care'; line = high.length ? `${high.length === 1 ? 'One release' : high.length + ' releases'} can move prices fast. Be flat or careful around ${high.length === 1 ? 'it' : 'them'}, then trade as normal.` : `No big data, but ${reps.map(r => coName(r.name)).slice(0, 2).join(' and ')} report${reps.length === 1 ? 's' : ''}. That can move NQ outside regular hours.`; }
+  else { level = 1; word = 'Normal day'; line = med.length ? 'Only smaller releases. News probably won’t be the main driver, so price action and your levels matter more.' : 'Nothing big on the calendar. News probably won’t drive the day.'; }
+  // Risk windows: 20 minutes before to 10 minutes after each big release, merged
+  const wins = [];
+  high.forEach(e => { const a = e.time - 20 * 60e3, b = e.time + 10 * 60e3, last = wins[wins.length - 1];
+    if (last && a <= last.b) { last.b = Math.max(last.b, b); last.names.push(e.name || e.title); } else wins.push({ a, b, t: e.time, names: [e.name || e.title] }); });
+  wins.forEach(w => { w.names = [...new Set(w.names)]; w.past = w.b < now; w.live = w.a <= now && now <= w.b; });
+  const done = date === nyParts().date && wins.length && wins.every(w => w.past);
+  // Impact per market from the biggest release that day
+  const lead = (major[0] || high[0]);
+  const kind = lead ? tnKind(lead.title + ' ' + (lead.name || '')) : null;
+  const sx = kind ? TN_SURPRISE[kind] : null;
+  const impact = tnSyms().map(sym => {
+    if (!lead) return { sym, size: reps.length && sym === 'NQ' ? 'Earnings after the close' : 'Small', text: reps.length && sym === 'NQ' ? `Watch the evening session: ${reps.map(r => r.symbol).join(', ')} report.` : 'No scheduled release likely to move it much.' };
+    const d = sx[sym];
+    return { sym, size: level === 3 ? 'Large' : 'Medium', dir: d, text: d === 'mixed' ? `Can go either way at ${fmtTime(lead.time)}. Wait for the first reaction.` : `If ${sx.hot}, ${TN_NAME[sym]} usually ${d === 'up' ? 'rises' : 'falls'}. ${sx.soft} usually does the opposite.` };
+  });
+  return { date, evs, high, med, major, reps, holiday, level, word, line, wins, done, lead, kind, sx, impact };
+}
+function tnExplain(r) {
+  const why = [];
+  if (r.level === 3) why.push(`It’s rated a big news day because ${r.major.length === 1 ? (r.major[0].name || r.major[0].title) + ' is' : 'these are'} among the releases that move markets most each month.`);
+  else if (r.level === 2) why.push(r.high.length ? `It’s rated “trade with care” because there ${r.high.length === 1 ? 'is a high-impact release' : `are ${r.high.length} high-impact releases`} in the currencies you trade, but none of the very biggest ones.` : 'There’s no big data, but large companies report results.');
+  else if (r.level === 1) why.push(`Nothing high-impact in the currencies you trade${r.med.length ? `, only ${r.med.length} smaller release${r.med.length === 1 ? '' : 's'}` : ''}.`);
+  if (r.sx) why.push(r.sx.why);
+  if (r.wins.length) why.push('The risk windows run from 20 minutes before to 10 minutes after each release. Spreads widen and price can spike both ways before it picks a direction.');
+  const rows = [...r.high, ...r.med].sort((a, b) => a.time - b.time).map(e => { const fy = forYouEvent(e);
+    return `<li class="tn-ev"><span class="tn-et">${e.allDay ? 'All day' : fmtTime(e.time)}</span><div><p class="tn-en"><b>${esc(e.name || e.title)}</b> <span class="tn-imp ${e.impact === 'High' ? 'hi' : ''}">${e.impact === 'High' ? 'High impact' : 'Medium'}</span> <span class="faint">${esc(e.country)}</span></p>${e.what ? `<p>${esc(e.what)}</p>` : ''}${e.why ? `<p>${esc(e.why)}</p>` : ''}${e.forecast ? `<p class="faint">Forecast ${esc(e.forecast)}${e.previous ? `, last time ${esc(String(e.previous).split('|')[0])}` : ''}.</p>` : ''}${fy ? `<p class="tn-fy"><b>For you:</b> ${esc(fy)}</p>` : ''}</div></li>`; }).join('');
+  const er = r.reps.map(x => `<li class="tn-ev"><span class="tn-et">${x.when === 'before' ? 'Pre-market' : x.when === 'after' ? 'After close' : 'TBA'}</span><div><p class="tn-en"><b>${esc(coName(x.name))} earnings</b> <span class="faint">${esc(x.symbol)}</span></p><p>About ${x.weight}% of the Nasdaq 100, so a big move in the stock shows up in NQ.</p></div></li>`).join('');
+  return `<div class="tn-why">${why.map(w => `<p>${esc(w)}</p>`).join('')}</div>${rows || er ? `<ul class="tn-evs">${rows}${er}</ul>` : ''}<p class="tn-foot">This is context to help you plan, not financial advice.</p>`;
+}
+function tnHTML(cal, earn, sel) {
+  const days = tnDays(cal.events);
+  if (!sel || !days.some(d => d.date === sel)) sel = days[0].date;
+  const reads = Object.fromEntries(days.filter(d => d.known).map(d => [d.date, tnRead(d.date, cal.events, earn)]));
+  const r = reads[sel], today = nyParts().date;
+  const lab = d => d === today ? 'Today' : d === addDay(today, 1) ? 'Tomorrow' : dayFmt(d, { weekday: 'short' });
+  const strip = days.map(d => { const x = reads[d.date];
+    return `<button type="button" class="tn-day lv${x ? x.level : 'u'}" data-tn="${d.date}" aria-pressed="${d.date === sel}"><span class="tn-dl">${esc(lab(d.date))}<small>${esc(dayFmt(d.date, { month: 'short', day: 'numeric' }))}</small></span><span class="tn-dw"><i></i>${x ? esc(x.word) : 'Not out yet'}</span>${x ? `<span class="tn-dv">${['Low', 'Low', 'Medium', 'High'][x.level]} volatility</span>` : ''}</button>`; }).join('');
+  if (!r) return `<div class="tn-strip">${strip}</div><p class="tn-line">That day’s calendar isn’t out yet. It usually appears over the weekend.</p>`;
+  const wins = r.wins.map(w => `<span class="tn-win${w.past ? ' past' : ''}${w.live ? ' live' : ''}"><b>${fmtTime(w.a)} – ${fmtTime(w.b)}</b><small>${esc(w.names.slice(0, 2).join(', '))}</small></span>`).join('');
+  return `<div class="tn-strip" role="group" aria-label="Pick a day">${strip}</div>
+    <div class="tn-body lv${r.level}">
+      <div class="tn-top"><p class="tn-verdict"><i></i>${esc(r.word)}<span class="tn-vol" title="Expected volatility from scheduled news"><span class="tn-vb">${[1, 2, 3].map(n => `<b class="${n <= Math.max(1, r.level) ? 'on' : ''}"></b>`).join('')}</span>${['Low', 'Low', 'Medium', 'High'][r.level]} volatility</span></p><button type="button" class="tn-x" id="tnX" aria-expanded="false">Explain</button></div>
+      <p class="tn-line">${r.done ? `The big releases are done for today. The rest of the day is usually calmer, though the move can keep going.` : esc(r.line)}</p>
+      ${wins ? `<div class="tn-wins"><span class="tn-k">Risk windows</span>${wins}</div>` : ''}
+      <div class="tn-imps">${r.impact.map(m => `<div class="tn-imp-c"><p class="tn-k">${esc(TN_NAME[m.sym])}${m.dir ? ` <span class="tn-arr ${m.dir}">${TN_ARROW[m.dir]}</span>` : ''}</p><p class="tn-sz">${esc(m.size)} move expected</p><p>${esc(m.text)}</p></div>`).join('')}</div>
+      <div class="tn-more" id="tnMore" hidden>${tnExplain(r)}</div>
+    </div>`;
+}
+function mountTradeNews(id, opts = {}) {
+  let sel = opts.sel || null, cal = null, earn = null;
+  const draw = () => { const box = document.getElementById(id); if (!box || !cal) return;
+    const open = !!(box.querySelector('#tnMore') && !box.querySelector('#tnMore').hidden);
+    box.innerHTML = `<div class="tn-head"><h2 class="sec">Trade the news?</h2><span class="tn-sub">For ${esc(tnSyms().map(x => TN_NAME[x]).join(', '))}</span></div>` + tnHTML(cal, earn, sel);
+    const on = box.querySelector('.tn-day[aria-pressed="true"]'), st = box.querySelector('.tn-strip'); if (on && st && st.scrollWidth > st.clientWidth) st.scrollLeft = on.offsetLeft - st.offsetLeft - 16;
+    box.querySelectorAll('[data-tn]').forEach(b => b.onclick = () => { sel = b.dataset.tn; draw(); if (opts.onPick) opts.onPick(sel); });
+    const x = box.querySelector('#tnX'), more = box.querySelector('#tnMore');
+    if (x && more) { const set = o => { more.hidden = !o; x.setAttribute('aria-expanded', o); x.textContent = o ? 'Hide' : 'Explain'; }; set(open); x.onclick = () => set(more.hidden); }
+  };
+  api('calendar', 10 * 60e3).then(d => { cal = d; draw(); api('earnings', 15 * 60e3).then(e => { earn = e; draw(); }).catch(() => {}); }).catch(() => { const box = document.getElementById(id); if (box) box.hidden = true; });
+  return { setSel: d => { if (d === sel) return; sel = d; draw(); } };
+}
+
+// One line on the News page: today's (or the next trading day's) news risk, linking to the full read on the Calendar
+function mountTradeSlim(id) {
+  Promise.all([api('calendar', 10 * 60e3), api('earnings', 15 * 60e3).catch(() => null)]).then(([cal, earn]) => {
+    const el = document.getElementById(id); if (!el) return;
+    const d = tnDays(cal.events)[0]; if (!d || !d.known) return;
+    const r = tnRead(d.date, cal.events, earn), today = nyParts().date;
+    const when = d.date === today ? 'Today' : d.date === addDay(today, 1) ? 'Tomorrow' : dayFmt(d.date, { weekday: 'long' });
+    const w = r.wins.find(x => !x.past);
+    const tail = r.done ? 'Big releases are done for today' : w ? `Careful ${fmtTime(w.a)}–${fmtTime(w.b)} (${w.names[0]})` : r.reps.length ? `${r.reps.map(x => x.symbol).slice(0, 2).join(', ')} report${r.reps.length === 1 ? 's' : ''}` : 'No big releases';
+    el.className = 'tn-slim lv' + r.level; el.hidden = false;
+    el.innerHTML = `<i></i><span class="tn-s-w"><span class="faint">${esc(when)}:</span> <b>${esc(r.word)}</b></span><span class="tn-s-v">${['Low', 'Low', 'Medium', 'High'][r.level]} volatility</span><span class="tn-s-t">${esc(tail)}</span><span class="tn-s-go">See the week →</span>`;
+    el.onclick = e => { e.preventDefault(); CAL.sel = d.date; CAL.month = monthKey(d.date); go('/calendar'); };
+  }).catch(() => {});
+}
 PAGES.news = () => {
   const f = store.get('newsFilter', { market: 'all', impact: 'matters', topic: '', mine: true });
   if (f.impact === 'medium' || (f.impact === 'all' && !f.v2)) { f.impact = 'matters'; f.v2 = 1; }
@@ -1275,8 +1399,9 @@ PAGES.news = () => {
     <div class="chips" role="group" aria-label="Market"><span class="chips-label">Market</span>${[['all', 'Everything'], ['futures', 'Stocks and futures'], ['forex', 'Forex'], ['crypto', 'Crypto'], ['memes', 'Memecoins']].map(([k, l]) => `<button class="chip" data-mk="${k}" aria-pressed="${f.market === k}">${l}</button>`).join('')}</div>
     <div class="chips" role="group" aria-label="Topic"><span class="chips-label">Topic</span><button class="chip" data-tp="" aria-pressed="${!f.topic}">All topics</button>${Object.entries(SECTION_NAMES).map(([k, l]) => `<button class="chip" data-tp="${k}" aria-pressed="${f.topic === k}">${l}</button>`).join('')}</div>
     <div class="chips" role="group" aria-label="Show"><span class="chips-label">Show</span>${[['matters', 'Market-moving'], ['high', 'Big stories only'], ['all', 'Everything']].map(([k, l]) => `<button class="chip" data-im="${k}" aria-pressed="${f.impact === k}">${l}</button>`).join('')}<button class="chip" id="mineFirst" aria-pressed="${f.mine}">My markets first</button></div>
-    ${shellHTML({ noChart: true, left: '<div class="newbar" id="newBar" hidden></div><div class="newsroom" id="wireList"></div><p class="stale-note" id="staleNote" hidden></p>' })}`);
+    ${shellHTML({ noChart: true, left: '<a class="tn-slim" id="tradeNews" href="/calendar" hidden></a><div class="newbar" id="newBar" hidden></div><div class="newsroom" id="wireList"></div><p class="stale-note" id="staleNote" hidden></p>' })}`);
   startNow();
+  mountTradeSlim('tradeNews');
   const rer = () => { store.set('newsFilter', f); refreshing = false; PAGES.news(); };
   main.querySelectorAll('[data-mk]').forEach(b => b.onclick = () => { f.market = b.dataset.mk; rer(); });
   main.querySelectorAll('[data-tp]').forEach(b => b.onclick = () => { f.topic = b.dataset.tp; rer(); });
@@ -1732,7 +1857,7 @@ PAGES.calendar = () => {
           <div class="seg ce-scope" role="group" aria-label="Which companies"${ce.on ? '' : ' hidden'}><button type="button" data-ce="movers" aria-pressed="${!ce.all}">Index movers</button><button type="button" data-ce="all" aria-pressed="${ce.all}">All big companies</button></div>
         </div>
       </aside>
-      <section class="cal-main"><div class="ce" id="ce"${ce.on ? '' : ' hidden'}></div><div class="ff" id="ff"><p class="loading">Loading the calendar…</p></div></section>
+      <section class="cal-main"><section class="tn tn-cal" id="calTn"><p class="loading">Checking the week’s news…</p></section><div class="ce" id="ce"${ce.on ? '' : ' hidden'}></div><div class="ff" id="ff"><p class="loading">Loading the calendar…</p></div></section>
     </div>`);
   const rer = () => { store.set('ffFilter', f); draw(); };
   main.querySelectorAll('[data-fi]').forEach(b => b.onclick = () => { const k = b.dataset.fi; f.imp = f.imp.includes(k) ? f.imp.filter(x => x !== k) : [...f.imp, k]; b.setAttribute('aria-pressed', f.imp.includes(k)); rer(); });
@@ -1810,7 +1935,8 @@ PAGES.calendar = () => {
     box.querySelectorAll('[data-step]').forEach(b => b.onclick = () => { CAL.sel = addDay(CAL.sel, (CAL.mode === 'day' ? 1 : 7) * +b.dataset.step); CAL.month = monthKey(CAL.sel); draw(); });
     if (CAL.mode === 'week' && CAL.sel !== today && !refreshing) { const el = document.getElementById('d-' + CAL.sel); if (el) el.scrollIntoView({ block: 'nearest' }); }
   }
-  function draw() { if (!data) return; grid(); list(); }
+  const tnc = mountTradeNews('calTn', { sel: CAL.sel, onPick: d => { CAL.sel = d; CAL.month = monthKey(d); if (CAL.mode === 'day') draw(); else { grid(); list(); } } });
+  function draw() { if (!data) return; grid(); list(); tnc.setSel(CAL.sel); }
   api('calendar', 10 * 60e3).then(d => { data = d; draw(); }).catch(() => { const box = $('#ff'); if (box) box.innerHTML = '<p class="empty">Couldn’t load the calendar. Try again in a minute.</p>'; });
 };
 
