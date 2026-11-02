@@ -773,7 +773,7 @@ function fillDayWhen() {
     }).catch(() => { const wt = el.querySelector('.dp-wt'); if (wt) wt.textContent = `The first hour of your session, ${minsTxt(from)}–${minsTxt(from + 60)} ET, is usually the most active.`; });
   });
 }
-function bottomLine(list) {
+function bottomLine(list, hasPlan = false) {
   const m = {};
   list.forEach((b, i) => {
     const w = ([3, 2, 1][i] || 1) * (b.confirmed === false ? 0.5 : 1), seen = new Set();
@@ -785,9 +785,10 @@ function bottomLine(list) {
   });
   const rows = Object.values(m).sort((a, b) => b.w - a.w).slice(0, 4);
   if (!rows.length) return '';
-  const call = x => { const r = x.score / x.w; return r >= 0.5 ? ['up', '↑ Most likely up'] : r >= 0.2 ? ['up', '↗ Leaning up'] : r <= -0.5 ? ['down', '↓ Most likely down'] : r <= -0.2 ? ['down', '↘ Leaning down'] : ['', '↕ No clear direction']; };
+  // With the Your day call above, this box only says what the headlines alone point to (the main call uses news AND price)
+  const call = x => { const r = x.score / x.w; return hasPlan ? (r >= 0.2 ? ['up', '↗ Headlines lean up'] : r <= -0.2 ? ['down', '↘ Headlines lean down'] : ['', '↕ Headlines are mixed']) : r >= 0.5 ? ['up', '↑ Most likely up'] : r >= 0.2 ? ['up', '↗ Leaning up'] : r <= -0.5 ? ['down', '↓ Most likely down'] : r <= -0.2 ? ['down', '↘ Leaning down'] : ['', '↕ No clear direction']; };
   const count = x => [x.up && `${x.up} up`, x.down && `${x.down} down`, x.mixed && `${x.mixed} unclear`].filter(Boolean).join(' · ');
-  return `<li class="bsum"><p class="bsum-h">Overall summary</p>${rows.map(x => { const [c, t] = call(x); return `<div class="bsum-r"><span class="pill dir"><b>${esc(x.label)}</b> <i class="${c}">${t.slice(0, 1)}</i> ${t.slice(2)}</span><span class="br">${count(x)} across the ${list.length > 1 ? list.length + ' stories' : 'story'} for ${esc(sessionDay().day)}’s session</span></div>`; }).join('')}${(() => { const ws = list.map(b => b.when).filter(w => w && w.kind !== 'priced').sort((a, b) => a.time - b.time); if (!ws.length) return ''; const w = ws[0]; const txt = w.kind === 'now' ? 'Fresh news is out while futures are trading, so expect the reaction in the next few minutes.' : w.kind === 'reopen' ? `Markets are closed, so these stories hit price ${w.label}.` : `Next likely move: ${w.label}${w.typical ? `, usually about ${unitTxt(w.typical, w.unit)} in that ${w.step === 60 ? 'hour' : 'half hour'}` : ''}.`; return `<div class="bsum-r"><span class="pill when">⏱ ${esc(whenPill(w))}</span><span class="br">${esc(txt)}</span></div>`; })()}<p class="bsum-n">Weighs each story’s usual market reaction, with the top story counting most and stories only one outlet has reported counting half. A lean, not a promise.</p></li>`;
+  return `<li class="bsum"><p class="bsum-h">${hasPlan ? 'What the headlines say' : 'Overall summary'}</p>${rows.map(x => { const [c, t] = call(x); return `<div class="bsum-r"><span class="pill dir"><b>${esc(x.label)}</b> <i class="${c}">${t.slice(0, 1)}</i> ${t.slice(2)}</span><span class="br">${count(x)} across the ${list.length > 1 ? list.length + ' stories' : 'story'} for ${esc(sessionDay().day)}’s session</span></div>`; }).join('')}${(() => { const ws = list.map(b => b.when).filter(w => w && w.kind !== 'priced').sort((a, b) => a.time - b.time); if (!ws.length) return ''; const w = ws[0]; const txt = w.kind === 'now' ? 'Fresh news is out while futures are trading, so expect the reaction in the next few minutes.' : w.kind === 'reopen' ? `Markets are closed, so these stories hit price ${w.label}.` : `Next likely move: ${w.label}${w.typical ? `, usually about ${unitTxt(w.typical, w.unit)} in that ${w.step === 60 ? 'hour' : 'half hour'}` : ''}.`; return `<div class="bsum-r"><span class="pill when">⏱ ${esc(whenPill(w))}</span><span class="br">${esc(txt)}</span></div>`; })()}<p class="bsum-n">Weighs each story’s usual market reaction, with the top story counting most and stories only one outlet has reported counting half. A lean, not a promise.</p></li>`;
 }
 // Track record from the Scorecard: how calls for this market did one hour later (last 30 days)
 const REC_KEY = { futures: 'NQ', stocks: 'NQ', options: 'NQ', crypto: 'BTC', memes: 'BTC', forex: 'EURUSD' };
@@ -797,9 +798,9 @@ function recLine(effs, rec) {
   (effs || []).forEach(e => {
     if (e.paused || e.dir === 'mixed') return;
     const k = REC_KEY[e.market]; if (!k || seen.has(k)) return; seen.add(k);
-    const t = (rec.byMarket.find(x => x.market === k) || {}).hour; if (!t) return;
+    const t = (rec.byMarket.find(x => x.market === k) || {}).close; if (!t) return;
     const n = t.right + t.wrong; if (n < 5) return;
-    out.push(`${esc(CALL_NAME[k] || k)} calls were right ${Math.round(t.right / n * 100)}% of the time an hour later (${n} graded)`);
+    out.push(`${esc(CALL_NAME[k] || k)} calls were right ${Math.round(t.right / n * 100)}% of the time by the close (${n} graded)`);
   });
   return out.length ? `<p class="brec">Track record: ${out.join('; ')}. <a href="/scorecard">Scorecard</a></p>` : '';
 }
@@ -809,7 +810,7 @@ function briefingHTML(d, { empty = 'No major stories for this market right now.'
   const showWhy = isBeginner() || depth() === 'deep';
   const seenWhy = new Set();
   const group = effs => { const g = []; (effs || []).forEach(e => { const k = e.dir + '|' + e.reason + '|' + !!e.paused; const f = g.find(x => x.k === k); if (f) f.label += ' · ' + e.label; else g.push({ ...e, k }); }); return g; };
-  return dayPlanHTML(d.dayplan) + bottomLine(list) + list.map((b, i) => { const dupWhy = b.why && seenWhy.has(b.why); if (b.why) seenWhy.add(b.why); const raw = b.effects; b = { ...b, why: dupWhy ? '' : b.why, effects: group(b.effects) };
+  return dayPlanHTML(d.dayplan) + bottomLine(list, !!(d.dayplan && d.dayplan.length)) + list.map((b, i) => { const dupWhy = b.why && seenWhy.has(b.why); if (b.why) seenWhy.add(b.why); const raw = b.effects; b = { ...b, why: dupWhy ? '' : b.why, effects: group(b.effects) };
     const isNew = fresh && fresh.has(b.id || b.link);
     return `<li class="bc${isNew ? ' bc-new' : ''}">
     <span class="bn">${String(i + 1).padStart(2, '0')}</span>
@@ -2115,11 +2116,11 @@ PAGES.scorecard = () => {
   });
   fill('scBody', 'the scorecard', api('calls', 5 * 60e3), d => {
     if (!d.ready) return `<div class="sc-empty"><p><b>The scorecard is being set up.</b> Calls will start showing here once tracking is switched on.</p></div>`;
-    if (!d.total) return `<div class="sc-empty"><p><b>No calls logged yet.</b> The first ones appear the next time the briefing makes an up or down call.</p></div>`;
+    if (!d.total) return `<div class="sc-empty"><p><b>New record started November 2.</b> The call rules were improved: no calls against the last hour of price, fresh stories only, graded at the close. Earlier calls came from the old rules and no longer count. New calls show up here as they are graded.</p></div>`;
     const s = d.summary;
-    return `<div class="sc-tiles">${scoreTile('Right after 1 hour', s.hour)}${scoreTile('Right at the close', s.close)}</div>
+    return `<div class="sc-tiles">${scoreTile('Right by the close', s.close, 'The main grade: news plays out over the session, not the first hour')}${scoreTile('Right after 1 hour', s.hour, 'The first hour is mostly noise and fake-outs')}</div>
       <p class="sc-fine">Last ${d.days} days, ${d.total} calls. “Barely moved” means price moved less than a normal hourly wiggle (0.1% for NQ, 0.3% for Bitcoin, 0.05% for EUR/USD), so it isn’t counted either way. Calls made while a market is closed are checked from when it reopens.</p>
-      ${d.byMarket.length > 1 ? `<h2 class="sec">By market</h2><div class="sc-mk">${d.byMarket.map(b => `<div class="sc-mrow"><b>${esc(CALL_NAME[b.market] || b.market)}</b><span>1 hour: ${hitRate(b.hour) == null ? '—' : hitRate(b.hour) + '%'} <small>(${b.hour.right + b.hour.wrong} graded)</small></span><span>Close: ${hitRate(b.close) == null ? '—' : hitRate(b.close) + '%'} <small>(${b.close.right + b.close.wrong} graded)</small></span></div>`).join('')}</div>` : ''}
+      ${d.byMarket.length > 1 ? `<h2 class="sec">By market</h2><div class="sc-mk">${d.byMarket.map(b => `<div class="sc-mrow"><b>${esc(CALL_NAME[b.market] || b.market)}</b><span>By the close: ${hitRate(b.close) == null ? '—' : hitRate(b.close) + '%'} <small>(${b.close.right + b.close.wrong} graded)</small></span><span>1 hour: ${hitRate(b.hour) == null ? '—' : hitRate(b.hour) + '%'} <small>(${b.hour.right + b.hour.wrong} graded)</small></span></div>`).join('')}</div>` : ''}
       <h2 class="sec">Latest calls</h2>
       <div class="sc-list" role="table" aria-label="Latest calls">
         <div class="sc-row sc-head" role="row"><span role="columnheader">Call</span><span role="columnheader">Story</span><span role="columnheader">After 1 hour</span><span role="columnheader">At the close</span></div>

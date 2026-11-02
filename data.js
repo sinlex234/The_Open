@@ -2184,6 +2184,12 @@ function checkCalls(effects, t, px) {
     // No lean in the headline itself: if the market has clearly answered since the story, show that reaction
     if (e.dir === "mixed" && !e.held && Date.now() - t >= 15 * 6e4 && Math.abs(pct) >= c.against) return { ...e, dir: pct > 0 ? "up" : "down", by: "market", reason: `The headline alone doesn\u2019t say which way, but the market has answered: ${txt}.` };
     if (e.dir === "mixed") return e;
+    // Rule from the call audit: calls against the last hour's price move were right only 31% of the time
+    const hrAgo = priceAt(bars, Date.now() - 36e5);
+    if (hrAgo) {
+      const pre = (p1 - hrAgo) / hrAgo * 100, lim = c.against / 3;
+      if (e.dir === "up" ? pre <= -lim : pre >= lim) return { ...e, dir: "mixed", held: e.dir, paused: true, reason: `No call: ${c.name} has moved ${pre > 0 ? "up" : "down"} ${Math.abs(pre).toFixed(2)}% over the last hour, the opposite way to this story. When price and the headline disagree, price usually wins.` };
+    }
     if (against) return { ...e, dir: "mixed", held: e.dir, paused: true, reason: `Call paused: price disagrees. ${txt}, so the market isn\u2019t taking this story the usual way.` };
     if (agrees) return { ...e, agrees: true, reason: `${e.reason} So far price agrees: ${txt}.` };
     return e;
@@ -2433,8 +2439,9 @@ async function dayPlanFor(prof, states, events, now) {
     const lv = dayLevels(L, c.dp, c.unit);
     // Score: news lean + price trend + the latest Live read
     const pr = pulse.find((p) => p.market === PULSE_OF[m]);
-    const newsS = st.bias === "up" ? 1 : st.bias === "down" ? -1 : 0;
-    const trendS = st.trend === "up" ? 0.7 : st.trend === "down" ? -0.7 : 0;
+    // From the call audit: price beat headlines when they disagreed, so price carries more weight
+    const newsS = st.bias === "up" ? 0.7 : st.bias === "down" ? -0.7 : 0;
+    const trendS = st.trend === "up" ? 1 : st.trend === "down" ? -1 : 0;
     const pulseS = pr && pr.lean === "up" ? (pr.conf === "high" ? 0.8 : 0.5) : pr && pr.lean === "down" ? -(pr.conf === "high" ? 0.8 : 0.5) : 0;
     const score = newsS + trendS + pulseS;
     // Always lean one way for the session: overall score first, then the Live read, the trend, the news, then today's move
@@ -2909,8 +2916,10 @@ function callsToLog(allStories, upcoming, pick, px) {
   Object.entries(CALL_MKTS).forEach(([key, c]) => {
     const prof = [{ m: c.m, assets: c.assets, strats: [] }];
     briefingFor(allStories, prof, upcoming, c.m, px).forEach((b) => {
-      const e = (b.effects || []).find((x) => x.market === c.m && x.dir !== "mixed");
+      const e = (b.effects || []).find((x) => x.market === c.m && x.dir !== "mixed" && x.by !== "market");
       if (!e || !b.id) return;
+      // Fresh stories only: a call on hours-old news is graded on a move that already happened
+      if (!b.time || Date.now() - b.time > 45 * 6e4) return;
       const q = pick(c.sym);
       rows.push({ story_id: String(b.id).slice(0, 120), market: key, dir: e.dir, headline: String(b.headline).slice(0, 300), source: String(b.source || "").slice(0, 120), link: String(b.link || "").slice(0, 1000), outlets: b.sources ? b.sources.length : 1, price: q && q.price != null ? +q.price : null });
     });
@@ -2947,8 +2956,10 @@ function grade(bars, from, to, c, dir) {
   const result = Math.abs(pct2) < c.flat ? "flat" : (pct2 > 0) === (dir === "up") ? "right" : "wrong";
   return { result, from: +p0.toFixed(c.dp), to: +p1.toFixed(c.dp), moved, unit: c.unit, pct: +pct2.toFixed(2) };
 }
+// The record restarts when the call rules changed (Nov 2, 2026): earlier calls came from the old reader
+var CALLS_SINCE = Date.parse("2026-11-02T08:00:00Z");
 async function buildCalls() {
-  const since = new Date(Date.now() - 30 * 864e5).toISOString();
+  const since = new Date(Math.max(CALLS_SINCE, Date.now() - 30 * 864e5)).toISOString();
   let rows;
   try {
     rows = await sb(`open_calls?select=story_id,market,dir,headline,source,link,outlets,price,called_at&called_at=gte.${since}&order=called_at.desc&limit=600`);
