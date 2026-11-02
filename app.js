@@ -1325,7 +1325,7 @@ function tnRead(date, events, earn) {
   const kind = lead ? tnKind(lead.title + ' ' + (lead.name || '')) : null;
   const sx = kind ? TN_SURPRISE[kind] : null;
   const impact = tnSyms().map(sym => {
-    if (!lead) return { sym, size: reps.length && sym === 'NQ' ? 'Earnings after the close' : 'Small', text: reps.length && sym === 'NQ' ? `Watch the evening session: ${reps.map(r => r.symbol).join(', ')} report.` : 'No scheduled release likely to move it much.' };
+    if (!lead) return { sym, size: reps.length && sym === 'NQ' ? 'Evening' : 'Small', text: reps.length && sym === 'NQ' ? `Watch the evening session: ${reps.map(r => r.symbol).join(', ')} report.` : 'No scheduled release likely to move it much.' };
     const d = sx[sym];
     return { sym, size: level === 3 ? 'Large' : 'Medium', dir: d, text: d === 'mixed' ? `Can go either way at ${fmtTime(lead.time)}. Wait for the first reaction.` : `If ${sx.hot}, ${TN_NAME[sym]} usually ${d === 'up' ? 'rises' : 'falls'}. ${sx.soft} usually does the opposite.` };
   });
