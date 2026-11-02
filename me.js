@@ -256,6 +256,20 @@ function migrate(o) {
 // ================= state =================
 export const me = { user: null, name: '', answers: null, alerts: { results: true, ...ls.get('alerts', { news: true, lead: 5, breaking: true, sessions: true, levels: false }) } };
 let sb = null, onReadyCb = null, readyFired = false;
+// ---------- plan (Free / Plus / Pro) ----------
+export const plan = { tier: 'free', loaded: false, lifetime: false, used: 0, limit: 3, admin: false, has_billing: false, period_end: null, source: null, status: null };
+export const isPaid = () => plan.tier === 'plus' || plan.tier === 'pro';
+export async function authToken() { if (!sb) return null; const { data } = await sb.auth.getSession(); return data && data.session ? data.session.access_token : null; }
+export async function rpc(fn, args = {}) { if (!sb) throw new Error('Sign in first.'); const { data, error } = await sb.rpc(fn, args); if (error) throw new Error(error.message); return data; }
+export async function loadPlan() {
+  const before = plan.tier;
+  if (!sb || !me.user) Object.assign(plan, { tier: 'free', loaded: true, lifetime: false, used: 0, limit: 3, admin: false, has_billing: false });
+  else { try { Object.assign(plan, await rpc('open_my_plan'), { loaded: true }); } catch { plan.loaded = true; } }
+  if (before !== plan.tier || !plan.seen) { plan.seen = true; window.dispatchEvent(new Event('open:plan')); }
+  renderAccount();
+  return plan;
+}
+export const signedIn = () => !!(sb && me.user);
 const configured = !!(SUPABASE_URL && SUPABASE_KEY && window.supabase);
 
 // ================= profile helpers used by the pages =================
@@ -726,9 +740,11 @@ function openMenu() {
     <button class="am-item" id="amEdit">Edit my setup</button>
     <button class="am-item" id="amAlerts">Alerts</button>
     <label class="am-tz" for="amTz"><span>Time zone</span><select id="amTz">${TZ_LIST.map(([v, l]) => `<option value="${v}" ${v === tzChoice() ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label>
+    <a class="am-item am-plan" href="/plans" id="amPlan"><span>Plan</span><b class="plan-badge ${plan.tier}">${{ free: 'Free', plus: 'Plus', pro: 'Pro' }[plan.tier] || 'Free'}${plan.lifetime ? ' · lifetime' : ''}</b></a>
     ${me.user ? '<button class="am-item danger" id="amOut">Sign out</button>' : ''}`;
   m.hidden = false;
   $('#amEdit').onclick = () => { m.hidden = true; editSetup(); };
+  $('#amPlan').onclick = () => { m.hidden = true; };
   $('#amAlerts').onclick = () => { m.hidden = true; openAlerts(); };
   $('#amTz').onchange = e => setTZ(e.target.value);
   if ($('#amOut')) $('#amOut').onclick = async () => { m.hidden = true; await sb.auth.signOut(); };
@@ -812,6 +828,7 @@ async function afterSignIn(user) {
   const saved = await loadAnswers();
   if (saved) { me.answers = saved; if (saved.alerts) me.alerts = { ...me.alerts, ...saved.alerts }; }
   hideGate(); renderAccount();
+  loadPlan();
   startWizardIfNeeded();
 }
 function ready() {
@@ -835,7 +852,7 @@ export async function initMe(onReady) {
       if (handled === session.user.id) return; handled = session.user.id;
       setTimeout(() => afterSignIn(session.user), 0);
     } else if (event === 'INITIAL_SESSION' || event === 'SIGNED_OUT') {
-      handled = null; me.user = null; me.answers = null;
+      handled = null; me.user = null; me.answers = null; loadPlan();
       if (event === 'SIGNED_OUT') { readyFired = false; if (location.pathname !== '/') { history.pushState(null, '', '/'); dispatchEvent(new PopStateEvent('popstate')); } }
       showGate();
     }

@@ -46,7 +46,7 @@
       }
     },
     {
-      "src": "/(today|news|markets|futures|forex|crypto|memes|memecoins|options|calendar|economy|earnings|glossary|heatmaps|movers|scorecard)/?",
+      "src": "/(today|news|markets|futures|forex|crypto|memes|memecoins|options|calendar|economy|earnings|glossary|heatmaps|movers|scorecard|plans)/?",
       "dest": "/index.html"
     },
     {

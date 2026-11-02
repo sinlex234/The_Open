@@ -939,7 +939,7 @@ function headlineFor(todayBig, n) {
   if (todayBig.length) return `${todayBig[0].name} is the one to watch today`;
   return "A quiet calendar. Price levels do the talking today";
 }
-async function build7(selected = ["futures"]) {
+async function build7(selected = ["futures"], q = {}) {
   const want = new Set(selected);
   const now = Date.now(), n = ny(now);
   const jobs = { cal: build(), fut: build2("futures"), earn: build5(), news: build6("all") };
@@ -1010,7 +1010,7 @@ async function build7(selected = ["futures"]) {
   }
   let out = { headline: headlineFor(todayBig, n), paragraphs, nextEvent: later[0] ? { name: later[0].name, time: later[0].time } : null, source: "rules" };
   const key = process.env.ANTHROPIC_API_KEY;
-  if (key) {
+  if (key && aiOn(q, "plus")) {
     try {
       const r = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
@@ -1514,6 +1514,9 @@ async function build10(key = "NQ") {
 
 // api/_lib/ai.js
 var hasAI = () => !!process.env.ANTHROPIC_API_KEY;
+// Plans: free < plus < pro. q.__tier is set by the router from the signed-in user's token.
+var TIER_RANK = { free: 0, plus: 1, pro: 2 };
+var aiOn = (q, need) => hasAI() && (TIER_RANK[(q && q.__tier) || "free"] || 0) >= TIER_RANK[need];
 // ---------- fact check: every number and name the AI writes must appear in the data it was given ----------
 var VET_OK_WORDS = new Set("i a an the it its this that these those they their there here what why how when where who which while if but and or so as at by for from in into of on to with without after before since until up down over under more most less least very just still also only now today tomorrow yesterday tonight week weekend month year session sessions market markets stocks stock bonds bond dollar dollars euro yen pound sterling oil gold silver bitcoin ether ethereum crypto memecoins memecoin solana tech futures options forex commodities currencies index indexes us u.s. usa america american americans wall street fed fomc ecb boj boe treasury treasuries nasdaq s&p dow asia asian london new york europe european japan japanese china chinese uk britain british ai vix cpi ppi pce gdp pmi ism nfp monday tuesday wednesday thursday friday saturday sunday january february march april may june july august september october november december et est edt pt utc gmt nq es btc eth sol eur usd jpy gbp chf aud cad cny eur/usd usd/jpy gbp/usd likely watch higher lower big biggest no yes not one two three four five six seven eight nine ten first next last the open one buyers sellers traders investors overall bottom line summary new shares analysts investors traders prices price yields yield rates rate expect expected look some many both each even meanwhile however because despite inflation jobs earnings growth risk nothing little few any all another other further mixed calm volatility sellers buyers reports report data news story stories headline headlines release releases central bank banks government officials president lawmakers congress white house senate demand supply energy if until then once trade trading talks deal deals war tariffs tariff sanctions economy economic global world quiet strong weak early late morning afternoon evening open close dip rally move moves drop drops gains losses volume sentiment mood pressure focus attention".split(" "));
 function vetNums(text) {
@@ -2402,8 +2405,8 @@ async function build11(q = {}) {
   const outlook = buildOutlook(events, nextUp, res.earn, mood);
   facts.scheduled_next = outlook.map((o) => ({ title: o.title, when: o.when, forecast_note: o.likely }));
   facts.mood = mood;
-  let out = null, aiStatus = hasAI() ? "ok" : "no key";
-  if (hasAI()) {
+  let out = null, aiStatus = !hasAI() ? "no key" : aiOn(q, "pro") ? "ok" : "plan";
+  if (aiOn(q, "pro")) {
     try {
       const ai = await askClaude({
         maxTokens: 3200,
@@ -2442,7 +2445,7 @@ Pick the 4-6 most important stories, world events first. effects should only lis
   const allStories = (res.news && res.news.items || []).filter((h) => h.time && stillUseful(h, focus ? [focus] : prof.map((x) => x.m), now));
   const px = await priceBars().catch(() => null);
   out.briefing = briefingFor(allStories, prof, upcoming, focus, px);
-  out.aiReads = await aiBriefReads(out.briefing).catch((e) => "error: " + String(e.message || e).slice(0, 120));
+  out.aiReads = aiOn(q, "plus") ? await aiBriefReads(out.briefing).catch((e) => "error: " + String(e.message || e).slice(0, 120)) : "plan";
   // When each story is most likely to hit price: its test time, with how much that slot usually moves
   {
     const m0 = focus || (prof.find((x) => x.m !== "learning") || {}).m || "futures";
@@ -2518,7 +2521,7 @@ async function build12(q) {
   if (!title) throw new Error("No headline given");
   const tag = tagHeadline({ title, summary });
   let aiErr = null;
-  if (hasAI()) {
+  if (aiOn(q, "plus")) {
     try {
       const ai = await askClaude({
         maxTokens: 900,
@@ -2540,7 +2543,7 @@ Return ONLY JSON: {"what": "1-2 sentences: what happened, in plain English", "wh
     reaction: reaction2 ? `Since the story broke: ${reaction2}.` : "Too early to measure a reaction.",
     for_you: tag.markets && tag.markets.length ? `It mainly touches ${[...new Set(tag.markets.map((m) => names[m] || m))].join(", ")}.` : "",
     source: "rules",
-    aiStatus: hasAI() ? "error: " + (aiErr || "unknown") : "no key"
+    aiStatus: !hasAI() ? "no key" : aiOn(q, "plus") ? "error: " + (aiErr || "unknown") : "plan"
   };
 }
 
@@ -2606,8 +2609,8 @@ async function build14(q = {}) {
     seenTheme[i.theme] = (seenTheme[i.theme] || 0) + 1;
     picked.push({ title: i.title, link: i.link, source: i.source, time: i.time, theme: i.themeLabel, effect: MEME_EFFECT[i.theme] || "" });
   });
-  let ai = null, aiStatus = hasAI() ? "ok" : "no key";
-  if (hasAI() && picked.length) {
+  let ai = null, aiStatus = !hasAI() ? "no key" : aiOn(q, "pro") ? "ok" : "plan";
+  if (aiOn(q, "pro") && picked.length) {
     try {
       const r = await askClaude({
         maxTokens: 1400,
@@ -2621,7 +2624,7 @@ Return ONLY JSON: {"summary": "2 sentences: what is driving memecoins right now"
     }
   }
   let theses = {};
-  if (hasAI() && m.hot.length) {
+  if (aiOn(q, "pro") && m.hot.length) {
     try {
       const pick2 = m.hot.slice(0, 10);
       const r2 = await askClaude({
@@ -3045,6 +3048,174 @@ async function buildPulseScore() {
   }).filter(Boolean);
   return { ready: true, days: 14, total: reads.length, summary: sum, byConf, byMarket: by, reads: reads.slice(0, 30), updated: Date.now() };
 }
+// ---------- plans: who the reader is, what they can use, and payments ----------
+class HttpErr extends Error { constructor(status, msg, extra) { super(msg); this.status = status; this.extra = extra || {}; } }
+var bearer = (req) => { const h = String((req.headers || {}).authorization || ""); return /^Bearer\s+\S+$/i.test(h) ? h.split(/\s+/)[1] : null; };
+async function sbAs(token, path, body) {
+  const ctrl = new AbortController(), t = setTimeout(() => ctrl.abort(), 6e3);
+  try {
+    const r = await fetch(`${SB_URL}${path}`, { method: body ? "POST" : "GET", signal: ctrl.signal, headers: { apikey: SB_KEY, Authorization: "Bearer " + token, "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : void 0 });
+    const txt = await r.text();
+    if (!r.ok) throw new HttpErr(r.status === 401 ? 401 : 502, r.status === 401 ? "signin" : `Supabase ${r.status}: ${txt.slice(0, 120)}`);
+    return txt ? JSON.parse(txt) : null;
+  } finally { clearTimeout(t); }
+}
+var rpcAs = (token, fn, args = {}) => sbAs(token, `/rest/v1/rpc/${fn}`, args);
+// The reader's plan, from their own sign-in token (cached briefly so pages don't ask every time)
+async function tierFor(req) {
+  const tok = bearer(req);
+  if (!tok) return "free";
+  return memo("tier:" + tok.slice(-40), 3 * 6e4, async () => { const p = await rpcAs(tok, "open_my_plan"); return p && TIER_RANK[p.tier] != null ? p.tier : "free"; }).catch(() => "free");
+}
+async function readBody(req, raw = false) {
+  if (!raw && req.body && typeof req.body === "object" && !Buffer.isBuffer(req.body)) return req.body;
+  if (typeof req.body === "string") return raw ? req.body : JSON.parse(req.body || "{}");
+  if (Buffer.isBuffer(req.body)) return raw ? req.body.toString("utf8") : JSON.parse(req.body.toString("utf8") || "{}");
+  const chunks = [];
+  for await (const c of req) chunks.push(typeof c === "string" ? Buffer.from(c) : c);
+  const txt = Buffer.concat(chunks).toString("utf8");
+  return raw ? txt : JSON.parse(txt || "{}");
+}
+var AIR_MKTS = { NQ: "NQ (Nasdaq 100 futures)", ES: "ES (S&P 500 futures)", BTC: "Bitcoin", ETH: "Ether", SOL: "Solana", EURUSD: "EUR/USD", GBPUSD: "GBP/USD", USDJPY: "USD/JPY", GOLD: "Gold" };
+async function meter(tok, cost, need) {
+  const use = await rpcAs(tok, "open_use_ai", { cost, need });
+  if (!use || !use.ok) {
+    const why = use && use.why;
+    throw new HttpErr(why === "signin" ? 401 : 402, why === "tier" ? "This is part of " + (need === "pro" ? "Pro" : "Plus") + "." : why === "limit" ? `You’ve used all ${use.limit} AI reads for today. They reset at midnight New York time.` : "Sign in to use AI reads.", { why, tier: use && use.tier, used: use && use.used, limit: use && use.limit });
+  }
+  return use;
+}
+// AI read: one click on a story, how each of your markets most likely reacts
+async function aiRead(req) {
+  const tok = bearer(req);
+  if (!tok) throw new HttpErr(401, "Sign in to use AI reads.", { why: "signin" });
+  if (!hasAI()) throw new HttpErr(503, "AI reads aren’t switched on yet.");
+  const b = await readBody(req);
+  const headline = String(b.headline || "").replace(/\s+/g, " ").trim().slice(0, 300);
+  if (!headline) throw new HttpErr(400, "No headline given");
+  const mk = [...new Set((Array.isArray(b.markets) ? b.markets : []).map(String).filter((x) => AIR_MKTS[x]))].slice(0, 3);
+  if (!mk.length) mk.push("NQ");
+  const use = await meter(tok, 1, "free");
+  const res = await memo("ar:" + headline + "|" + mk.join(","), 30 * 6e4, () => askClaude({
+    system: VOICE + `
+You read one market headline and say how each named market most likely reacts over the next few hours.
+- "dir" is "up", "down" or "unclear". Pick a side whenever a typical professional trader would lean one way. "unclear" only if it truly cuts both ways or doesn't touch that market.
+- "conf" is "high", "medium" or "low".
+- "why": one sentence, plain English, max 24 words, no advice.
+- "take": one sentence on the bigger picture: is this new information or already known, and how long it may matter.
+Reply with JSON only: {"reads":[{"m":"NQ","dir":"down","conf":"medium","why":"..."}],"take":"..."}`,
+    user: `Headline: "${headline}"\nMarkets: ${mk.map((k) => k + " = " + AIR_MKTS[k]).join("; ")}`,
+    maxTokens: 500
+  }));
+  const reads = ((res && res.reads) || []).filter((r) => mk.includes(r.m) && /^(up|down|unclear)$/.test(r.dir) && r.why).map((r) => ({ m: r.m, label: AIR_MKTS[r.m].replace(/ \(.*/, ""), dir: r.dir, conf: /^(high|medium|low)$/.test(r.conf) ? r.conf : "low", why: String(r.why).slice(0, 220) }));
+  if (!reads.length) throw new HttpErr(502, "The AI didn’t give a usable answer. Try again in a minute.");
+  return { reads, take: res.take ? String(res.take).slice(0, 260) : "", used: use.used, limit: use.limit, tier: use.tier };
+}
+// Pro: deep dive on one story
+async function aiDeep(req) {
+  const tok = bearer(req);
+  if (!tok) throw new HttpErr(401, "Sign in first.", { why: "signin" });
+  if (!hasAI()) throw new HttpErr(503, "AI isn’t switched on yet.");
+  const b = await readBody(req);
+  const headline = String(b.headline || "").replace(/\s+/g, " ").trim().slice(0, 300);
+  if (!headline) throw new HttpErr(400, "No headline given");
+  const mk = [...new Set((Array.isArray(b.markets) ? b.markets : []).map(String).filter((x) => AIR_MKTS[x]))].slice(0, 3);
+  if (!mk.length) mk.push("NQ");
+  const prof = parseProfile(String(b.p || ""));
+  const use = await meter(tok, 3, "pro");
+  const res = await memo("ad:" + headline + "|" + mk.join(",") + "|" + String(b.p || "").slice(0, 200), 30 * 6e4, () => askClaude({
+    system: VOICE + "\n" + profileText(prof, "pro", "balanced") + `
+Give a short deep dive on one headline for these markets. Plain English, no advice, only what the headline supports.
+Reply with JSON only: {"bull":"if it plays out bullish, what happens and why (max 35 words)","bear":"the bearish version (max 35 words)","flip":"what news or price action would change the read (max 30 words)","watch":["2 or 3 short things to watch next"],"fit":"how this fits the reader's strategies (max 35 words)"}`,
+    user: `Headline: "${headline}"\nMarkets: ${mk.map((k) => AIR_MKTS[k]).join("; ")}`,
+    maxTokens: 700
+  }));
+  const pickS = (v, n) => typeof v === "string" ? v.slice(0, n) : "";
+  return { bull: pickS(res && res.bull, 300), bear: pickS(res && res.bear, 300), flip: pickS(res && res.flip, 260), watch: ((res && res.watch) || []).filter((x) => typeof x === "string").slice(0, 3), fit: pickS(res && res.fit, 300), used: use.used, limit: use.limit };
+}
+// ---------- Stripe (keys live in Vercel settings, never in this file) ----------
+var STRIPE = () => ({ key: process.env.STRIPE_SECRET_KEY, hook: process.env.STRIPE_WEBHOOK_SECRET, plus: process.env.STRIPE_PRICE_PLUS, pro: process.env.STRIPE_PRICE_PRO, sync: process.env.OPEN_SYNC_SECRET });
+var SITE = "https://the-open-one.vercel.app";
+function form(obj, pre = "", out = []) {
+  Object.entries(obj).forEach(([k, v]) => { if (v == null) return; const key = pre ? `${pre}[${k}]` : k; if (typeof v === "object") form(v, key, out); else out.push(encodeURIComponent(key) + "=" + encodeURIComponent(v)); });
+  return out.join("&");
+}
+async function stripeApi(path, body) {
+  const S = STRIPE();
+  const r = await fetch("https://api.stripe.com/v1/" + path, { method: body ? "POST" : "GET", headers: { Authorization: "Bearer " + S.key, "Content-Type": "application/x-www-form-urlencoded" }, body: body ? form(body) : void 0 });
+  const j = await r.json();
+  if (!r.ok) throw new HttpErr(502, "Stripe: " + (j.error && j.error.message || r.status));
+  return j;
+}
+async function signedInUser(tok) {
+  const u = await sbAs(tok, "/auth/v1/user");
+  if (!u || !u.id) throw new HttpErr(401, "signin");
+  return u;
+}
+async function checkout(req) {
+  const S = STRIPE();
+  if (!S.key || !S.plus || !S.pro) throw new HttpErr(503, "Payments aren’t set up yet.");
+  const tok = bearer(req);
+  if (!tok) throw new HttpErr(401, "Sign in to subscribe.", { why: "signin" });
+  const b = await readBody(req);
+  const tier = b.tier === "pro" ? "pro" : "plus";
+  const u = await signedInUser(tok);
+  const plan = await rpcAs(tok, "open_my_plan");
+  if (plan && plan.lifetime) throw new HttpErr(400, "You already have a lifetime plan.");
+  const cust = await rpcAs(tok, "open_my_customer").catch(() => null);
+  // Already subscribed: send them to Stripe's page to switch or cancel instead of a second subscription
+  if (cust && plan && plan.tier !== "free") return { url: (await stripeApi("billing_portal/sessions", { customer: cust, return_url: SITE + "/plans" })).url };
+  const sess = await stripeApi("checkout/sessions", {
+    mode: "subscription",
+    line_items: { 0: { price: tier === "pro" ? S.pro : S.plus, quantity: 1 } },
+    success_url: SITE + "/plans?paid=1",
+    cancel_url: SITE + "/plans",
+    client_reference_id: u.id,
+    ...(cust ? { customer: cust } : { customer_email: u.email }),
+    allow_promotion_codes: "true",
+    metadata: { user_id: u.id, tier },
+    subscription_data: { metadata: { user_id: u.id, tier } }
+  });
+  return { url: sess.url };
+}
+async function portal(req) {
+  if (!STRIPE().key) throw new HttpErr(503, "Payments aren’t set up yet.");
+  const tok = bearer(req);
+  if (!tok) throw new HttpErr(401, "signin", { why: "signin" });
+  const cust = await rpcAs(tok, "open_my_customer");
+  if (!cust) throw new HttpErr(400, "No subscription to manage.");
+  return { url: (await stripeApi("billing_portal/sessions", { customer: cust, return_url: SITE + "/plans" })).url };
+}
+function stripeSigOk(raw, header, secret) {
+  const parts = Object.fromEntries(String(header || "").split(",").map((x) => x.split("=")).filter((x) => x.length === 2).map(([k, v]) => [k.trim(), v]));
+  const sigs = String(header || "").split(",").filter((x) => x.trim().startsWith("v1=")).map((x) => x.trim().slice(3));
+  if (!parts.t || !sigs.length || Math.abs(Date.now() / 1e3 - +parts.t) > 300) return false;
+  const want = require("crypto").createHmac("sha256", secret).update(parts.t + "." + raw).digest("hex");
+  return sigs.some((s2) => s2.length === want.length && require("crypto").timingSafeEqual(Buffer.from(s2), Buffer.from(want)));
+}
+async function stripeHook(req) {
+  const S = STRIPE();
+  if (!S.hook || !S.sync) throw new HttpErr(503, "Payments aren’t set up yet.");
+  const raw = await readBody(req, true);
+  if (!stripeSigOk(raw, (req.headers || {})["stripe-signature"], S.hook)) throw new HttpErr(400, "Bad signature");
+  const ev = JSON.parse(raw);
+  let sub = null;
+  if (ev.type === "checkout.session.completed" && ev.data.object.subscription) sub = await stripeApi("subscriptions/" + ev.data.object.subscription);
+  else if (/^customer\.subscription\.(created|updated|deleted)$/.test(ev.type)) sub = ev.data.object;
+  if (!sub) return { ok: true, ignored: ev.type };
+  const md = sub.metadata || {};
+  const price = sub.items && sub.items.data && sub.items.data[0] && sub.items.data[0].price && sub.items.data[0].price.id;
+  const tier = md.tier === "pro" || price === S.pro ? "pro" : "plus";
+  const end = sub.current_period_end || (sub.items && sub.items.data && sub.items.data[0] && sub.items.data[0].current_period_end);
+  if (!md.user_id) return { ok: true, ignored: "no user" };
+  await fetch(`${SB_URL}/rest/v1/rpc/open_stripe_sync`, { method: "POST", headers: { apikey: SB_KEY, Authorization: "Bearer " + SB_KEY, "Content-Type": "application/json" },
+    body: JSON.stringify({ secret: S.sync, uid: md.user_id, p_tier: tier, p_status: ev.type === "customer.subscription.deleted" ? "canceled" : sub.status, p_period_end: end ? new Date(end * 1e3).toISOString() : null, p_customer: sub.customer, p_sub: sub.id }) })
+    .then(async (r) => { if (!r.ok) throw new HttpErr(502, "Couldn’t save the plan: " + (await r.text()).slice(0, 120)); });
+  return { ok: true };
+}
+var POST_ROUTES = { airead: aiRead, aideep: aiDeep, checkout, portal, stripe: stripeHook };
+// Routes whose answer depends on the reader's plan
+var PLAN_ROUTES = new Set(["desk", "brief", "explain", "memedesk"]);
 var ROUTES = {
   calendar: [() => build(), 900],
   ffraw: [() => ffRaw(), 1800],
@@ -3053,7 +3224,7 @@ var ROUTES = {
   memes: [() => build4(), 120],
   earnings: [() => build5(), 1800],
   news: [(q) => build6(String(q.section || "all")), 300],
-  brief: [(q) => build7(String(q.markets || "futures").split(",").filter(Boolean)), 600],
+  brief: [(q) => build7(String(q.markets || "futures").split(",").filter(Boolean), q), 600],
   wire: [(q) => build8(String(q.section || "all")), 30],
   movers: [() => build9(), 120],
   recap: [(q) => build10(String(q.sym || "NQ").toUpperCase()), 180],
@@ -3070,13 +3241,31 @@ var ROUTES = {
 };
 async function handler(req, res) {
   const q = req.query || {};
-  const r = ROUTES[String(q.fn || "")];
+  const fn = String(q.fn || "");
+  if (POST_ROUTES[fn]) {
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.setHeader("Cache-Control", "no-store");
+    if (req.method !== "POST") { res.status(405).send('{"error":"Use POST"}'); return; }
+    try { res.status(200).send(JSON.stringify(await POST_ROUTES[fn](req))); }
+    catch (e) { res.status(e.status || 502).send(JSON.stringify({ error: String(e.message || e), ...(e.extra || {}) })); }
+    return;
+  }
+  const r = ROUTES[fn];
   if (!r) {
     res.setHeader("Content-Type", "application/json");
     res.status(404).send('{"error":"unknown data"}');
     return;
   }
   try {
+    // Paid readers get their own, uncached answer; everyone else shares the cached free one
+    if (PLAN_ROUTES.has(fn)) q.__tier = await tierFor(req);
+    if (q.__tier && q.__tier !== "free") {
+      const data = await r[0](q);
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      res.setHeader("Cache-Control", "private, no-store");
+      res.status(200).send(JSON.stringify({ ...data, plan: q.__tier }));
+      return;
+    }
     send(res, await r[0](q), r[1]);
   } catch (e) {
     fail(res, e);

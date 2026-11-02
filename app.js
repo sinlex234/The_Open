@@ -3,7 +3,7 @@ import {
   initMe, me, myMarkets, myAssets, isBeginner, isLearning, depth, hasStrat, levelTrader, intraday, stratsFor,
   forYouEvent, forYouHeadline, forYouStrength, relevance, greeting, windowStatus, startAlerts, openAlerts, editSetup,
   profileQuery, marketLabel, myStruggles, isProp, newsRestricted, notify,
-  userTZ,
+  userTZ, plan, isPaid, authToken, rpc, loadPlan, signedIn,
 } from './me.js';
 import { GLOSSARY } from './glossary.js';
 import { SUPABASE_URL, SUPABASE_KEY } from './config.js';
@@ -58,7 +58,8 @@ const cache = new Map();
 function api(path, maxAgeMs = 90e3) {
   const hit = cache.get(path);
   if (hit && Date.now() - hit.t < maxAgeMs) return hit.p;
-  const p = fetch('/api/data?fn=' + path.replace('?', '&')).then(async r => {
+  const planRoute = isPaid() && /^(desk|brief|explain|memedesk)\b/.test(path);
+  const p = (planRoute ? authToken() : Promise.resolve(null)).then(tok => fetch('/api/data?fn=' + path.replace('?', '&') + (tok ? '&plan=' + plan.tier : ''), tok ? { headers: { Authorization: 'Bearer ' + tok } } : undefined)).then(async r => {
     const j = await r.json().catch(() => ({}));
     if (r.status === 404) throw new Error('the data service isn’t reachable');
     if (!r.ok || j.error) throw new Error(j.error || 'request failed, ' + r.status);
@@ -749,7 +750,8 @@ function briefingHTML(d, { empty = 'No major stories for this market right now.'
       <a class="bh" href="${esc(b.link)}" target="_blank" rel="noopener">${isNew ? '<span class="newtag">New</span>' : ''}${esc(b.headline)}</a>
       <p class="bm">${srcLine(b)}${b.time ? ' · ' + ago(b.time) : ''}${b.topic ? ' · ' + esc(b.topic) : ''}${b.since ? ` · <span class="bm-moved">${reactTxt(b.since)}</span>` : ''}</p>
       ${showWhy && b.why ? `<p class="bwhy">${esc(b.why)}</p>` : ''}
-      <div class="bfx">${b.effects && b.effects.length ? b.effects.map(e => `<div class="beff">${dirPill(e.label, e.dir, e.paused)}${b.when && e === b.effects[0] ? `<span class="pill when">⏱ ${esc(whenPill(b.when))}</span>` : ''}${e.by === 'ai' ? `<span class="pill by-ai" title="Read by AI because the headline alone doesn’t say">AI read${e.conf === 'high' ? ' · high confidence' : ''}</span>` : e.by === 'market' ? '<span class="pill by-mk" title="Based on how price has actually moved since the story">Market reaction</span>' : ''}<span class="br">${esc(e.reason)}</span></div>`).join('') : `<div class="beff">${b.when ? `<span class="pill when">⏱ ${esc(whenPill(b.when))}</span>` : ''}<span class="br">Little direct effect on your markets.</span></div>`}</div>
+      <div class="bfx" data-airh="${esc(b.headline)}">${b.effects && b.effects.length ? b.effects.map(e => `<div class="beff">${dirPill(e.label, e.dir, e.paused)}${b.when && e === b.effects[0] ? `<span class="pill when">⏱ ${esc(whenPill(b.when))}</span>` : ''}${e.by === 'ai' ? `<span class="pill by-ai" title="Read by AI because the headline alone doesn’t say">AI read${e.conf === 'high' ? ' · high confidence' : ''}</span>` : e.by === 'market' ? '<span class="pill by-mk" title="Based on how price has actually moved since the story">Market reaction</span>' : ''}<span class="br">${esc(e.reason)}</span></div>`).join('') : `<div class="beff">${b.when ? `<span class="pill when">⏱ ${esc(whenPill(b.when))}</span>` : ''}<span class="br">Little direct effect on your markets.</span></div>`}</div>
+      ${airBtn(b.headline)}
       ${recLine(raw, rec)}
       <details class="bmore"><summary>Timing and what to watch</summary>
         ${b.when ? `<div class="brow"><span class="bl">When</span><div><span class="br">${esc(whenWhy(b.when, b))}</span></div></div>` : ''}
@@ -1219,7 +1221,7 @@ function nrChips(i) { const d = i.dirs || {}; return nrMarkets().filter(k => d[k
 // Top stories first (one lead, two beside it), then everything else by time. Each row: time, headline, one quiet line.
 function nrMeta(i, explain) {
   const src = `${esc(i.source)}${(i.outlets || i.count) > 1 ? ` +${(i.outlets || i.count) - 1}` : i.confirmed === false && i.impact === 'high' ? ' only' : ''}`;
-  return `<p class="nr-meta">${i.breaking ? '<span class="nr-brk">Breaking</span>' : ''}${nrChips(i)}<span>${src}</span><span>${esc(SECTION_NAMES[i.section] || i.themeLabel || '')}</span>${reactTxt(i.reaction)}${explain ? `<button class="linkbtn wi-x" data-x="${esc(i.id)}" aria-expanded="false">Explain this</button>` : ''}</p>${explain ? `<div class="wi-explain" id="x-${esc(i.id)}" hidden></div>` : ''}`;
+  return `<p class="nr-meta">${i.breaking ? '<span class="nr-brk">Breaking</span>' : ''}${nrChips(i)}<span>${src}</span><span>${esc(SECTION_NAMES[i.section] || i.themeLabel || '')}</span>${reactTxt(i.reaction)}${explain ? `<button class="linkbtn wi-x" data-x="${esc(i.id)}" aria-expanded="false">Explain this</button>` : ''}${airBtn(i.title, true)}</p>${explain ? `<div class="wi-explain" id="x-${esc(i.id)}" hidden></div>` : ''}`;
 }
 function newsroomHTML(items, ranked, mineFirst = true, cap = 10) {
   if (!items.length) return '<p class="empty">No stories match those filters right now.</p>';
@@ -2062,6 +2064,125 @@ PAGES.scorecard = () => {
       </div>${stamp(d)}`;
   });
 };
+
+// ---------- AI read (one click per story) and the Plans page ----------
+const AIR_KEYS = { futures: 'NQ', stocks: 'ES', options: 'ES', crypto: 'BTC', memes: 'SOL', forex: 'EURUSD' };
+const airMarkets = () => { const k = [...new Set(myMarkets().map(m => AIR_KEYS[m]).filter(Boolean))]; return (k.length ? k : ['NQ']).slice(0, 3); };
+const SPARK = '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path fill="currentColor" d="M8 0l1.6 5.1L15 6.6l-4.4 2.9L11.9 15 8 11.6 4.1 15l1.3-5.5L1 6.6l5.4-1.5z"/></svg>';
+function airBtn(headline, inline = false) {
+  return `${inline ? '' : '<div class="air-row">'}<button type="button" class="ai-btn" data-air="${esc(headline)}" aria-expanded="false">${SPARK}AI read</button>${inline ? '' : '</div>'}`;
+}
+const PLAN_NAME = { free: 'Free', plus: 'Plus', pro: 'Pro' };
+function upsellHTML(why, msg) {
+  if (why === 'signin') return `<p class="air-up">Sign in to use AI reads. Everyone gets 3 free a day. <a href="/plans">See plans</a></p>`;
+  if (why === 'limit') return `<p class="air-up">${esc(msg)} ${plan.tier === 'pro' ? '' : `<a href="/plans">Upgrade for more</a>`}</p>`;
+  if (why === 'tier') return `<p class="air-up">${esc(msg)} <a href="/plans">See plans</a></p>`;
+  return `<p class="air-up">${esc(msg || 'Something went wrong. Try again in a minute.')}</p>`;
+}
+async function postAI(fn, body) {
+  const tok = await authToken();
+  const r = await fetch('/api/data?fn=' + fn, { method: 'POST', headers: { 'Content-Type': 'application/json', ...(tok ? { Authorization: 'Bearer ' + tok } : {}) }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) { const e = new Error(j.error || 'Request failed'); e.why = j.why || (r.status === 401 ? 'signin' : ''); throw e; }
+  return j;
+}
+function airResultHTML(x, headline) {
+  const rows = x.reads.map(r => `<div class="air-r"><span class="pill ${r.dir === 'up' ? 'up' : r.dir === 'down' ? 'down' : ''}"><b>${esc(r.label)}</b> ${DIR_TXT[r.dir] || '↕ Unclear'}</span><span class="air-c">${esc(r.conf)} confidence</span><p>${esc(r.why)}</p></div>`).join('');
+  const deep = plan.tier === 'pro' ? `<button type="button" class="linkbtn air-deep" data-deep="${esc(headline)}">Deep dive</button>` : `<a class="linkbtn air-deep-up" href="/plans">Deep dive is part of Pro</a>`;
+  return `<div class="air-head">${SPARK}<b>AI read</b><span>${x.used} of ${x.limit} used today</span></div>${rows}${x.take ? `<p class="air-take">${esc(x.take)}</p>` : ''}<div class="air-foot">${deep}<span>A lean, not a promise. Not financial advice.</span></div><div class="air-deepbox" hidden></div>`;
+}
+document.addEventListener('click', async e => {
+  const b = e.target.closest && e.target.closest('[data-air]');
+  if (b) {
+    e.preventDefault();
+    const host = b.closest('.air-row') || b.closest('.nr-meta') || b.parentElement;
+    let box = host.nextElementSibling && host.nextElementSibling.classList.contains('air-box') ? host.nextElementSibling : null;
+    if (box) { box.remove(); b.setAttribute('aria-expanded', 'false'); return; }
+    box = document.createElement('div'); box.className = 'air-box'; host.after(box); b.setAttribute('aria-expanded', 'true');
+    if (!signedIn()) { box.innerHTML = upsellHTML('signin'); return; }
+    box.innerHTML = `<div class="air-head">${SPARK}<b>AI read</b><span>Reading the story…</span></div>${skel(2)}`;
+    try { const x = await postAI('airead', { headline: b.dataset.air, markets: airMarkets() }); plan.used = x.used; box.innerHTML = airResultHTML(x, b.dataset.air); }
+    catch (err) { box.innerHTML = upsellHTML(err.why, err.message); }
+    return;
+  }
+  const d = e.target.closest && e.target.closest('[data-deep]');
+  if (d) {
+    const dbox = d.closest('.air-box').querySelector('.air-deepbox'); if (!dbox) return;
+    if (!dbox.hidden) { dbox.hidden = true; return; }
+    dbox.hidden = false; dbox.innerHTML = skel(3);
+    try {
+      const x = await postAI('aideep', { headline: d.dataset.deep, markets: airMarkets(), p: (profileQuery().match(/(?:^|&)p=([^&]*)/) || [])[1] ? decodeURIComponent(profileQuery().match(/(?:^|&)p=([^&]*)/)[1]) : '' });
+      dbox.innerHTML = `<dl class="air-dl"><dt>If it plays out bullish</dt><dd>${esc(x.bull)}</dd><dt>If it plays out bearish</dt><dd>${esc(x.bear)}</dd><dt>What would change the read</dt><dd>${esc(x.flip)}</dd>${x.watch.length ? `<dt>Watch next</dt><dd><ul>${x.watch.map(w => `<li>${esc(w)}</li>`).join('')}</ul></dd>` : ''}${x.fit ? `<dt>For your strategies</dt><dd>${esc(x.fit)}</dd>` : ''}</dl>`;
+    } catch (err) { dbox.innerHTML = upsellHTML(err.why, err.message); }
+  }
+});
+
+const TIERS = [
+  { id: 'free', name: 'Free', price: '$0', per: '', tag: 'Everything you use today', feats: ['All news, the Calendar, earnings and “Trade the news?”', 'Briefing calls from the site’s own rules, plus market reactions', 'Live read every 5 minutes, and the Scorecard', '3 AI reads a day when you’re signed in'] },
+  { id: 'plus', name: 'Plus', price: '$10', per: '/ month', tag: 'AI on the stories that matter', feats: ['Everything in Free', 'AI read on any story: 40 a day', 'Your briefing’s “Unclear” calls filled in by AI automatically', 'AI-written morning brief and “Explain this” on every story'] },
+  { id: 'pro', name: 'Pro', price: '$30', per: '/ month', tag: 'The full AI desk', feats: ['Everything in Plus', '250 AI reads a day', 'Deep dive on any story: both scenarios, what would flip it, what to watch, how it fits your strategies', 'AI-written “What’s next” outlook and game plan for your strategies', 'AI theses on memecoins'] }
+];
+PAGES.plans = () => {
+  const paid = new URLSearchParams(location.search).get('paid');
+  layout(`<div class="today-head"><h1 class="page-h">Plans</h1>
+    <p class="page-intro">The news, calendar and rule-based reads stay free. Plus and Pro add AI that reads each story and tells you how your markets most likely react.</p></div>
+    ${paid ? '<p class="callout plans-ok">Thanks! Your payment went through. Your plan updates within a minute.</p>' : ''}
+    <div id="plansNow"></div>
+    <div class="plans">${TIERS.map(t => `<article class="plan-c ${t.id}" data-tier="${t.id}">
+      <p class="plan-n">${t.name}${t.id === 'pro' ? '<span class="pill acc">Best value per read</span>' : ''}</p>
+      <p class="plan-p"><b>${t.price}</b><span>${t.per}</span></p>
+      <p class="plan-t">${esc(t.tag)}</p>
+      <ul>${t.feats.map(f => `<li>${esc(f)}</li>`).join('')}</ul>
+      <div class="plan-cta" data-cta="${t.id}"></div></article>`).join('')}</div>
+    <section class="plan-code"><h2 class="sec">Have a code?</h2><p class="small faint">Lifetime codes give Pro for good. Each code works once.</p>
+      <form id="codeForm" class="code-f"><input id="codeIn" class="search" placeholder="OPEN-XXXX-XXXX-XXXX" autocomplete="off" spellcheck="false" aria-label="Your code"><button class="btn-ghost" type="submit">Redeem</button></form><p class="small" id="codeMsg" role="status"></p></section>
+    <section class="plan-admin" id="planAdmin" hidden></section>
+    <p class="disclaim">Prices in US dollars. Cancel anytime from “Manage billing”; you keep your plan until the end of the period you paid for. AI reads are a lean, not a promise, and not financial advice.</p>`);
+  const draw = () => {
+    const now = $('#plansNow');
+    if (now) now.innerHTML = signedIn() ? `<p class="plans-now">You’re on <b class="plan-badge ${plan.tier}">${PLAN_NAME[plan.tier]}${plan.lifetime ? ' · lifetime' : ''}</b>${plan.period_end && !plan.lifetime ? ` · renews ${new Date(plan.period_end).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}` : ''} · ${plan.used || 0} of ${plan.limit || 3} AI reads used today${plan.has_billing ? ' · <button class="linkbtn" id="billBtn" type="button">Manage billing</button>' : ''}</p>` : '<p class="plans-now">Sign in to pick a plan or use a code.</p>';
+    main.querySelectorAll('[data-cta]').forEach(el => { const t = el.dataset.cta;
+      el.innerHTML = plan.tier === t ? '<span class="plan-cur">Your plan</span>' : t === 'free' ? '' : plan.lifetime ? '<span class="plan-cur">Included in your lifetime plan</span>' : `<button class="${t === 'pro' ? 'btn-primary' : 'btn-ghost'}" type="button" data-buy="${t}">${TIER_RANK_C[t] > TIER_RANK_C[plan.tier] ? 'Get ' + PLAN_NAME[t] : 'Switch to ' + PLAN_NAME[t]}</button>`; });
+    main.querySelectorAll('.plan-c').forEach(c => c.classList.toggle('cur', c.dataset.tier === plan.tier));
+    main.querySelectorAll('[data-buy]').forEach(btn => btn.onclick = async () => {
+      if (!signedIn()) { $('#codeMsg').textContent = ''; btn.textContent = 'Sign in first'; return; }
+      btn.disabled = true; btn.textContent = 'Opening checkout…';
+      try { const x = await postAI('checkout', { tier: btn.dataset.buy }); location.href = x.url; } catch (e) { btn.disabled = false; btn.textContent = e.message; }
+    });
+    const bb = $('#billBtn'); if (bb) bb.onclick = async () => { bb.textContent = 'Opening…'; try { location.href = (await postAI('portal', {})).url; } catch (e) { bb.textContent = e.message; } };
+    drawAdmin();
+  };
+  $('#codeForm').onsubmit = async ev => { ev.preventDefault(); const msg = $('#codeMsg'), v = $('#codeIn').value.trim(); if (!v) return;
+    if (!signedIn()) { msg.textContent = 'Sign in first, then enter your code.'; return; }
+    msg.textContent = 'Checking…';
+    try { const r = await rpc('open_redeem', { code: v }); if (r.ok) { msg.className = 'small ok'; msg.textContent = `Done. You now have ${PLAN_NAME[r.tier]} for life.`; $('#codeIn').value = ''; cache.clear(); await loadPlan(); draw(); } else { msg.className = 'small bad'; msg.textContent = r.why; } }
+    catch (e) { msg.className = 'small bad'; msg.textContent = e.message; } };
+  async function drawAdmin() {
+    const box = $('#planAdmin'); if (!box) return;
+    if (!plan.admin) { box.hidden = true; return; }
+    box.hidden = false;
+    box.innerHTML = `<h2 class="sec">Lifetime codes <span class="faint small">Only you see this</span></h2>
+      <form class="code-f" id="mkForm"><input class="search" id="mkNote" placeholder="Who is it for? (only you see this)" maxlength="80"><select id="mkTier" class="search"><option value="pro">Pro</option><option value="plus">Plus</option></select><button class="btn-primary" type="submit">Make a code</button></form>
+      <div id="mkOut"></div><div id="codeList">${skel(2)}</div>`;
+    $('#mkForm').onsubmit = async ev => { ev.preventDefault(); const out = $('#mkOut');
+      try { const code = await rpc('open_make_code', { p_tier: $('#mkTier').value, p_note: $('#mkNote').value });
+        out.innerHTML = `<div class="code-new"><p class="small faint">Copy it now. For safety it’s only shown once.</p><code>${esc(code)}</code><button class="btn-ghost" type="button" id="cpCode">Copy</button></div>`;
+        $('#cpCode').onclick = () => { navigator.clipboard && navigator.clipboard.writeText(code); $('#cpCode').textContent = 'Copied'; };
+        $('#mkNote').value = ''; listCodes(); } catch (e) { out.innerHTML = `<p class="small bad">${esc(e.message)}</p>`; } };
+    listCodes();
+  }
+  async function listCodes() {
+    const el = $('#codeList'); if (!el) return;
+    try { const rows = await rpc('open_list_codes');
+      el.innerHTML = rows.length ? `<table class="t codes"><tr><th>Code</th><th>For</th><th>Plan</th><th>Status</th><th></th></tr>${rows.map(r => `<tr><td><code>…${esc(r.hint)}</code></td><td>${esc(r.note || '—')}</td><td>${PLAN_NAME[r.tier]}</td><td>${r.revoked ? '<span class="faint">Cancelled</span>' : r.used ? `Used ${new Date(r.used_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}` : 'Not used yet'}</td><td>${r.revoked ? '' : `<button class="linkbtn danger" type="button" data-revoke="${r.id}">Cancel</button>`}</td></tr>`).join('')}</table>` : '<p class="small faint">No codes yet.</p>';
+      el.querySelectorAll('[data-revoke]').forEach(b => b.onclick = async () => { if (b.dataset.sure !== '1') { b.dataset.sure = '1'; b.textContent = 'Sure? Click again'; return; } await rpc('open_revoke_code', { p_id: +b.dataset.revoke }); listCodes(); });
+    } catch (e) { el.innerHTML = `<p class="small bad">${esc(e.message)}</p>`; }
+  }
+  draw();
+  if (signedIn()) loadPlan().then(draw);
+};
+const TIER_RANK_C = { free: 0, plus: 1, pro: 2 };
+addEventListener('open:plan', () => { cache.clear(); if (started) route(); });
 
 // ---------- router ----------
 const ALIASES = { movers: 'markets', memecoins: 'memes', economy: 'calendar', earnings: 'calendar' };
