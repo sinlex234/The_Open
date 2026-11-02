@@ -3,7 +3,7 @@ import {
   initMe, me, myMarkets, myAssets, isBeginner, isLearning, depth, hasStrat, levelTrader, intraday, stratsFor,
   forYouEvent, forYouHeadline, forYouStrength, relevance, greeting, windowStatus, startAlerts, openAlerts, editSetup,
   profileQuery, marketLabel, myStruggles, isProp, newsRestricted, notify,
-  userTZ, plan, isPaid, authToken, rpc, loadPlan, signedIn, mySessions as mySessionsC, followUps,
+  userTZ, plan, isPaid, authToken, rpc, loadPlan, signedIn, mySessions as mySessionsC, followUps, sbClient, setProfileLocal, hasProfile, SESSIONS as SESSIONS_C,
 } from './me.js';
 import { GLOSSARY } from './glossary.js';
 import { SUPABASE_URL, SUPABASE_KEY } from './config.js';
@@ -2265,6 +2265,151 @@ function stickRight() {
 }
 addEventListener('resize', stickRight);
 setInterval(() => { if (document.visibilityState === 'visible') stickRight(); }, 1500);
+// ---------- Profile & badges ----------
+const ICO = {
+  star: '<path d="M12 2.5l2.9 6.1 6.6.8-4.9 4.6 1.3 6.6L12 17.3 6.1 20.6l1.3-6.6L2.5 9.4l6.6-.8z"/>',
+  flame: '<path d="M12 2c1 3.5 5 5.6 5 10.5A5 5 0 0 1 12 22a5 5 0 0 1-5-5c0-2.7 1.6-4 2.6-5.6.3 1.6 1.1 2.6 2.4 3.1C11.4 11 10.9 6 12 2z"/>',
+  bolt: '<path d="M13 2L4 14h7l-1 8 9-12h-7z"/>',
+  crown: '<path d="M3 7l4.5 4L12 4l4.5 7L21 7l-2 12H5z"/>',
+  cal: '<path d="M7 2v3M17 2v3M3 9h18M5 5h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z" fill="none" stroke="currentColor" stroke-width="2"/>',
+  bell: '<path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4zM10 21h4" fill="none" stroke="currentColor" stroke-width="2"/>',
+  check: '<path d="M4 12.5l5 5L20 6.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>',
+  spark: '<path d="M12 2l2.2 6.8L21 11l-6.8 2.2L12 20l-2.2-6.8L3 11l6.8-2.2z"/>',
+  target: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="4.5" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="1.5"/>',
+  shield: '<path d="M12 2l8 3v6c0 5-3.5 9-8 11-4.5-2-8-6-8-11V5z"/>'
+};
+const ico = k => `<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true">${ICO[k] || ICO.star}</svg>`;
+// Each badge: how it's earned, and progress toward it
+const BADGES = [
+  { id: 'founder', name: 'Founder', ico: 'crown', how: 'Runs The Open One', test: s => s.admin },
+  { id: 'lifetime', name: 'Lifetime member', ico: 'shield', how: 'Has a lifetime code', test: s => s.lifetime },
+  { id: 'pro', name: 'Pro', ico: 'spark', how: 'On the Pro plan', test: s => s.tier === 'pro' },
+  { id: 'plus', name: 'Plus', ico: 'spark', how: 'On the Plus plan', test: s => s.tier === 'plus' },
+  { id: 'early', name: 'Early member', ico: 'star', how: 'Joined in 2026, before the crowd', test: s => s.joined && Date.parse(s.joined) < Date.parse('2027-01-01') },
+  { id: 'setup', name: 'All set up', ico: 'check', how: 'Picked markets and strategy in setup', test: () => hasProfile() },
+  { id: 'alerts', name: 'Never miss it', ico: 'bell', how: 'Turned on alerts and notifications', test: () => { try { return 'Notification' in window && Notification.permission === 'granted'; } catch { return false; } } },
+  { id: 'ai1', name: 'First AI read', ico: 'bolt', how: 'Use the AI read once', goal: 1, val: s => s.ai_reads },
+  { id: 'ai25', name: 'AI regular', ico: 'bolt', how: 'Use 25 AI reads', goal: 25, val: s => s.ai_reads },
+  { id: 'ai100', name: 'AI power user', ico: 'bolt', how: 'Use 100 AI reads', goal: 100, val: s => s.ai_reads },
+  { id: 'streak3', name: 'On a roll', ico: 'flame', how: 'Open the site 3 days in a row', goal: 3, val: s => s.best_streak },
+  { id: 'streak7', name: 'Full week', ico: 'flame', how: '7 days in a row', goal: 7, val: s => s.best_streak },
+  { id: 'streak30', name: 'Every session', ico: 'flame', how: '30 days in a row', goal: 30, val: s => s.best_streak },
+  { id: 'days10', name: 'Regular', ico: 'cal', how: 'Active on 10 different days', goal: 10, val: s => s.days_active },
+  { id: 'days50', name: 'Veteran', ico: 'cal', how: 'Active on 50 different days', goal: 50, val: s => s.days_active },
+  { id: 'days100', name: 'Centurion', ico: 'cal', how: 'Active on 100 different days', goal: 100, val: s => s.days_active },
+];
+// Personal badges, built from the answers each person gave in setup: who they are as a trader, and goals tied to their own session
+const STRAT_BADGE = { ict: ['Smart money', 'Trades ICT concepts'], pa: ['Price action purist', 'Reads price, support and resistance'], sd: ['Zone trader', 'Trades supply and demand zones'], orderflow: ['Tape reader', 'Reads order flow and volume'], ind: ['Indicator tuner', 'Trades with indicators'], news: ['Headline hunter', 'Trades the news'], trend: ['Trend rider', 'Follows the trend'], momentum: ['Momentum chaser', 'Trades momentum and breakouts'], fundamentals: ['Macro mind', 'Trades central banks and fundamentals'], value: ['Value hunter', 'Buys good companies cheap'], growth: ['Growth investor', 'Backs fast-growing companies'], index: ['Index investor', 'Buys and holds index funds'], dividends: ['Dividend collector', 'Invests for dividends'], earnings: ['Earnings player', 'Trades earnings'], buy: ['Options buyer', 'Buys calls and puts'], sell: ['Premium seller', 'Sells options premium'], spreads: ['Spread builder', 'Trades option spreads'], zero: ['0DTE', 'Trades same-day options'], perps: ['Leverage pilot', 'Trades perpetual futures'], narratives: ['Sector rotator', 'Rotates between crypto sectors'], onchain: ['On-chain sleuth', 'Reads on-chain data'], launches: ['Launch sniper', 'Catches new launches early'], trending: ['Trend surfer', 'Rides trending coins'], wallets: ['Wallet tracker', 'Copies smart wallets'], hold: ['Diamond hands', 'Holds for the long run'], swing: ['Chart swinger', 'Swing trades the charts'] };
+const HOLD_BADGE = { scalp: ['Scalper', 'In and out in minutes'], minutes: ['Quick flipper', 'Flips in minutes'], day: ['Day trader', 'Flat by the close'], swing: ['Swing trader', 'Holds for days to weeks'], position: ['Position trader', 'Holds for weeks to months'], invest: ['Long game', 'Invests for years'], hold: ['Long game', 'Holds for months or longer'] };
+const SESS_BADGE = { premarket: ['Early riser', 'Watches the hours before the US open'], nyopen: ['Opening bell', 'Trades the New York open'], midday: ['Midday trader', 'Trades the middle of the day'], nyclose: ['Closing bell', 'Trades into the close'], evening: ['After hours', 'Watches the evening'], asia: ['Night owl', 'Trades the Asia session'], london: ['London early bird', 'Trades the London open'], weekend: ['Weekend warrior', 'Watches the weekends'] };
+function personalBadges() {
+  const a = me.answers || {}, out = [], seen = new Set();
+  const add = (id, name, how, ico) => { if (seen.has(name)) return; seen.add(name); out.push({ id, name, how, ico, test: () => true, personal: true }); };
+  const mk = (a.markets || []).filter(m => m !== 'learning');
+  mk.forEach(m => (a[`${m}.strategy`] || []).forEach(st => { const b = STRAT_BADGE[st]; if (b) add('st-' + st, b[0], b[1], 'target'); }));
+  mk.forEach(m => (a[`${m}.hold`] || []).forEach(h => { const b = HOLD_BADGE[h]; if (b) add('hd-' + h, b[0], b[1], 'bolt'); }));
+  const acct = mk.flatMap(m => a[`${m}.account`] || []);
+  if (acct.includes('funded')) add('ac-funded', 'Funded trader', 'Trades a funded prop account', 'shield');
+  else if (acct.includes('eval')) add('ac-eval', 'Prop challenger', 'Working on a prop firm evaluation', 'shield');
+  else if (acct.includes('prop')) add('ac-prop', 'Prop trader', 'Trades a prop firm account', 'shield');
+  if (mk.length >= 3) add('mk-multi', 'Multi-market', `Follows ${mk.length} markets`, 'star');
+  (a.sessions || []).forEach(id => { const b = SESS_BADGE[id]; if (b) add('ss-' + id, b[0], b[1], 'cal'); });
+  if ((a.markets || []).includes('learning')) add('lv-learn', 'Learning the ropes', 'Here to learn the markets', 'star');
+  // Goals tied to their own trading time: on the site before their session starts
+  const ss = (a.sessions || []).map(id => ({ id, ...(SESSIONS_C[id] || {}) })).find(x => x.from != null);
+  if (ss) [[5, 'Ready'], [20, 'Prepared'], [50, 'Never unprepared']].forEach(([g, n]) => out.push({ id: `prep${g}-${ss.id}`, name: `${n} · ${ss.label}`, ico: 'flame', how: `On the site before ${ss.phrase || ss.label} starts, on ${g} days`, goal: g, val: s => (s.first_mins || []).filter(x => x <= ss.from && x >= ss.from - 180).length, personal: true }));
+  return out;
+}
+const earned = (b, s) => b.test ? !!b.test(s) : (b.val(s) || 0) >= b.goal;
+function badgeHTML(b, s, opts = {}) {
+  const ok = earned(b, s), v = b.val ? Math.min(b.val(s) || 0, b.goal) : null;
+  return `<button type="button" class="bdg${ok ? ' on' : ''}${opts.picked ? ' picked' : ''}" data-bdg="${b.id}" ${ok ? '' : 'disabled'} title="${esc(b.how)}">
+    <span class="bdg-i">${ico(b.ico)}</span><span class="bdg-t"><b>${esc(b.name)}</b><small>${ok ? esc(b.how) : b.goal ? `${v} / ${b.goal} · ${esc(b.how)}` : esc(b.how)}</small>${!ok && b.goal ? `<span class="bdg-p"><i style="width:${Math.round(v / b.goal * 100)}%"></i></span>` : ''}</span>
+    ${opts.picked ? '<span class="bdg-pin">Shown</span>' : ''}</button>`;
+}
+const chip = (b) => `<span class="bdg-chip">${ico(b.ico)}${esc(b.name)}</span>`;
+const PROF = {
+  async get() { const sb = sbClient(); const { data } = await sb.from('open_user_profile').select('display_name, bio, avatar_url, showcase').eq('user_id', me.user.id).maybeSingle(); return data || {}; },
+  async save(p) { const sb = sbClient(); const { error } = await sb.from('open_user_profile').upsert({ user_id: me.user.id, ...p, updated_at: new Date().toISOString() }, { onConflict: 'user_id' }); if (error) throw new Error(error.message); },
+  stats: () => rpc('open_my_stats'),
+  async upload(blob) { const sb = sbClient(); const path = `${me.user.id}/avatar-${Date.now()}.webp`; const { error } = await sb.storage.from('open-avatars').upload(path, blob, { contentType: 'image/webp', upsert: true }); if (error) throw new Error(error.message); return sb.storage.from('open-avatars').getPublicUrl(path).data.publicUrl; }
+};
+// Square-crop and shrink a photo to 256px WebP in the browser (also strips location data from phone photos)
+function shrinkPhoto(file) {
+  return new Promise((res, rej) => {
+    if (!/^image\//.test(file.type)) return rej(new Error('Pick an image file (PNG, JPG, WebP or GIF).'));
+    if (file.size > 8 * 1024 * 1024) return rej(new Error('That image is over 8 MB. Pick a smaller one.'));
+    const img = new Image(), url = URL.createObjectURL(file);
+    img.onload = () => { const s = Math.min(img.width, img.height), c = document.createElement('canvas'); c.width = c.height = 256;
+      c.getContext('2d').drawImage(img, (img.width - s) / 2, (img.height - s) / 2, s, s, 0, 0, 256, 256); URL.revokeObjectURL(url);
+      c.toBlob(b => b ? res(b) : rej(new Error('Couldn’t read that image.')), 'image/webp', 0.88); };
+    img.onerror = () => rej(new Error('Couldn’t read that image.'));
+    img.src = url;
+  });
+}
+PAGES.profile = () => {
+  const P = window.__PROF || PROF;
+  if (!signedIn()) { layout(`<h1 class="page-h">Profile</h1><p class="page-intro">Sign in to set your photo, name and bio, and to start earning badges.</p>`); return; }
+  layout(`<h1 class="page-h">Profile</h1>
+    <section class="prof-card" id="profCard">${skel(3)}</section>
+    <section class="prof-edit" id="profEdit" hidden></section>
+    <h2 class="sec">Your stats</h2><div class="prof-stats" id="profStats">${skel(1)}</div>
+    <div class="sec-row"><h2 class="sec">Badges</h2><span class="small faint">Pick up to 3 to show next to your name</span></div>
+    <div class="bdg-grid" id="bdgGrid">${skel(3)}</div>`);
+  let prof = {}, st = {};
+  const draw = () => {
+    const all = [...personalBadges(), ...BADGES];
+    const show = (prof.showcase || []).map(id => all.find(b => b.id === id)).filter(b => b && earned(b, st));
+    const name = prof.display_name || me.name || 'You';
+    $('#profCard').innerHTML = `<div class="prof-av">${prof.avatar_url ? `<img src="${esc(prof.avatar_url)}" alt="">` : `<span>${esc(name.charAt(0).toUpperCase())}</span>`}</div>
+      <div class="prof-main"><p class="prof-name">${esc(name)}${plan.tier !== 'free' ? ` <span class="plan-badge ${plan.tier}">${PLAN_NAME[plan.tier]}</span>` : ''}</p>
+        <p class="prof-bio">${prof.bio ? esc(prof.bio) : '<span class="faint">No bio yet.</span>'}</p>
+        <div class="prof-show">${show.map(chip).join('') || '<span class="small faint">No badges shown yet. Pick some below.</span>'}</div></div>
+      <button type="button" class="btn-ghost" id="profEditBtn">Edit profile</button>`;
+    $('#profEditBtn').onclick = openEdit;
+    const since = st.joined ? new Date(st.joined).toLocaleDateString('en-US', { month: 'short', year: 'numeric' }) : '—';
+    $('#profStats').innerHTML = [['Day streak', st.streak || 0], ['Best streak', st.best_streak || 0], ['Days active', st.days_active || 0], ['AI reads', st.ai_reads || 0], ['Member since', since]].map(([l, v]) => `<div><small>${l}</small><b>${esc(String(v))}</b></div>`).join('');
+    const pick = new Set(prof.showcase || []);
+    const list = [...personalBadges(), ...BADGES].filter(b => !['plus', 'pro', 'founder', 'lifetime'].includes(b.id) || earned(b, st));
+    const on = list.filter(b => earned(b, st)), off = list.filter(b => !earned(b, st));
+    const pers = on.filter(b => b.personal && !b.goal), rest = on.filter(b => !(b.personal && !b.goal));
+    $('#bdgGrid').innerHTML = `<p class="small faint bdg-count">${on.length} of ${list.length} earned</p>`
+      + (pers.length ? `<p class="bdg-sub">Your trader identity <span class="faint">· from your setup answers</span></p>` + pers.map(b => badgeHTML(b, st, { picked: pick.has(b.id) })).join('') : '')
+      + `<p class="bdg-sub">Earned</p>` + rest.map(b => badgeHTML(b, st, { picked: pick.has(b.id) })).join('')
+      + (off.length ? `<p class="bdg-sub">Still to earn</p>` + off.map(b => badgeHTML(b, st)).join('') : '');
+    $('#bdgGrid').querySelectorAll('.bdg.on').forEach(el => el.onclick = async () => {
+      const id = el.dataset.bdg; const cur = new Set(prof.showcase || []);
+      if (cur.has(id)) cur.delete(id); else { if (cur.size >= 3) { const first = [...cur][0]; cur.delete(first); } cur.add(id); }
+      prof.showcase = [...cur]; draw();
+      try { await P.save({ showcase: prof.showcase }); setProfileLocal({ showcase: prof.showcase }); } catch (e) { toastMsg(e.message); }
+    });
+  };
+  const toastMsg = m => { const t = $('#profMsg'); if (t) t.textContent = m; };
+  function openEdit() {
+    const box = $('#profEdit'); box.hidden = false;
+    box.innerHTML = `<form id="profForm" class="prof-form">
+      <div class="prof-photo"><div class="prof-av" id="pfAv">${prof.avatar_url ? `<img src="${esc(prof.avatar_url)}" alt="">` : `<span>${esc((prof.display_name || me.name || 'Y').charAt(0).toUpperCase())}</span>`}</div>
+        <label class="btn-ghost"><input type="file" id="pfFile" accept="image/png,image/jpeg,image/webp,image/gif" hidden>Change photo</label>
+        ${prof.avatar_url ? '<button type="button" class="linkbtn" id="pfDel">Remove photo</button>' : ''}</div>
+      <label class="pf-l">Display name<input class="search" id="pfName" maxlength="40" value="${esc(prof.display_name || me.name || '')}"></label>
+      <label class="pf-l">Bio <small class="faint" id="pfCnt"></small><textarea class="search" id="pfBio" maxlength="280" rows="3" placeholder="What you trade, your style, your goals…">${esc(prof.bio || '')}</textarea></label>
+      <div class="pf-btns"><button class="btn-primary" type="submit">Save</button><button class="btn-ghost" type="button" id="pfCancel">Cancel</button><span class="small" id="profMsg" role="status"></span></div></form>`;
+    let newPhoto = undefined;
+    const cnt = () => { $('#pfCnt').textContent = `${$('#pfBio').value.length}/280`; }; cnt(); $('#pfBio').oninput = cnt;
+    $('#pfFile').onchange = async e => { const f = e.target.files[0]; if (!f) return; try { newPhoto = await shrinkPhoto(f); $('#pfAv').innerHTML = `<img src="${URL.createObjectURL(newPhoto)}" alt="">`; toastMsg(''); } catch (err) { toastMsg(err.message); } };
+    if ($('#pfDel')) $('#pfDel').onclick = () => { newPhoto = null; $('#pfAv').innerHTML = `<span>${esc(($('#pfName').value || 'Y').charAt(0).toUpperCase())}</span>`; };
+    $('#pfCancel').onclick = () => { box.hidden = true; };
+    $('#profForm').onsubmit = async ev => { ev.preventDefault(); toastMsg('Saving…');
+      try {
+        const upd = { display_name: $('#pfName').value.trim().slice(0, 40) || null, bio: $('#pfBio').value.trim().slice(0, 280) || null };
+        if (newPhoto) upd.avatar_url = await P.upload(newPhoto); else if (newPhoto === null) upd.avatar_url = null;
+        await P.save(upd); prof = { ...prof, ...upd }; setProfileLocal({ display_name: upd.display_name || me.name, avatar_url: 'avatar_url' in upd ? upd.avatar_url : prof.avatar_url });
+        box.hidden = true; draw();
+      } catch (e) { toastMsg('Couldn’t save: ' + e.message); } };
+  }
+  Promise.all([P.get().catch(() => ({})), P.stats().catch(() => ({}))]).then(([p, s]) => { prof = p || {}; st = s || {}; if (!$('#profCard')) return; draw(); });
+};
+
 // ---------- router ----------
 const ALIASES = { movers: 'markets', memecoins: 'memes', economy: 'calendar', earnings: 'calendar' };
 const SLUG = { memes: 'memecoins' };

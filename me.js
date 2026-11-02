@@ -453,7 +453,14 @@ async function loadName() {
     if (data && data.username && !me.name) me.name = data.username;
   }
   if (!me.name && me.user && me.user.email) me.name = me.user.email.split('@')[0];
+  // Profile name and photo (The Open One's own profile table), and mark today active for streak badges
+  if (sb && me.user) {
+    try { const { data } = await sb.from('open_user_profile').select('display_name, avatar_url, showcase').eq('user_id', me.user.id).maybeSingle(); if (data) { if (data.display_name) me.name = data.display_name; me.avatar = data.avatar_url || null; me.showcase = data.showcase || []; } } catch {}
+    sb.rpc('open_touch').then(() => {}, () => {});
+  }
 }
+export const sbClient = () => sb;
+export function setProfileLocal(p) { if (p.display_name) me.name = p.display_name; if ('avatar_url' in p) me.avatar = p.avatar_url; if (p.showcase) me.showcase = p.showcase; renderAccount(); }
 
 // ================= sign in / sign up =================
 const GOOGLE = '<svg viewBox="0 0 48 48" width="18" height="18" aria-hidden="true"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.9 1.2 8 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.9 1.2 8 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-7.9l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z"/></svg>';
@@ -728,15 +735,16 @@ export function editSetup() { wizard(me.answers, () => { window.dispatchEvent(ne
 function renderAccount() {
   const b = $('#acctBtn'); if (!b) return;
   const n = me.name || 'You';
-  b.innerHTML = `<span class="av">${esc(n.charAt(0).toUpperCase())}</span>`;
+  b.innerHTML = me.avatar ? `<img class="av av-img" src="${esc(me.avatar)}" alt="">` : `<span class="av">${esc(n.charAt(0).toUpperCase())}</span>`;
   b.title = me.user ? `Signed in as ${me.user.email || n}` : 'Your setup';
   b.hidden = false;
 }
 function openMenu() {
   const m = $('#acctMenu');
   if (!m.hidden) { m.hidden = true; return; }
-  m.innerHTML = `<div class="am-head"><span class="av big">${esc((me.name || 'Y').charAt(0).toUpperCase())}</span><div><b>${esc(me.name || 'Your setup')}</b><small>${esc(me.user ? me.user.email || '' : 'Not signed in')}</small></div></div>
+  m.innerHTML = `<div class="am-head">${me.avatar ? `<img class="av big av-img" src="${esc(me.avatar)}" alt="">` : `<span class="av big">${esc((me.name || 'Y').charAt(0).toUpperCase())}</span>`}<div><b>${esc(me.name || 'Your setup')}</b><small>${esc(me.user ? me.user.email || '' : 'Not signed in')}</small></div></div>
     <p class="am-sum">${esc(profileSummary() || 'No markets picked yet')}</p>
+    ${me.user ? '<a class="am-item am-plan" href="/profile" id="amProf"><span>Profile & badges</span></a>' : ''}
     <button class="am-item" id="amEdit">Edit my setup</button>
     <button class="am-item" id="amAlerts">Alerts</button>
     <label class="am-tz" for="amTz"><span>Time zone</span><select id="amTz">${TZ_LIST.map(([v, l]) => `<option value="${v}" ${v === tzChoice() ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label>
@@ -745,6 +753,7 @@ function openMenu() {
   m.hidden = false;
   $('#amEdit').onclick = () => { m.hidden = true; editSetup(); };
   $('#amPlan').onclick = () => { m.hidden = true; };
+  if ($('#amProf')) $('#amProf').onclick = () => { m.hidden = true; };
   $('#amAlerts').onclick = () => { m.hidden = true; openAlerts(); };
   $('#amTz').onchange = e => setTZ(e.target.value);
   if ($('#amOut')) $('#amOut').onclick = async () => { m.hidden = true; await sb.auth.signOut(); };
