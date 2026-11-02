@@ -2093,7 +2093,7 @@ PAGES.glossary = () => {
 
 // ---------- Privacy policy and terms ----------
 const LEGAL_UPDATED = 'November 2, 2026';
-const CONTACT = 'alexpokhodun201@gmail.com';
+const CONTACT = 'sinlex46@gmail.com';
 PAGES.privacy = () => {
   document.title = 'Privacy | The Open One';
   layout(`<article class="legal">
