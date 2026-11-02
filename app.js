@@ -1211,7 +1211,6 @@ PAGES.today = () => {
     <div class="front3">
       <div class="t-left">
         <section class="briefing t-news"><div class="sec-row"><h2 class="sec">Briefing for ${esc(sessionDay().long)}</h2><a href="/news">All news</a></div><ol class="bfeed" id="bfeed">${'<li>' + skel(3) + '</li>'}</ol></section>
-        <section class="tn tn-today t-expect" id="todayExpect" hidden></section>
         <section class="more-tabs t-more">
           <div class="chips tabbar" role="tablist" aria-label="More for today">${TODAY_TABS.map(([k, l]) => `<button class="chip" role="tab" data-tab="${k}" aria-selected="false" aria-pressed="false">${l}</button>`).join('')}</div>
           <div class="tabp" data-panel="next"><div class="tab-links"><a class="more" href="/calendar">Full calendar</a></div><h2 class="sr-only" id="outlookH">What’s going to happen next</h2><div id="outlook"></div></div>
@@ -1227,6 +1226,7 @@ PAGES.today = () => {
           <section class="now-sec" id="sessBlock"><div class="sec-row"><h2 class="sec">Your sessions</h2><span class="faint small">${esc(tzAbbr())}</span></div><div id="sessions" class="ssc-list"></div></section>
           <section class="now-sec pulse" id="pulseBlock"><div class="sec-row"><h2 class="sec">Live read</h2><span class="pl-timer" id="pulseNext" aria-live="off">…</span></div><div id="pulse">${skel(2)}</div></section>
         </div>
+        <section class="tn tn-today t-expect" id="todayExpect" hidden></section>
         <section class="t-prices card" id="myPrices"></section>
       </div>
     </div>
@@ -1472,7 +1472,7 @@ function tnUpcoming(events, n = 3) {
   // Releases at the same minute are one moment for the market: show them as one row, biggest first
   const groups = [];
   list.forEach(e => { const g = groups.find(x => x.time === e.time); if (g) g.all.push(e); else groups.push({ ...e, all: [e] }); });
-  groups.forEach(g => { g.all.sort((a, b) => TN_MAJOR.test(b.title + ' ' + (b.name || '')) - TN_MAJOR.test(a.title + ' ' + (a.name || ''))); const lead = g.all[0]; Object.assign(g, { title: lead.title, name: lead.name, country: lead.country }); g.also = [...new Set(g.all.slice(1).map(x => x.name || x.title))]; });
+  groups.forEach(g => { g.all.sort((a, b) => TN_MAJOR.test(b.title + ' ' + (b.name || '')) - TN_MAJOR.test(a.title + ' ' + (a.name || ''))); const lead = g.all[0]; Object.assign(g, { title: lead.title, name: lead.name, country: lead.country }); g.also = [...new Set(g.all.slice(1).map(x => x.name || x.title))].filter(n => n !== (lead.name || lead.title)); });
   return groups.slice(0, n);
 }
 const leftTxt = ms => { const m = Math.max(0, Math.round(ms / 6e4)), d = Math.floor(m / 1440), h = Math.floor(m % 1440 / 60), mm = m % 60; return d ? `${d}d ${h}h` : h ? `${h}h ${mm}m` : `${mm}m`; };
@@ -2254,6 +2254,16 @@ PAGES.plans = () => {
 const TIER_RANK_C = { free: 0, plus: 1, pro: 2 };
 addEventListener('open:plan', () => { cache.clear(); if (started) route(); });
 
+// Today: keep the right column in view while the (longer) left column scrolls
+function stickRight() {
+  const r = document.querySelector('.front3 .t-right');
+  if (!r) return;
+  if (innerWidth < 981) { r.style.top = ''; return; }
+  const head = (document.querySelector('.mast') || { offsetHeight: 0 }).offsetHeight || 0;
+  r.style.top = Math.min(head + 16, innerHeight - r.offsetHeight - 16) + 'px';
+}
+addEventListener('resize', stickRight);
+setInterval(() => { if (document.visibilityState === 'visible') stickRight(); }, 1500);
 // ---------- router ----------
 const ALIASES = { movers: 'markets', memecoins: 'memes', economy: 'calendar', earnings: 'calendar' };
 const SLUG = { memes: 'memecoins' };

@@ -1515,3 +1515,7 @@ table.codes td:last-child{text-align:right!important}
 @media (max-width:640px){.dp-tl li{grid-template-columns:auto 1fr auto;row-gap:0.125rem}.dp-tl .dp-tx{grid-column:1/-1}}
 .dp-tl li{grid-template-columns:7.5rem minmax(0,1fr) 4rem!important;row-gap:0.125rem}
 .dp-tl .dp-tx{grid-column:1/-1}
+
+/* Today: right column stays in view instead of leaving a blank side */
+@media (min-width:981px){.front3>.t-right{position:sticky;align-self:start}}
+.t-right .tn-today{margin:0}
