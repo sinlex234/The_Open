@@ -1533,9 +1533,12 @@ function vetText(s, nums, low) {
   }
   let prev = "";
   for (const tok of t.split(/\s+/)) {
+    // The first word of a sentence is capitalized anyway: it isn't a name
+    const starts = !prev || /[.!?:]["\u201d']?$/.test(prev);
     prev = tok;
     const w = tok.replace(/^[^A-Za-z]+/, "").replace(/([\u2019']s)?[^A-Za-z0-9&]*$/, "");
     if (!/^[A-Z]/.test(w) || w.length < 2) continue;
+    if (starts && !/^[A-Z]{2,}$/.test(w)) continue;
     const lw = w.toLowerCase();
     if (VET_OK_WORDS.has(lw) || low.includes(lw)) continue;
     return "name " + w;
