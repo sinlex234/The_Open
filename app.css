@@ -468,7 +468,7 @@ body.locked .mast,body.locked .strip,body.locked main,body.locked .foot{visibili
 .gate-points{margin:0;padding-left:1.125rem;display:grid;gap:0.625rem;font-size:0.9375rem;line-height:1.55;color:var(--ink-2)}
 .gate-fine{margin-top:auto;font-size:0.7812rem;color:var(--ink-3)}
 .gate-form{padding:2.25rem;display:flex;flex-direction:column;gap:0.75rem}
-.gate-form>*{width:100%;max-width:25rem;margin-inline:auto}
+.gate-form>*{width:100%;max-width:400px;margin-inline:auto}
 .gate-form[hidden]{display:none}
 .gate-form h2{font:600 1.1875rem var(--sans);letter-spacing:-.015em;margin:0}
 .seg{display:flex;gap:0.25rem;border:1px solid var(--rule-2);border-radius:var(--r-sm);padding:0.1875rem;background:var(--bg-2)}
