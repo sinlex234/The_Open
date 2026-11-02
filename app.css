@@ -1574,5 +1574,7 @@ table.codes td:last-child{text-align:right!important}
 .g-wrap{display:block}
 .g-wrap[hidden]{display:none}
 .g-btn{display:flex;justify-content:center;min-height:44px;color-scheme:light}
-.g-btn iframe{border-radius:4px}
+/* Google draws its button 10px inside a frame that's only as wide as the button, so give the frame 20px more */
+.g-btn>div{flex:none;width:100%!important}
+.g-btn iframe{width:calc(100% + 20px)!important;max-width:none!important}
 .g-btn[hidden]{display:none}
