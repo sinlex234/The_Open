@@ -1,5 +1,5 @@
 // The Open One: accounts, the setup questions, the reader's profile, personal notes and alerts.
-import { SUPABASE_URL, SUPABASE_KEY } from './config.js';
+import { SUPABASE_URL, SUPABASE_KEY, GOOGLE_CLIENT_ID } from './config.js';
 
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -479,7 +479,7 @@ function gateHTML() {
     </div>
     <div class="gate-form" id="gateForm">
       <div class="seg" id="authSeg" role="tablist"><button data-mode="signup" role="tab">Create account</button><button data-mode="signin" role="tab">Sign in</button></div>
-      <button class="btn-google" id="gGoogle">${GOOGLE}Continue with Google</button>
+      <div class="g-wrap" id="gWrap"><button class="btn-google" id="gGoogle">${GOOGLE}Continue with Google</button><div class="g-btn" id="gBtn" hidden></div></div>
       <div class="or">or</div>
       <label class="fld" id="fEmail"><span>Email</span><input type="email" id="aEmail" autocomplete="email" placeholder="you@example.com"></label>
       <label class="fld" id="fUser"><span>Username</span><input type="text" id="aUser" autocomplete="username" maxlength="20" placeholder="3 to 20 letters, numbers or _"></label>
@@ -512,7 +512,7 @@ function setMode(m) {
   document.querySelectorAll('#authSeg button').forEach(b => b.setAttribute('aria-selected', b.dataset.mode === m));
   const up = m === 'signup', fg = m === 'forgot';
   $('#fEmail').hidden = !up; $('#fUser').hidden = !up; $('#fId').hidden = up; $('#fPass').hidden = fg;
-  $('#aForgot').hidden = m !== 'signin'; $('#authSeg').hidden = fg; $('#gGoogle').hidden = fg; $('#gateForm .or').hidden = fg;
+  $('#aForgot').hidden = m !== 'signin'; $('#authSeg').hidden = fg; $('#gWrap').hidden = fg; $('#gateForm .or').hidden = fg;
   $('#aPass').autocomplete = up ? 'new-password' : 'current-password';
   $('#aSubmit').textContent = up ? 'Create account' : fg ? 'Email me a reset link' : 'Sign in';
 }
@@ -627,6 +627,40 @@ function bindCode() {
   $('#cResend').onclick = resendCode;
   $('#cBack').onclick = () => { ls.set(PENDING, null); clearInterval(resendTimer); $('#gateCode').hidden = true; $('#gateForm').hidden = false; setMode('signup'); };
 }
+
+// ---------- Google's own sign-in button ----------
+// Signing in through Google's button keeps people on this site, so Google's screen names this site
+// instead of the database's address. If Google's script can't load, the older redirect button stays.
+let gsiLoad = null;
+function loadGSI() {
+  if (window.google && google.accounts && google.accounts.id) return Promise.resolve();
+  if (!gsiLoad) gsiLoad = new Promise((res, rej) => {
+    const s = document.createElement('script'); s.src = 'https://accounts.google.com/gsi/client'; s.async = true;
+    s.onload = res; s.onerror = () => { gsiLoad = null; rej(new Error('gsi')); }; document.head.appendChild(s);
+  });
+  return gsiLoad;
+}
+async function sha256hex(t) { const b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(t)); return [...new Uint8Array(b)].map(x => x.toString(16).padStart(2, '0')).join(''); }
+async function mountGoogleButton() {
+  if (!GOOGLE_CLIENT_ID || !sb) return;
+  try {
+    await loadGSI();
+    const holder = $('#gBtn'); if (!holder) return;
+    const raw = [...crypto.getRandomValues(new Uint8Array(16))].map(x => x.toString(16).padStart(2, '0')).join('');
+    google.accounts.id.initialize({
+      client_id: GOOGLE_CLIENT_ID, nonce: await sha256hex(raw), ux_mode: 'popup', itp_support: true, use_fedcm_for_button: true,
+      callback: async r => {
+        msg('aMsg', 'Signing you in…', true);
+        const { error } = await sb.auth.signInWithIdToken({ provider: 'google', token: r.credential, nonce: raw });
+        if (error) msg('aMsg', friendly(error));
+      }
+    });
+    const w = Math.min(400, Math.max(200, Math.round(($('#gWrap').getBoundingClientRect().width) || 320)));
+    holder.innerHTML = '';
+    google.accounts.id.renderButton(holder, { type: 'standard', theme: document.documentElement.dataset.theme === 'light' ? 'outline' : 'filled_black', size: 'large', text: 'continue_with', shape: 'rectangular', logo_alignment: 'center', width: w });
+    holder.hidden = false; $('#gGoogle').hidden = true;
+  } catch { /* keep the redirect button */ }
+}
 function showGate(reset = false) {
   // The privacy policy and terms stay readable without signing in
   if (!reset && /^\/(privacy|terms)\/?$/.test(location.pathname)) return;
@@ -636,6 +670,7 @@ function showGate(reset = false) {
   $('#aSubmit').onclick = submit;
   ['aEmail', 'aUser', 'aId', 'aPass'].forEach(id => $('#' + id).addEventListener('keydown', e => { if (e.key === 'Enter') submit(); }));
   $('#gGoogle').onclick = async () => { const { error } = await sb.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: redirectURL() } }); if (error) msg('aMsg', friendly(error)); };
+  mountGoogleButton();
   $('#rSubmit').onclick = async () => {
     const p = $('#aNew').value; if (p.length < 8) return msg('rMsg', 'Use at least 8 characters.');
     const { error } = await sb.auth.updateUser({ password: p }); if (error) return msg('rMsg', friendly(error));

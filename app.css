@@ -1570,3 +1570,7 @@ table.codes td:last-child{text-align:right!important}
 .legal li{margin:.4rem 0;line-height:1.55}
 .legal p{line-height:1.6}
 .legal a{color:var(--acc)}
+.g-wrap{display:block}
+.g-wrap[hidden]{display:none}
+.g-btn{display:flex;justify-content:center;min-height:44px;color-scheme:normal}
+.g-btn[hidden]{display:none}
