@@ -2358,6 +2358,98 @@ function fitFor(strat, st) {
   if (st.trend === "flat" && st.bias === "mixed" && ["trend", "momentum"].includes(strat)) return { word: "Poor fit today", why: "No trend and no news push. Trend strategies struggle here." };
   return { word: "Normal day", why: "Nothing unusual. Stick to your rules." };
 }
+// ---------- Your day: one clear call per market, the levels that matter, and a plan for the reader's strategy ----------
+var DAY_MKT = {
+  futures: { sym: "NQ=F", name: "Nasdaq 100 futures", short: "NQ", dp: 2, ds: 18, unit: "" },
+  stocks: { sym: "NQ=F", name: "Nasdaq 100 futures", short: "NQ", dp: 2, ds: 18, unit: "" },
+  options: { sym: "ES=F", name: "S&P 500 futures", short: "ES", dp: 2, ds: 18, unit: "" },
+  crypto: { sym: "BTC-USD", name: "Bitcoin", short: "Bitcoin", dp: 0, ds: 0, unit: "$" },
+  memes: { sym: "BTC-USD", name: "Bitcoin", short: "Bitcoin", dp: 0, ds: 0, unit: "$" },
+  forex: { sym: "EURUSD=X", name: "EUR/USD", short: "EUR/USD", dp: 5, ds: 17, unit: "" }
+};
+var PULSE_OF = { futures: "NQ", stocks: "NQ", options: "NQ", crypto: "BTC", memes: "BTC", forex: "EURUSD" };
+var MAJOR_EV = /\bcpi\b|consumer price|non-farm|nonfarm|payroll|federal funds|fomc|fed chair|powell|\bpce\b/i;
+function dayLevels(L, dp, unit) {
+  if (!L) return { above: [], below: [] };
+  const f = (v) => (unit === "$" ? "$" : "") + Number(v).toLocaleString("en-US", { minimumFractionDigits: dp > 2 ? dp : 0, maximumFractionDigits: dp });
+  const cands = [
+    ["Yesterday’s high", L.prevDay && L.prevDay.high], ["Yesterday’s low", L.prevDay && L.prevDay.low],
+    ["Asia high", L.asia && L.asia.high], ["Asia low", L.asia && L.asia.low],
+    ["London high", L.london && L.london.high], ["London low", L.london && L.london.low],
+    ["Today’s high", L.today && L.today.high], ["Today’s low", L.today && L.today.low],
+    ["This week’s high", L.week && L.week.high], ["This week’s low", L.week && L.week.low],
+    ["Midnight open", L.midnightOpen]
+  ].filter(([, v]) => v != null && isFinite(v));
+  const px = L.price, gap = Math.abs(px) * 0.0004;
+  const uniq = (arr) => arr.filter((x, i) => !arr.slice(0, i).some((y) => Math.abs(y.v - x.v) < gap));
+  const above = uniq(cands.filter(([, v]) => v > px + gap).map(([n, v]) => ({ name: n, v, txt: f(v) })).sort((a, b) => a.v - b.v)).slice(0, 3);
+  const below = uniq(cands.filter(([, v]) => v < px - gap).map(([n, v]) => ({ name: n, v, txt: f(v) })).sort((a, b) => b.v - a.v)).slice(0, 3);
+  return { price: f(px), above, below };
+}
+var lvl = (x) => x ? `${/^(Asia|London)/.test(x.name) ? x.name : x.name.charAt(0).toLowerCase() + x.name.slice(1)} (${x.txt})` : "";
+// What a trader using each strategy usually does on a day like this
+function stratPlan(s2, call, lv, ev, m) {
+  const up = call === "up", dn = call === "down";
+  const a1 = lv.above[0], a2 = lv.above[1] || lv.above[0], b1 = lv.below[0], b2 = lv.below[1] || lv.below[0];
+  const pre = ev ? `Stay flat into ${ev.name} at ${ev.time}. ` : "";
+  const sess = ["crypto", "memes"].includes(m) ? "the US session (from 9:30 AM New York)" : m === "forex" ? "the London–New York overlap (8 AM–12 PM New York)" : "the New York open (9:30–11:00 AM)";
+  const P = {
+    ict: up ? [`${pre}Bias: long. In ${sess}, expect a quick run below ${lvl(b1)} to grab sell-side liquidity first.`, `After that sweep, look for displacement up and a fair value gap to enter on the pullback.`, `Targets: ${lvl(a1)}, then ${lvl(a2)}.`]
+      : dn ? [`${pre}Bias: short. In ${sess}, expect a quick run above ${lvl(a1)} to grab buy-side liquidity first.`, `After that sweep, look for displacement down and a fair value gap to enter on the pullback.`, `Targets: ${lvl(b1)}, then ${lvl(b2)}.`]
+      : [`${pre}No bias. Expect both ${lvl(a1)} and ${lvl(b1)} to be in play.`, `Wait for one side to get swept, then trade the displacement the other way.`, `If both sides get swept, the day has no direction: stand aside.`],
+    pa: up ? [`${pre}Buy pullbacks that hold above ${lvl(b1)}.`, `A clean break above ${lvl(a1)} is the move most likely to follow through toward ${lvl(a2)}.`, `Breaks below ${lvl(b1)} are more likely to fail: don’t chase them.`]
+      : dn ? [`${pre}Sell rallies that fail under ${lvl(a1)}.`, `A clean break below ${lvl(b1)} is the move most likely to follow through toward ${lvl(b2)}.`, `Breaks above ${lvl(a1)} are more likely to fail: don’t chase them.`]
+      : [`${pre}Expect a range between ${lvl(b1)} and ${lvl(a1)}.`, `Fading the edges of that range tends to work better than chasing breakouts.`, `Only trust a break that closes outside the range and holds on the retest.`],
+    sd: up ? [`${pre}Demand near ${lvl(b1)} is the zone most likely to hold.`, `Supply near ${lvl(a1)} is more likely to break.`, `Favour fresh zones; a third test is weak.`]
+      : dn ? [`${pre}Supply near ${lvl(a1)} is the zone most likely to hold.`, `Demand near ${lvl(b1)} is more likely to break.`, `Favour fresh zones; a third test is weak.`]
+      : [`${pre}Expect both ${lvl(a1)} supply and ${lvl(b1)} demand to react.`, `Wait for a strong rejection from one of them before acting.`],
+    orderflow: [`${pre}${up ? `Watch for sellers getting absorbed near ${lvl(b1)}: that confirms the up day.` : dn ? `Watch for buyers getting absorbed near ${lvl(a1)}: that confirms the down day.` : `Watch which side gets absorbed at ${lvl(a1)} or ${lvl(b1)} to pick the direction.`}`, `Expect the biggest volume in ${sess}${ev ? ` and right after ${ev.name}` : ""}.`],
+    news: ev ? [`${ev.name} at ${ev.time} is the event of the day. Let the first spike settle for 5 to 15 minutes.`, `${up ? "A soft number fits the up call; a hot one cancels it." : dn ? "A hot number fits the down call; a soft one cancels it." : "The surprise against the forecast decides the direction."}`, `Trade the move that holds after the spike, not the spike itself.`]
+      : [`No big release today, so news will come from headlines, not the calendar.`, `Use the AI read on fresh stories to see if they back the ${up ? "up" : dn ? "down" : "range"} call.`],
+    trend: up ? [`${pre}Only take longs while price holds above ${lvl(b1)}.`, `Add on breaks above ${lvl(a1)}.`] : dn ? [`${pre}Only take shorts while price holds below ${lvl(a1)}.`, `Add on breaks below ${lvl(b1)}.`] : [`${pre}No trend to follow today. Sitting out is a valid choice.`],
+    momentum: up ? [`${pre}The strongest move should come on a break of ${lvl(a1)}.`, `If it can’t clear it by late morning, momentum is fading.`] : dn ? [`${pre}The strongest move should come on a break of ${lvl(b1)}.`, `If it can’t break it by late morning, momentum is fading.`] : [`${pre}Little momentum expected until one edge breaks: ${lvl(a1)} or ${lvl(b1)}.`],
+    scalp: [`${pre}${up ? "Favour quick longs off pullbacks" : dn ? "Favour quick shorts off pops" : "Scalp both edges of the range"} around ${lvl(dn ? a1 : b1)}.`, `Keep size small${ev ? ` around ${ev.name}` : ""}; spreads widen on news.`]
+  };
+  P.ta = P.pa; P.ind = P.trend;
+  return P[s2] || [`${pre}${up ? `Lean long while price holds above ${lvl(b1)}.` : dn ? `Lean short while price holds below ${lvl(a1)}.` : `Expect a range between ${lvl(b1)} and ${lvl(a1)}.`}`];
+}
+async function dayPlanFor(prof, states, events, now) {
+  const mks = [...new Set(prof.map((x) => x.m).filter((m) => DAY_MKT[m]))].slice(0, 3);
+  if (!mks.length) return [];
+  let pulse = [];
+  try { pulse = await sb("open_pulse?select=market,lean,conf,slot&order=slot.desc&limit=6"); } catch {}
+  const today = ny(now).date;
+  return Promise.all(mks.map(async (m) => {
+    const c = DAY_MKT[m], st = states[m] || {};
+    let L = null;
+    try { L = computeLevels(await yahooChart(c.sym, { interval: "15m", range: "10d" }), c.ds); } catch {}
+    const lv = dayLevels(L, c.dp, c.unit);
+    // Score: news lean + price trend + the latest Live read
+    const pr = pulse.find((p) => p.market === PULSE_OF[m]);
+    const newsS = st.bias === "up" ? 1 : st.bias === "down" ? -1 : 0;
+    const trendS = st.trend === "up" ? 0.7 : st.trend === "down" ? -0.7 : 0;
+    const pulseS = pr && pr.lean === "up" ? (pr.conf === "high" ? 0.8 : 0.5) : pr && pr.lean === "down" ? -(pr.conf === "high" ? 0.8 : 0.5) : 0;
+    const score = newsS + trendS + pulseS;
+    const call = score >= 0.9 ? "up" : score <= -0.9 ? "down" : "range";
+    const agree = [newsS, trendS, pulseS].filter((x) => Math.sign(x) === Math.sign(score) && x !== 0).length;
+    const conf = call === "range" ? "low" : Math.abs(score) >= 1.8 && agree >= 3 ? "high" : agree >= 2 ? "medium" : "low";
+    const ccy = m === "forex" ? ["USD", "EUR"] : ["USD"];
+    const evs = events.filter((e) => e.impact === "High" && !e.allDay && ccy.includes(e.country) && ny(e.time).date === today && e.time > now - 10 * 6e4 && !/election|holiday/i.test(e.title));
+    const big = evs.find((e) => MAJOR_EV.test(e.title)) || evs[0];
+    const ev = big ? { name: big.name || big.title, time: fmtTime(big.time), major: MAJOR_EV.test(big.title) } : null;
+    const why = [];
+    if (newsS) why.push(`Today’s top stories lean ${st.bias}.`); else why.push("Today’s top stories don’t point one way.");
+    if (trendS) why.push(`${c.short} is already moving ${st.trend}${st.tp != null ? ` (${st.tp > 0 ? "+" : ""}${st.tp.toFixed(2)}% today)` : ""}.`);
+    if (pulseS) why.push(`The latest Live read leans ${pr.lean} (${pr.conf} confidence).`);
+    if (ev) why.push(`${ev.name} at ${ev.time} can override all of this.`);
+    const word = call === "up" ? "Expect an up day" : call === "down" ? "Expect a down day" : "Expect a range day";
+    const head = ev && ev.major ? `${word}, but ${ev.name} at ${ev.time} decides it` : word;
+    const flip = call === "up" ? (lv.below[1] || lv.below[0]) : call === "down" ? (lv.above[1] || lv.above[0]) : null;
+    const strats = ((prof.find((x) => x.m === m) || {}).strats || []).slice(0, 2);
+    const plans = (strats.length ? strats : ["unsure"]).map((s2) => ({ strategy: s2, name: STRAT_NAMES[s2] || "Your plan", steps: stratPlan(s2, call, lv, ev, m).filter(Boolean) }));
+    return { market: m, short: c.short, call, conf, head, why, levels: lv, flip: flip ? `${call === "up" ? "Below" : "Above"} ${lvl(flip)}, this read is wrong. Step back and reassess.` : "", event: ev, plans };
+  }));
+}
 function playbookFor(prof, states) {
   const out = [];
   prof.forEach((x) => {
@@ -2468,6 +2560,7 @@ Pick the 4-6 most important stories, world events first. effects should only lis
   prof.filter((x) => x.m !== "learning").forEach((x) => { states[x.m] = marketState(x.m, pick, out.briefing, outlook); });
   out.next = (focus ? [focus] : Object.keys(states)).map((m) => nextFor(states[m] || marketState(m, pick, out.briefing, outlook)));
   out.playbook = playbookFor(prof, states);
+  out.dayplan = await dayPlanFor(prof, states, res.cal && res.cal.events || [], now).catch(() => []);
   if (!out.glance) {
     const top = stories.find((h) => h.why) || stories[0], o = outlook[0];
     out.glance = {

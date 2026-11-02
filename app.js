@@ -706,6 +706,19 @@ function sessionDay(t = Date.now()) {
   return { isToday: d.getTime() === today.getTime(), long: d.toLocaleDateString('en-US', { timeZone: 'UTC', weekday: 'long', month: 'short', day: 'numeric' }), day: d.toLocaleDateString('en-US', { timeZone: 'UTC', weekday: 'long' }) };
 }
 // Overall summary: add up what the stories say for each market. The top story counts most.
+// "Your day": one clear call per market, the levels, and the plan for the reader's strategy
+function dayPlanHTML(plans) {
+  if (!plans || !plans.length) return '';
+  const arrow = { up: '↑', down: '↓', range: '↔' };
+  return `<li class="dayplan">${plans.map(p => `<div class="dp ${p.call}">
+    <div class="dp-top"><span class="dp-mk">${esc(p.short)}</span><span class="pill ${p.call === 'up' ? 'up' : p.call === 'down' ? 'down' : ''}">${p.conf} confidence</span></div>
+    <p class="dp-h"><i>${arrow[p.call]}</i>${esc(p.head)}</p>
+    <ul class="dp-why">${p.why.map(w => `<li>${esc(w)}</li>`).join('')}</ul>
+    ${p.levels && (p.levels.above.length || p.levels.below.length) ? `<div class="dp-lv"><div><span class="dp-k">Above${p.levels.price ? ` · price ${esc(p.levels.price)}` : ''}</span>${p.levels.above.map(l => `<b>${esc(l.txt)}</b><small>${esc(l.name)}</small>`).join('') || '<small>—</small>'}</div><div><span class="dp-k">Below</span>${p.levels.below.map(l => `<b>${esc(l.txt)}</b><small>${esc(l.name)}</small>`).join('') || '<small>—</small>'}</div></div>` : ''}
+    ${p.plans.map(pl => `<div class="dp-plan"><p class="dp-k">Your plan · ${esc(pl.name)}</p><ol>${pl.steps.map(x => `<li>${esc(x)}</li>`).join('')}</ol></div>`).join('')}
+    ${p.flip ? `<p class="dp-flip">${esc(p.flip)}</p>` : ''}
+  </div>`).join('')}<p class="dp-note">How traders using your strategy usually approach a day like this, from today’s news, price and the Live read. A plan, not a promise, and not financial advice.</p></li>`;
+}
 function bottomLine(list) {
   const m = {};
   list.forEach((b, i) => {
@@ -742,7 +755,7 @@ function briefingHTML(d, { empty = 'No major stories for this market right now.'
   const showWhy = isBeginner() || depth() === 'deep';
   const seenWhy = new Set();
   const group = effs => { const g = []; (effs || []).forEach(e => { const k = e.dir + '|' + e.reason + '|' + !!e.paused; const f = g.find(x => x.k === k); if (f) f.label += ' · ' + e.label; else g.push({ ...e, k }); }); return g; };
-  return bottomLine(list) + list.map((b, i) => { const dupWhy = b.why && seenWhy.has(b.why); if (b.why) seenWhy.add(b.why); const raw = b.effects; b = { ...b, why: dupWhy ? '' : b.why, effects: group(b.effects) };
+  return dayPlanHTML(d.dayplan) + bottomLine(list) + list.map((b, i) => { const dupWhy = b.why && seenWhy.has(b.why); if (b.why) seenWhy.add(b.why); const raw = b.effects; b = { ...b, why: dupWhy ? '' : b.why, effects: group(b.effects) };
     const isNew = fresh && fresh.has(b.id || b.link);
     return `<li class="bc${isNew ? ' bc-new' : ''}">
     <span class="bn">${String(i + 1).padStart(2, '0')}</span>

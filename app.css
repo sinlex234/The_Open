@@ -1465,3 +1465,25 @@ table.codes td{padding:0.5rem 0.5rem 0.5rem 0;font-size:0.8438rem;border-top:1px
 table.codes td,table.codes th{text-align:left!important}
 table.codes td:last-child{text-align:right!important}
 .air-c{text-transform:none}
+
+/* ---------- Your day ---------- */
+.dayplan{list-style:none;display:grid;gap:0.75rem;margin-bottom:0.75rem}
+.dp{--c:var(--ink-3);border:1px solid color-mix(in srgb,var(--c) 45%,var(--rule));border-radius:var(--r);background:linear-gradient(180deg,color-mix(in srgb,var(--c) 9%,var(--panel)),var(--panel) 8rem);box-shadow:inset 0 3px 0 var(--c);padding:1rem 1.125rem 1.125rem}
+.dp.up{--c:var(--up)} .dp.down{--c:var(--down)} .dp.range{--c:var(--warn)}
+.dp-top{display:flex;align-items:center;justify-content:space-between;gap:0.5rem}
+.dp-mk{font:600 0.75rem var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+.dp-top .pill{text-transform:none}
+.dp-h{display:flex;align-items:baseline;gap:0.5rem;margin:0.375rem 0 0.5rem;font:650 1.3125rem/1.3 var(--sans);letter-spacing:-.02em;color:var(--ink)}
+.dp-h i{font-style:normal;color:var(--c)}
+.dp-why{margin:0 0 0.75rem;padding-left:1.1rem;font-size:0.8438rem;line-height:1.55;color:var(--ink-2)}
+.dp-lv{display:grid;grid-template-columns:1fr 1fr;gap:0.75rem;padding:0.75rem 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule)}
+.dp-lv>div{display:grid;grid-template-columns:auto 1fr;gap:0.25rem 0.625rem;align-items:baseline}
+.dp-lv .dp-k{grid-column:1/-1}
+.dp-lv b{font:600 0.875rem var(--mono);font-variant-numeric:tabular-nums;color:var(--ink)}
+.dp-lv small{font-size:0.75rem;color:var(--ink-3)}
+.dp-k{margin:0;font:500 0.6875rem var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+.dp-plan{margin-top:0.75rem}
+.dp-plan ol{margin:0.375rem 0 0;padding-left:1.2rem;display:grid;gap:0.375rem;font-size:0.875rem;line-height:1.55;color:var(--ink)}
+.dp-flip{margin:0.75rem 0 0;padding:0.5rem 0.75rem;border-radius:var(--r-sm);background:var(--bg-2);font-size:0.8125rem;color:var(--ink-2)}
+.dp-note{margin:0;font-size:0.75rem;color:var(--ink-3)}
+@media (max-width:640px){.dp-lv{grid-template-columns:1fr}.dp-h{font-size:1.125rem}}
