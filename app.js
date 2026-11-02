@@ -1277,6 +1277,7 @@ const TN_KIND = [
   [/gdp|retail sales|pmi|ism|consumer (confidence|sentiment)|durable/i, 'growth'],
   [/main refinancing|ecb|lagarde|boe|official bank rate|boj|policy rate|cash rate|overnight rate|snb|rba|boc/i, 'cb'],
 ];
+const TN_NOTREL = /election|holiday|daylight|summit|bank holiday/i;
 const tnKind = t => (TN_KIND.find(([re]) => re.test(t)) || [])[1] || 'other';
 // What a surprise usually does: hotter/stronger/more hawkish than expected
 const TN_SURPRISE = {
@@ -1307,8 +1308,8 @@ function tnRead(date, events, earn) {
   const ccy = tnCcys(), now = Date.now();
   const evs = events.filter(e => nyParts(e.time).date === date && ccy.has(e.country));
   const holiday = evs.find(e => e.impact === 'Holiday' && e.country === 'USD' && /holiday/i.test(e.title));
-  const high = evs.filter(e => e.impact === 'High' && !e.allDay);
-  const med = evs.filter(e => e.impact === 'Medium' && !e.allDay);
+  const high = evs.filter(e => e.impact === 'High' && !e.allDay && !TN_NOTREL.test(e.title));
+  const med = evs.filter(e => e.impact === 'Medium' && !e.allDay && !TN_NOTREL.test(e.title));
   const major = high.filter(e => TN_MAJOR.test(e.title + ' ' + (e.name || '')));
   const reps = ((earn && earn.days || []).find(d => d.date === date) || { rows: [] }).rows.filter(r => r.weight);
   let level, word, line;
@@ -1398,7 +1399,12 @@ function mountTradeSlim(id) {
 const REACTED_MS = 10 * 60e3;
 function tnUpcoming(events, n = 3) {
   const ccy = tnCcys(), now = Date.now();
-  return events.filter(e => e.impact === 'High' && !e.allDay && ccy.has(e.country) && e.time + REACTED_MS > now).sort((a, b) => a.time - b.time).slice(0, n);
+  const list = events.filter(e => e.impact === 'High' && !e.allDay && !TN_NOTREL.test(e.title) && ccy.has(e.country) && e.time + REACTED_MS > now).sort((a, b) => a.time - b.time);
+  // Releases at the same minute are one moment for the market: show them as one row, biggest first
+  const groups = [];
+  list.forEach(e => { const g = groups.find(x => x.time === e.time); if (g) g.all.push(e); else groups.push({ ...e, all: [e] }); });
+  groups.forEach(g => { g.all.sort((a, b) => TN_MAJOR.test(b.title + ' ' + (b.name || '')) - TN_MAJOR.test(a.title + ' ' + (a.name || ''))); const lead = g.all[0]; Object.assign(g, { title: lead.title, name: lead.name, country: lead.country }); g.also = [...new Set(g.all.slice(1).map(x => x.name || x.title))]; });
+  return groups.slice(0, n);
 }
 const leftTxt = ms => { const m = Math.max(0, Math.round(ms / 6e4)), d = Math.floor(m / 1440), h = Math.floor(m % 1440 / 60), mm = m % 60; return d ? `${d}d ${h}h` : h ? `${h}h ${mm}m` : `${mm}m`; };
 function expectHTML(cal, earn) {
@@ -1415,7 +1421,7 @@ function expectHTML(cal, earn) {
   const dLab = t => { const d = nyParts(t).date; return d === today ? 'Today' : d === addDay(today, 1) ? 'Tomorrow' : dayFmt(d, { weekday: 'short' }); };
   const upRows = up.map(e => { const k = tnKind(e.title + ' ' + (e.name || '')), sx = TN_SURPRISE[k], live = e.time - 20 * 60e3 <= now;
     return `<li class="tx-ev ${TN_MAJOR.test(e.title + ' ' + (e.name || '')) ? 'lv3' : 'lv2'}${live ? ' tx-now' : ''}"><div class="tx-when"><b>${esc(dLab(e.time))} ${fmtTime(e.time)}</b><small>${e.time > now ? 'in ' + leftTxt(e.time - now) : 'Reacting now'}</small></div>
-      <div class="tx-what"><p class="tx-n">${esc(e.name || e.title)} <span class="faint">${esc(e.country)}</span></p>
+      <div class="tx-what"><p class="tx-n">${esc(e.name || e.title)}${e.also && e.also.length ? `<span class="tx-also"> + ${esc(e.also.join(', '))}</span>` : ''} <span class="faint">${esc(e.country)}</span></p>
       <p class="tx-arrs"><span class="tx-if">If ${esc(sx.hot)}:</span>${tnSyms().map(sym => `<span>${esc(TN_NAME[sym])} <b class="tn-arr ${sx[sym]}">${TN_ARROW[sx[sym]]}</b></span>`).join('')}</p></div></li>`; }).join('');
   return `<div class="tn-head"><h2 class="sec">What to expect</h2><a class="more" href="/calendar">See the week</a></div>
     <div class="tn-body lv${r.level}">
