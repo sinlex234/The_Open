@@ -3136,6 +3136,8 @@ Reply with JSON only: {"bull":"if it plays out bullish, what happens and why (ma
 // ---------- Stripe (keys live in Vercel settings, never in this file) ----------
 var STRIPE = () => ({ key: process.env.STRIPE_SECRET_KEY, hook: process.env.STRIPE_WEBHOOK_SECRET, plus: process.env.STRIPE_PRICE_PLUS, pro: process.env.STRIPE_PRICE_PRO, sync: process.env.OPEN_SYNC_SECRET });
 var SITE = "https://the-open-one.vercel.app";
+// Flip to true when Plus and Pro go on sale to everyone
+var PAYMENTS_OPEN = false;
 function form(obj, pre = "", out = []) {
   Object.entries(obj).forEach(([k, v]) => { if (v == null) return; const key = pre ? `${pre}[${k}]` : k; if (typeof v === "object") form(v, key, out); else out.push(encodeURIComponent(key) + "=" + encodeURIComponent(v)); });
   return out.join("&");
@@ -3161,6 +3163,8 @@ async function checkout(req) {
   const tier = b.tier === "pro" ? "pro" : "plus";
   const u = await signedInUser(tok);
   const plan = await rpcAs(tok, "open_my_plan");
+  // Sales are closed for now: only admins can check out (to test); everyone else gets plans through codes
+  if (!PAYMENTS_OPEN && !(plan && plan.admin)) throw new HttpErr(403, "Plus and Pro aren’t open yet. Have a code? Enter it on this page.");
   if (plan && plan.lifetime) throw new HttpErr(400, "You already have a lifetime plan.");
   const cust = await rpcAs(tok, "open_my_customer").catch(() => null);
   // Already subscribed: send them to Stripe's page to switch or cancel instead of a second subscription

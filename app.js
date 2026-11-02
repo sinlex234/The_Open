@@ -2073,9 +2073,11 @@ function airBtn(headline, inline = false) {
   return `${inline ? '' : '<div class="air-row">'}<button type="button" class="ai-btn" data-air="${esc(headline)}" aria-expanded="false">${SPARK}AI read</button>${inline ? '' : '</div>'}`;
 }
 const PLAN_NAME = { free: 'Free', plus: 'Plus', pro: 'Pro' };
+// Flip to true when Plus and Pro go on sale (the server checks this too)
+const PAYMENTS_OPEN = false;
 function upsellHTML(why, msg) {
   if (why === 'signin') return `<p class="air-up">Sign in to use AI reads. Everyone gets 3 free a day. <a href="/plans">See plans</a></p>`;
-  if (why === 'limit') return `<p class="air-up">${esc(msg)} ${plan.tier === 'pro' ? '' : `<a href="/plans">Upgrade for more</a>`}</p>`;
+  if (why === 'limit') return `<p class="air-up">${esc(msg)} ${plan.tier === 'pro' || !PAYMENTS_OPEN ? '' : `<a href="/plans">Upgrade for more</a>`}</p>`;
   if (why === 'tier') return `<p class="air-up">${esc(msg)} <a href="/plans">See plans</a></p>`;
   return `<p class="air-up">${esc(msg || 'Something went wrong. Try again in a minute.')}</p>`;
 }
@@ -2088,7 +2090,7 @@ async function postAI(fn, body) {
 }
 function airResultHTML(x, headline) {
   const rows = x.reads.map(r => `<div class="air-r"><span class="pill ${r.dir === 'up' ? 'up' : r.dir === 'down' ? 'down' : ''}"><b>${esc(r.label)}</b> ${DIR_TXT[r.dir] || '↕ Unclear'}</span><span class="air-c">${esc(r.conf)} confidence</span><p>${esc(r.why)}</p></div>`).join('');
-  const deep = plan.tier === 'pro' ? `<button type="button" class="linkbtn air-deep" data-deep="${esc(headline)}">Deep dive</button>` : `<a class="linkbtn air-deep-up" href="/plans">Deep dive is part of Pro</a>`;
+  const deep = plan.tier === 'pro' ? `<button type="button" class="linkbtn air-deep" data-deep="${esc(headline)}">Deep dive</button>` : `<a class="linkbtn air-deep-up" href="/plans">Deep dive is part of Pro${PAYMENTS_OPEN ? '' : ' (coming soon)'}</a>`;
   return `<div class="air-head">${SPARK}<b>AI read</b><span>${x.used} of ${x.limit} used today</span></div>${rows}${x.take ? `<p class="air-take">${esc(x.take)}</p>` : ''}<div class="air-foot">${deep}<span>A lean, not a promise. Not financial advice.</span></div><div class="air-deepbox" hidden></div>`;
 }
 document.addEventListener('click', async e => {
@@ -2125,7 +2127,8 @@ const TIERS = [
 PAGES.plans = () => {
   const paid = new URLSearchParams(location.search).get('paid');
   layout(`<div class="today-head"><h1 class="page-h">Plans</h1>
-    <p class="page-intro">The news, calendar and rule-based reads stay free. Plus and Pro add AI that reads each story and tells you how your markets most likely react.</p></div>
+    <p class="page-intro">The news, calendar and rule-based reads stay free. Plus and Pro add AI that reads each story and tells you how your markets most likely react.${PAYMENTS_OPEN ? '' : ' Plus and Pro open soon. If you have a code, enter it below.'}</p></div>
+    ${!PAYMENTS_OPEN && plan.admin ? '<p class="callout plans-ok">Sales are closed to the public. Only admins see the buy buttons, and payments are in Stripe test mode (fake cards only).</p>' : ''}
     ${paid ? '<p class="callout plans-ok">Thanks! Your payment went through. Your plan updates within a minute.</p>' : ''}
     <div id="plansNow"></div>
     <div class="plans">${TIERS.map(t => `<article class="plan-c ${t.id}" data-tier="${t.id}">
@@ -2142,7 +2145,7 @@ PAGES.plans = () => {
     const now = $('#plansNow');
     if (now) now.innerHTML = signedIn() ? `<p class="plans-now">You’re on <b class="plan-badge ${plan.tier}">${PLAN_NAME[plan.tier]}${plan.lifetime ? ' · lifetime' : ''}</b>${plan.period_end && !plan.lifetime ? ` · renews ${new Date(plan.period_end).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}` : ''} · ${plan.used || 0} of ${plan.limit || 3} AI reads used today${plan.has_billing ? ' · <button class="linkbtn" id="billBtn" type="button">Manage billing</button>' : ''}</p>` : '<p class="plans-now">Sign in to pick a plan or use a code.</p>';
     main.querySelectorAll('[data-cta]').forEach(el => { const t = el.dataset.cta;
-      el.innerHTML = plan.tier === t ? '<span class="plan-cur">Your plan</span>' : t === 'free' ? '' : plan.lifetime ? '<span class="plan-cur">Included in your lifetime plan</span>' : `<button class="${t === 'pro' ? 'btn-primary' : 'btn-ghost'}" type="button" data-buy="${t}">${TIER_RANK_C[t] > TIER_RANK_C[plan.tier] ? 'Get ' + PLAN_NAME[t] : 'Switch to ' + PLAN_NAME[t]}</button>`; });
+      el.innerHTML = plan.tier === t ? '<span class="plan-cur">Your plan</span>' : t === 'free' ? '' : plan.lifetime ? '<span class="plan-cur">Included in your lifetime plan</span>' : !PAYMENTS_OPEN && !plan.admin ? '<span class="plan-cur">Coming soon</span>' : `<button class="${t === 'pro' ? 'btn-primary' : 'btn-ghost'}" type="button" data-buy="${t}">${TIER_RANK_C[t] > TIER_RANK_C[plan.tier] ? 'Get ' + PLAN_NAME[t] : 'Switch to ' + PLAN_NAME[t]}</button>`; });
     main.querySelectorAll('.plan-c').forEach(c => c.classList.toggle('cur', c.dataset.tier === plan.tier));
     main.querySelectorAll('[data-buy]').forEach(btn => btn.onclick = async () => {
       if (!signedIn()) { $('#codeMsg').textContent = ''; btn.textContent = 'Sign in first'; return; }
