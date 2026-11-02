@@ -1979,6 +1979,13 @@ function readHeadline(title) {
   const done = {};
   const set = (k, d, kind) => { if (!done[k] && d) { res[k] = { d, kind }; done[k] = true; } };
   const block = (k, why) => { if (!done[k]) { res[k] = null; done[k] = true; res["why_" + k] = why; } };
+  // A foreign market falling on a global tech or AI scare still spills into the Nasdaq ("Asian stocks fall as tech rout fuels AI fears")
+  if (foreignEq) {
+    const gDown = /\b(?:tech|chip|chipmaker|semiconductor|ai)(?:[- ]stocks?)?[- ](?:rout|selloff|sell-off|slump|meltdown|plunge|wipeout)\b|\bai (?:fears|jitters|bubble fears|worries|scare)\b/i.test(t);
+    const gUp = /\b(?:tech|chip|semiconductor|ai)(?:[- ]stocks?)?[- ](?:rally|rebound|boom|surge)\b/i.test(t);
+    // Only when it's the global AI/US-tech story, not a local tech selloff (Hong Kong tech is its own thing)
+    if (gDown !== gUp && /\b(?:ai|global|nasdaq|wall street|u\.?s\.? tech|nvidia)\b/i.test(t)) set("NQ", gDown ? -1 : 1, "ai");
+  }
   if (foreignEq) block("NQ", "about another country's stock market");
   // "SomeCompany shares plunge after..." is about one company: don't read market meaning into the reasons behind it
   const oneCo = rdMove(first, "\\b(?:shares|stock)\\b");
@@ -2044,7 +2051,7 @@ var RD_WHY = {
   fed: { up: "Talk of lower US rates usually helps stocks, tech the most.", down: "Talk of higher US rates usually weighs on stocks, tech the most." },
   inflation: { up: "Cooler US inflation means less pressure to raise rates, which helps stocks.", down: "Hotter US inflation means higher rates for longer, which weighs on stocks." },
   yields: { up: "Falling bond yields usually help stocks, tech the most.", down: "Rising bond yields usually weigh on stocks, tech the most." },
-  ai: { down: "Worries about AI spending are hitting the giant tech companies that drive the Nasdaq." },
+  ai: { down: "Worries about AI spending are hitting the giant tech companies that drive the Nasdaq.", up: "Confidence in AI and big tech is back, and those companies drive the Nasdaq." },
   trade: { up: "Easing trade tension usually helps stocks.", down: "New tariffs usually weigh on stocks." },
   oil: { up: "Cheaper oil eases inflation worries, which helps stocks.", down: "Pricier oil feeds inflation worries, which weighs on stocks." },
   "crypto-event": { up: "Money is flowing into crypto funds.", down: "A big exchange hack or forced selling shakes confidence and usually hits crypto prices." },
@@ -2126,18 +2133,50 @@ async function priceBars() {
   const { res } = await settle(Object.fromEntries(Object.entries(PX_CFG).map(([k, c]) => [k, yahooChart(c.sym, { interval: "5m", range: "2d" })])));
   return Object.fromEntries(Object.entries(res).map(([k, v]) => [k, v && v.bars]));
 }
+// AI read: for briefing stories the rules can't call, ask Claude how the market most likely reacts.
+// Price that has already answered wins over the AI; the AI only fills in what's still unclear.
+var AI_MK = { futures: "NQ (Nasdaq 100 futures)", stocks: "US stocks (S&P 500)", options: "S&P 500", crypto: "Bitcoin", memes: "memecoins", forex: "the currency pair named" };
+async function aiBriefReads(briefing) {
+  if (!hasAI()) return "off";
+  const asks = [];
+  briefing.forEach((b, i) => (b.effects || []).forEach((e, j) => { if (e.dir === "mixed" && !e.by && !e.paused) asks.push({ i, j, headline: b.headline, market: e.market === "forex" ? e.label : AI_MK[e.market] || e.market }); }));
+  if (!asks.length) return "nothing unclear";
+  const key = "air:" + asks.map((a) => a.headline + "|" + a.market).join("~");
+  const res = await memo(key, 20 * 6e4, () => askClaude({
+    system: VOICE + `
+You read market headlines and say how the named market most likely reacts over the next few hours.
+- Answer "up", "down" or "unclear". Pick a side whenever a typical professional trader would lean one way; say "unclear" only if it truly cuts both ways or doesn't touch that market.
+- Confidence: "high", "medium" or "low".
+- "why": one short sentence, plain English, no advice, max 22 words.
+Reply with JSON only: {"reads":[{"n":0,"dir":"down","conf":"medium","why":"..."}]}`,
+    user: asks.map((a, n) => `${n}. Headline: "${a.headline}" | Market: ${a.market}`).join("\n"),
+    maxTokens: 700
+  }));
+  let used = 0;
+  ((res && res.reads) || []).forEach((r) => {
+    const a = asks[r.n];
+    if (!a || !/^(up|down)$/.test(r.dir) || r.conf === "low" || !r.why) return;
+    const e = briefing[a.i].effects[a.j];
+    briefing[a.i].effects[a.j] = { ...e, dir: r.dir, by: "ai", conf: r.conf, reason: String(r.why).slice(0, 200) };
+    used++;
+  });
+  return `read ${asks.length}, called ${used}`;
+}
 function checkCalls(effects, t, px) {
   if (!px || !t) return effects;
   return effects.map((e) => {
     const k = e.market === "forex" ? (e.label === "EUR/USD" ? "EURUSD" : null) : PX_OF[e.market];
     const c = PX_CFG[k], bars = px[k];
-    if (!c || !bars || bars.length < 2 || e.dir === "mixed") return e;
+    if (!c || !bars || bars.length < 2) return e;
     const p0 = priceAt(bars, Math.max(t, bars[0].t)), p1 = bars[bars.length - 1].c;
     if (p0 == null) return e;
     const pct = (p1 - p0) / p0 * 100, amt = c.pip ? Math.round((p1 - p0) / c.pip) : +(p1 - p0).toFixed(c.dp);
     const txt = `${c.name} is ${amt > 0 ? "up" : "down"} ${c.unit === "$" ? "$" : ""}${Math.abs(amt).toLocaleString("en-US")}${c.unit === "$" ? "" : " " + c.unit} since this story`;
     const against = e.dir === "up" ? pct <= -c.against : pct >= c.against;
     const agrees = e.dir === "up" ? pct >= c.against / 2 : pct <= -c.against / 2;
+    // No lean in the headline itself: if the market has clearly answered since the story, show that reaction
+    if (e.dir === "mixed" && !e.held && Date.now() - t >= 15 * 6e4 && Math.abs(pct) >= c.against) return { ...e, dir: pct > 0 ? "up" : "down", by: "market", reason: `The headline alone doesn\u2019t say which way, but the market has answered: ${txt}.` };
+    if (e.dir === "mixed") return e;
     if (against) return { ...e, dir: "mixed", held: e.dir, paused: true, reason: `Call paused: price disagrees. ${txt}, so the market isn\u2019t taking this story the usual way.` };
     if (agrees) return { ...e, agrees: true, reason: `${e.reason} So far price agrees: ${txt}.` };
     return e;
@@ -2181,7 +2220,7 @@ function decideBy(h, upcoming, m) {
 function briefingFor(stories, prof, upcoming, focus, px) {
   const mk = prof.map((x) => x.m);
   const rel = (h) => mk.some((m) => relevantFor(h, m) || (h.markets || []).includes(m));
-  let pool = stories.filter((h) => h.theme);
+  let pool = stories.filter((h) => h.theme && !NOISE_RE.test(h.title));
   if (focus) pool = pool.filter((h) => relevantFor(h, focus) || (h.markets || []).includes(focus));
   const DIRECT = { memes: ["memes", "crypto"], crypto: ["crypto", "memes"], forex: ["dollar", "rates", "gold", "inflation", "jobs"], futures: ["earnings", "ai", "rates", "inflation", "jobs"], stocks: ["earnings", "ai", "rates", "growth"], options: ["options", "earnings", "rates"] };
   const direct = (h) => (focus ? [focus] : mk).some((m) => (DIRECT[m] || []).includes(h.theme));
@@ -2399,6 +2438,7 @@ Pick the 4-6 most important stories, world events first. effects should only lis
   const allStories = (res.news && res.news.items || []).filter((h) => h.time && stillUseful(h, focus ? [focus] : prof.map((x) => x.m), now));
   const px = await priceBars().catch(() => null);
   out.briefing = briefingFor(allStories, prof, upcoming, focus, px);
+  out.aiReads = await aiBriefReads(out.briefing).catch((e) => "error: " + String(e.message || e).slice(0, 120));
   // When each story is most likely to hit price: its test time, with how much that slot usually moves
   {
     const m0 = focus || (prof.find((x) => x.m !== "learning") || {}).m || "futures";

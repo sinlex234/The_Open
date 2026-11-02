@@ -1398,3 +1398,5 @@ body{font-feature-settings:"cv11" 1,"ss01" 1;letter-spacing:-0.005em}
 .tx-ev.tx-now .tx-when small{color:var(--lv)}
 .tn-day[aria-pressed="true"]{border-color:color-mix(in srgb,var(--lv) 60%,transparent);background:color-mix(in srgb,var(--lv) 10%,var(--bg-2))}
 .tx-also{font-weight:500;color:var(--ink-2)}
+.pill.by-ai{border-color:var(--acc-line);color:var(--acc-2);background:var(--acc-bg)}
+.pill.by-mk{color:var(--ink-2)}

@@ -319,3 +319,5 @@ Coinbase Posts Prediction Market Trading Boost As Crypto Cools In Q3 | 0 | 0 | 0
 Higher oil prices weigh on Wall Street | d | 0 | 0
 Bitcoin, cryptocurrency prices fall after Binance reports security issue | 0 | d | 0
 Google stock plunges more than 12% on Q3 earnings miss | d | 0 | 0
+Asian Stocks to Fall as Tech Rout Fuels AI Fears: Markets Wrap | d | 0 | 0
+European stocks rally as AI rebound spreads | u | 0 | 0
