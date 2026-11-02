@@ -778,7 +778,7 @@ async function checkAlerts() {
       .forEach(e => notify('ev:' + e.title + e.time, `${e.name} in ${Math.max(1, Math.round((e.time - now) / 60e3))} min`, `${e.country}, ${fmtTime(e.time)}. ${forYouEvent(e) || e.why}`));
   }
   if (AL.breaking && alertGetters.wire) {
-    try { (await alertGetters.wire()).filter(h => h.breaking && relevance(h) - (h.score || 0) >= 1.5).slice(0, 2).forEach(h => notify('br:' + h.id, 'Breaking: ' + h.title, forYouHeadline(h) || h.why || h.source)); } catch {}
+    try { (await alertGetters.wire()).filter(h => h.breaking && relevance(h) - (h.score || 0) >= 1.5).slice(0, 2).forEach(h => notify('br:' + h.title.toLowerCase().replace(/\W+/g, '').slice(0, 80), 'Breaking: ' + h.title, forYouHeadline(h) || h.why || h.source)); } catch {}
   }
   if (AL.sessions) mySessions().forEach(s => { const d = (s.from - m + 1440) % 1440; if (d <= 5 && sessionDay(s, nyDow(Date.now() + d * 6e4))) notify('ss:' + s.id + today, `${s.label} ${d ? `starts in ${d} min` : 'has started'}`, 'Your briefing is up to date on the front page.'); });
   if (AL.levels && alertGetters.levels) {
@@ -798,7 +798,8 @@ export function openAlerts() {
   const perm = !('Notification' in window) ? 'unsupported' : Notification.permission;
   const lv = levelTrader();
   p.innerHTML = `<div class="ap-h"><h2>Alerts</h2><button class="x" aria-label="Close">×</button></div>
-    <p class="muted small">Alerts show while this site is open in a tab, even in the background.</p>
+    <p class="muted small">Alerts show while this site is open in a tab, even in the background. Keep the tab open (pinning it helps): if Chrome puts the tab to sleep, alerts pause until you come back.</p>
+    <p class="small ap-status">${!('Notification' in window) ? 'Status: this browser can’t show notifications.' : Notification.permission === 'granted' ? 'Status: desktop notifications are on ✓' : Notification.permission === 'denied' ? 'Status: notifications are blocked for this site ✗' : 'Status: notifications aren’t turned on yet. Click “Allow notifications” below.'}</p>
     ${perm === 'granted' ? '' : perm === 'unsupported' ? '<p class="small muted">This browser can’t show notifications, so alerts appear as banners on the page.</p>' : (perm === 'denied' ? '<p class="small muted">Notifications are blocked for this site. Turn them on in your browser’s site settings. Until then, alerts appear as banners on the page.</p>' : '<button class="btn-primary" id="apPerm" style="width:100%;margin:8px 0 4px">Allow notifications</button>')}
     <label class="tg"><input type="checkbox" id="apNews" ${AL.news ? 'checked' : ''}><span><b>Before big scheduled news in my markets</b><small><select id="apLead">${[2, 5, 10, 15, 30].map(v => `<option value="${v}" ${AL.lead === v ? 'selected' : ''}>${v} min</option>`).join('')}</select> ahead</small></span></label>
     <label class="tg"><input type="checkbox" id="apRes" ${AL.results !== false ? 'checked' : ''}><span><b>Results the moment big data comes out</b><small>The actual number, the surprise against forecast, and what it likely means for your markets.</small></span></label>
@@ -811,7 +812,11 @@ export function openAlerts() {
   ['apRes', 'apNews', 'apLead', 'apBreak', 'apSess', 'apLv'].forEach(id => { if ($('#' + id)) $('#' + id).onchange = save; });
   p.querySelector('.x').onclick = () => { p.hidden = true; };
   if ($('#apPerm')) $('#apPerm').onclick = async () => { await Notification.requestPermission(); openAlerts(); };
-  $('#apTest').onclick = () => notify('test' + Date.now(), 'Alerts are working', 'You’ll get notes like this before big news and when your trading time starts.');
+  $('#apTest').onclick = () => {
+    const granted = 'Notification' in window && Notification.permission === 'granted';
+    notify('test' + Date.now(), 'Alerts are working', 'You’ll get notes like this before big news and when your trading time starts.');
+    if (granted) toast('Test sent', 'A desktop notification should have popped up too. If it didn’t, notifications for your browser are turned off in your computer’s settings (Windows: Settings → System → Notifications → Google Chrome).');
+  };
 }
 
 // ================= start-up =================

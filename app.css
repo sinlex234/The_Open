@@ -1487,3 +1487,11 @@ table.codes td:last-child{text-align:right!important}
 .dp-flip{margin:0.75rem 0 0;padding:0.5rem 0.75rem;border-radius:var(--r-sm);background:var(--bg-2);font-size:0.8125rem;color:var(--ink-2)}
 .dp-note{margin:0;font-size:0.75rem;color:var(--ink-3)}
 @media (max-width:640px){.dp-lv{grid-template-columns:1fr}.dp-h{font-size:1.125rem}}
+.dp-sub{margin-left:0.5rem;font:500 0.8125rem var(--sans);letter-spacing:0;color:var(--ink-3)}
+.dp-when{display:grid;gap:0.25rem;margin:0 0 0.75rem;padding:0.625rem 0.75rem;border-radius:var(--r-sm);background:color-mix(in srgb,var(--c) 10%,var(--bg-2));border:1px solid color-mix(in srgb,var(--c) 30%,var(--rule))}
+.dp-wt{font:600 0.9062rem/1.45 var(--sans);color:var(--ink)}
+/* Sessions and Live read side by side, lined up */
+@container (min-width:28rem){.t-now{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.t-now>.now-sec{margin-top:0!important}
+.t-now .now-sec>.sec-row{display:flex;align-items:center;justify-content:space-between;min-height:2rem;margin:0 0 0.625rem}
+.t-now .now-sec>.sec-row .sec{margin:0;line-height:2rem}

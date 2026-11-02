@@ -3,7 +3,7 @@ import {
   initMe, me, myMarkets, myAssets, isBeginner, isLearning, depth, hasStrat, levelTrader, intraday, stratsFor,
   forYouEvent, forYouHeadline, forYouStrength, relevance, greeting, windowStatus, startAlerts, openAlerts, editSetup,
   profileQuery, marketLabel, myStruggles, isProp, newsRestricted, notify,
-  userTZ, plan, isPaid, authToken, rpc, loadPlan, signedIn,
+  userTZ, plan, isPaid, authToken, rpc, loadPlan, signedIn, mySessions as mySessionsC,
 } from './me.js';
 import { GLOSSARY } from './glossary.js';
 import { SUPABASE_URL, SUPABASE_KEY } from './config.js';
@@ -706,18 +706,47 @@ function sessionDay(t = Date.now()) {
   return { isToday: d.getTime() === today.getTime(), long: d.toLocaleDateString('en-US', { timeZone: 'UTC', weekday: 'long', month: 'short', day: 'numeric' }), day: d.toLocaleDateString('en-US', { timeZone: 'UTC', weekday: 'long' }) };
 }
 // Overall summary: add up what the stories say for each market. The top story counts most.
-// "Your day": one clear call per market, the levels, and the plan for the reader's strategy
+// "Your day": the bias for the reader's own session, and when the move most likely comes
+const DAY_SESS = { futures: { from: 570, to: 690, label: 'the New York open' }, stocks: { from: 570, to: 690, label: 'the New York open' }, options: { from: 570, to: 690, label: 'the New York open' }, crypto: { from: 570, to: 960, label: 'the US session' }, memes: { from: 570, to: 960, label: 'the US session' }, forex: { from: 480, to: 720, label: 'the London–New York overlap' } };
+const minsTxt = m => { const h = Math.floor(m / 60) % 24, mm = m % 60, ap = h >= 12 ? 'PM' : 'AM'; return `${(h % 12) || 12}${mm ? ':' + String(mm).padStart(2, '0') : ''} ${ap}`; };
+function daySession(market) {
+  const mine = (mySessionsC() || []).filter(x => x.from != null && x.to != null);
+  if (mine.length) return { from: mine[0].from, to: mine[0].to, label: mine[0].phrase || mine[0].label.toLowerCase() };
+  return DAY_SESS[market] || DAY_SESS.futures;
+}
 function dayPlanHTML(plans) {
   if (!plans || !plans.length) return '';
   const arrow = { up: '↑', down: '↓', range: '↔' };
-  return `<li class="dayplan">${plans.map(p => `<div class="dp ${p.call}">
-    <div class="dp-top"><span class="dp-mk">${esc(p.short)}</span><span class="pill ${p.call === 'up' ? 'up' : p.call === 'down' ? 'down' : ''}">${p.conf} confidence</span></div>
-    <p class="dp-h"><i>${arrow[p.call]}</i>${esc(p.head)}</p>
+  setTimeout(fillDayWhen, 0);
+  return `<li class="dayplan">${plans.map(p => { const ss = daySession(p.market);
+    return `<div class="dp ${p.call}">
+    <div class="dp-top"><span class="dp-mk">${esc(p.short)} · ${esc(ss.label)}, ${minsTxt(ss.from)}–${minsTxt(ss.to)} ET</span><span class="pill ${p.call === 'up' ? 'up' : p.call === 'down' ? 'down' : ''}">${esc(p.conf)} confidence</span></div>
+    <p class="dp-h"><i>${arrow[p.call]}</i>${esc(p.head)}${p.call !== 'range' ? `<span class="dp-sub">for your session</span>` : ''}</p>
+    <p class="dp-when" data-tk="${esc(p.timing || 'NQ')}" data-from="${ss.from}" data-to="${ss.to}" data-call="${p.call}" data-ev="${esc(p.event ? p.event.name + '|' + p.event.time : '')}"><span class="dp-k">Most likely move</span><span class="dp-wt">${p.event ? `${esc(p.event.time)}, when ${esc(p.event.name)} comes out` : 'Working it out…'}</span></p>
     <ul class="dp-why">${p.why.map(w => `<li>${esc(w)}</li>`).join('')}</ul>
-    ${p.levels && (p.levels.above.length || p.levels.below.length) ? `<div class="dp-lv"><div><span class="dp-k">Above${p.levels.price ? ` · price ${esc(p.levels.price)}` : ''}</span>${p.levels.above.map(l => `<b>${esc(l.txt)}</b><small>${esc(l.name)}</small>`).join('') || '<small>—</small>'}</div><div><span class="dp-k">Below</span>${p.levels.below.map(l => `<b>${esc(l.txt)}</b><small>${esc(l.name)}</small>`).join('') || '<small>—</small>'}</div></div>` : ''}
     ${p.plans.map(pl => `<div class="dp-plan"><p class="dp-k">Your plan · ${esc(pl.name)}</p><ol>${pl.steps.map(x => `<li>${esc(x)}</li>`).join('')}</ol></div>`).join('')}
     ${p.flip ? `<p class="dp-flip">${esc(p.flip)}</p>` : ''}
-  </div>`).join('')}<p class="dp-note">How traders using your strategy usually approach a day like this, from today’s news, price and the Live read. A plan, not a promise, and not financial advice.</p></li>`;
+  </div>`; }).join('')}<p class="dp-note">From today’s news, price and the Live read, for the session you trade. A lean, not a promise, and not financial advice.</p></li>`;
+}
+// When in the reader's session price usually moves most (a big release wins), from the last month of bars
+function fillDayWhen() {
+  document.querySelectorAll('.dp-when[data-tk]:not([data-done])').forEach(el => {
+    el.dataset.done = '1';
+    const from = +el.dataset.from, to = +el.dataset.to, call = el.dataset.call, ev = el.dataset.ev;
+    api('timing?m=' + el.dataset.tk, 15 * 60e3).then(t => {
+      const inS = (t.slots || []).filter(x => x.start >= from && x.start < to);
+      if (!inS.length) return;
+      const evSlot = inS.find(x => (x.events || []).some(e => e.impact === 'High'));
+      const best = evSlot || inS.filter(x => x.typical).sort((a, b) => b.typical - a.typical)[0];
+      if (!best) return;
+      const unit = t.unit === '$' ? '$' : '', u2 = t.unit === '$' ? '' : ' ' + t.unit;
+      const size = best.typical ? `usually about ${unit}${num(best.typical, 0)}${u2}` : '';
+      const dirTxt = call === 'up' ? 'the push up' : call === 'down' ? 'the drop' : 'the move';
+      const wt = el.querySelector('.dp-wt');
+      if (evSlot) { const e = evSlot.events.find(x => x.impact === 'High'); wt.textContent = `${fmtTime(e.time)}, when ${e.name} comes out. Expect ${dirTxt} right after it${size ? ` (that half hour moves ${size})` : ''}.`; }
+      else wt.textContent = `${minsTxt(best.start)}–${minsTxt(best.end)} ET${best.tag ? ` (${best.tag})` : ''}. That’s when ${dirTxt} most likely happens: the busiest stretch of your session, ${size}.`;
+    }).catch(() => { const wt = el.querySelector('.dp-wt'); if (wt && !ev) wt.textContent = `The first hour of your session, ${minsTxt(from)}–${minsTxt(from + 60)} ET, is usually the most active.`; });
+  });
 }
 function bottomLine(list) {
   const m = {};
@@ -1086,7 +1115,7 @@ function pulseHTML(d) {
 }
 // Scan timer: a new read at every 5-minute bar close (:00, :05, :10…), the same moment the chart's 5m bar closes.
 // The data is fetched a few seconds after the close so the finished bar is in.
-const PULSE_MS = 5 * 60e3, PULSE_GRACE = 4e3;
+const PULSE_MS = 60e3, PULSE_GRACE = 4e3;
 const pulseSlot = () => Math.floor((Date.now() - PULSE_GRACE) / PULSE_MS);
 let pulseShown = null, pulseTimer = null;
 function loadPulse() {
@@ -1103,7 +1132,7 @@ function tickPulse() {
     if (Date.now() >= close + PULSE_GRACE) loadPulse();
     return;
   }
-  el.innerHTML = `Next scan <b>${fmtLeft(left)}</b>`; el.title = 'Scans when each 5-minute bar closes';
+  el.innerHTML = `Next scan <b>${fmtLeft(left)}</b>`; el.title = 'Scans when each 1-minute bar closes';
 }
 // "Since you last looked": new briefing stories, how far your markets moved, and calls that changed
 function sinceStart(d) {
@@ -2133,7 +2162,7 @@ document.addEventListener('click', async e => {
 });
 
 const TIERS = [
-  { id: 'free', name: 'Free', price: '$0', per: '', tag: 'Everything you use today', feats: ['All news, the Calendar, earnings and “Trade the news?”', 'Briefing calls from the site’s own rules, plus market reactions', 'Live read every 5 minutes, and the Scorecard', '3 AI reads a day when you’re signed in'] },
+  { id: 'free', name: 'Free', price: '$0', per: '', tag: 'Everything you use today', feats: ['All news, the Calendar, earnings and “Trade the news?”', 'Briefing calls from the site’s own rules, plus market reactions', 'Live read every minute, and the Scorecard', '3 AI reads a day when you’re signed in'] },
   { id: 'plus', name: 'Plus', price: '$10', per: '/ month', tag: 'AI on the stories that matter', feats: ['Everything in Free', 'AI read on any story: 40 a day', 'Your briefing’s “Unclear” calls filled in by AI automatically', 'AI-written morning brief and “Explain this” on every story'] },
   { id: 'pro', name: 'Pro', price: '$30', per: '/ month', tag: 'The full AI desk', feats: ['Everything in Plus', '250 AI reads a day', 'Deep dive on any story: both scenarios, what would flip it, what to watch, how it fits your strategies', 'AI-written “What’s next” outlook and game plan for your strategies', 'AI theses on memecoins'] }
 ];
@@ -2278,7 +2307,7 @@ function mStatus() {
   const el = $('#mstatus'); if (!el || !started) return;
   const mk = myMarkets().filter(m => m !== 'learning');
   const reopen = allShut(mk);
-  const next = fmtLeft(lastRefresh + 120e3 - Date.now());
+  const next = fmtLeft(60e3 - Date.now() % 60e3);
   const upd = `<span>Updated ${fmtTime(lastRefresh)} ${tzAbbr()}</span><span class="ms-next">Next update in ${next}</span>`;
   if (reopen) {
     const names = [...new Set(mk.map(m => MS_NAME[m]).filter(Boolean))];
@@ -2303,10 +2332,12 @@ setInterval(() => {
   [...cache.keys()].filter(k => String(k).startsWith('wire')).forEach(k => cache.delete(k));
   route(true);
 }, 30e3);
-// Refresh data every two minutes without reloading charts
-setInterval(() => {
+// Refresh data on every 1-minute bar close (:00), without reloading charts
+function minuteRefresh() {
+  setTimeout(minuteRefresh, 60e3 - Date.now() % 60e3 + 1500);
   if (!started || document.visibilityState !== 'visible' || document.body.classList.contains('locked')) return;
   cache.clear(); mountStrip(); lastRefresh = Date.now();
   api('calendar').then(d => { calendarCache = d.events; }).catch(() => {});
   route(true);
-}, 120e3);
+}
+setTimeout(minuteRefresh, 60e3 - Date.now() % 60e3 + 1500);

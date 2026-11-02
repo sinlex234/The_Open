@@ -2386,7 +2386,7 @@ function dayLevels(L, dp, unit) {
   const below = uniq(cands.filter(([, v]) => v < px - gap).map(([n, v]) => ({ name: n, v, txt: f(v) })).sort((a, b) => b.v - a.v)).slice(0, 3);
   return { price: f(px), above, below };
 }
-var lvl = (x) => x ? `${/^(Asia|London)/.test(x.name) ? x.name : x.name.charAt(0).toLowerCase() + x.name.slice(1)} (${x.txt})` : "";
+var lvl = (x) => x ? (/^(Asia|London)/.test(x.name) ? "the " + x.name : x.name.charAt(0).toLowerCase() + x.name.slice(1)) : "the nearest level";
 // What a trader using each strategy usually does on a day like this
 function stratPlan(s2, call, lv, ev, m) {
   const up = call === "up", dn = call === "down";
@@ -2397,8 +2397,8 @@ function stratPlan(s2, call, lv, ev, m) {
   const pre = ev ? `Stay flat into ${ev.name} at ${ev.time}. ` : "";
   const sess = ["crypto", "memes"].includes(m) ? "the US session (from 9:30 AM New York)" : m === "forex" ? "the London–New York overlap (8 AM–12 PM New York)" : "the New York open (9:30–11:00 AM)";
   const P = {
-    ict: up ? [`${pre}Bias: long. In ${sess}, expect a quick run below ${lvl(b1)} to grab sell-side liquidity first.`, `After that sweep, look for displacement up and a fair value gap to enter on the pullback.`, `Targets: ${lvl(a1)}, then ${lvl(a2)}.`]
-      : dn ? [`${pre}Bias: short. In ${sess}, expect a quick run above ${lvl(a1)} to grab buy-side liquidity first.`, `After that sweep, look for displacement down and a fair value gap to enter on the pullback.`, `Targets: ${lvl(b1)}, then ${lvl(b2)}.`]
+    ict: up ? [`${pre}Bias: long. In ${sess}, expect a quick run below ${lvl(b1)} to grab sell-side liquidity first.`, `After that sweep, look for displacement up and a fair value gap to enter on the pullback.`, `${a2 && a2 !== a1 ? `Targets: ${lvl(a1)}, then ${lvl(a2)}` : `Target: ${lvl(a1)}`}.`]
+      : dn ? [`${pre}Bias: short. In ${sess}, expect a quick run above ${lvl(a1)} to grab buy-side liquidity first.`, `After that sweep, look for displacement down and a fair value gap to enter on the pullback.`, `${b2 && b2 !== b1 ? `Targets: ${lvl(b1)}, then ${lvl(b2)}` : `Target: ${lvl(b1)}`}.`]
       : [`${pre}No bias. Expect both ${lvl(a1)} and ${lvl(b1)} to be in play.`, `Wait for one side to get swept, then trade the displacement the other way.`, `If both sides get swept, the day has no direction: stand aside.`],
     pa: up ? [`${pre}Buy pullbacks that hold above ${lvl(b1)}.`, `A clean break above ${lvl(a1)} is the move most likely to follow through toward ${lvl(a2)}.`, `Breaks below ${lvl(b1)} are more likely to fail: don’t chase them.`]
       : dn ? [`${pre}Sell rallies that fail under ${lvl(a1)}.`, `A clean break below ${lvl(b1)} is the move most likely to follow through toward ${lvl(b2)}.`, `Breaks above ${lvl(a1)} are more likely to fail: don’t chase them.`]
@@ -2433,9 +2433,11 @@ async function dayPlanFor(prof, states, events, now) {
     const trendS = st.trend === "up" ? 0.7 : st.trend === "down" ? -0.7 : 0;
     const pulseS = pr && pr.lean === "up" ? (pr.conf === "high" ? 0.8 : 0.5) : pr && pr.lean === "down" ? -(pr.conf === "high" ? 0.8 : 0.5) : 0;
     const score = newsS + trendS + pulseS;
-    const call = score >= 0.9 ? "up" : score <= -0.9 ? "down" : "range";
+    // Always lean one way for the session: overall score first, then the Live read, the trend, the news, then today's move
+    const tie = Math.sign(score) || Math.sign(pulseS) || Math.sign(trendS) || Math.sign(newsS) || Math.sign(st.tp || 0);
+    const call = tie > 0 ? "up" : tie < 0 ? "down" : "range";
     const agree = [newsS, trendS, pulseS].filter((x) => Math.sign(x) === Math.sign(score) && x !== 0).length;
-    const conf = call === "range" ? "low" : Math.abs(score) >= 1.8 && agree >= 3 ? "high" : agree >= 2 ? "medium" : "low";
+    const conf = call === "range" || Math.abs(score) < 0.9 ? "low" : Math.abs(score) >= 1.8 && agree >= 3 ? "high" : agree >= 2 ? "medium" : "low";
     const ccy = m === "forex" ? ["USD", "EUR"] : ["USD"];
     const evs = events.filter((e) => e.impact === "High" && !e.allDay && ccy.includes(e.country) && ny(e.time).date === today && e.time > now - 10 * 6e4 && !/election|holiday/i.test(e.title));
     const big = evs.find((e) => MAJOR_EV.test(e.title)) || evs[0];
@@ -2445,12 +2447,13 @@ async function dayPlanFor(prof, states, events, now) {
     if (trendS) why.push(`${c.short} is already moving ${st.trend}${st.tp != null ? ` (${st.tp > 0 ? "+" : ""}${st.tp.toFixed(2)}% today)` : ""}.`);
     if (pulseS) why.push(`The latest Live read leans ${pr.lean} (${pr.conf} confidence).`);
     if (ev) why.push(`${ev.name} at ${ev.time} can override all of this.`);
-    const word = call === "up" ? "Expect an up day" : call === "down" ? "Expect a down day" : "Expect a range day";
-    const head = ev && ev.major ? `${word}, but ${ev.name} at ${ev.time} decides it` : word;
+    const word = call === "up" ? "Bias: up" : call === "down" ? "Bias: down" : "No bias yet";
+    const head = word;
+    if (Math.abs(score) < 0.9 && call !== "range") why.push("The signals are mixed, so this is a slight lean, not a strong call.");
     const flip = call === "up" ? (lv.below[1] || lv.below[0]) : call === "down" ? (lv.above[1] || lv.above[0]) : null;
     const strats = ((prof.find((x) => x.m === m) || {}).strats || []).slice(0, 2);
     const plans = (strats.length ? strats : ["unsure"]).map((s2) => ({ strategy: s2, name: STRAT_NAMES[s2] || "Your plan", steps: stratPlan(s2, call, lv, ev, m).filter(Boolean) }));
-    return { market: m, short: c.short, call, conf, head, why, levels: lv, flip: flip ? `${call === "up" ? "Below" : "Above"} ${lvl(flip)}, this read is wrong. Step back and reassess.` : "", event: ev, plans };
+    return { market: m, short: c.short, timing: PULSE_OF[m], call, conf, head, why, levels: lv, flip: flip ? `If price breaks ${call === "up" ? "below" : "above"} ${lvl(flip)}, the bias is wrong. Step back and reassess.` : "", event: ev, plans };
   }));
 }
 function playbookFor(prof, states) {
@@ -3122,8 +3125,9 @@ async function buildPulse() {
       if (r.lean !== "none" && a.lean !== r.lean) { r.lean = "none"; r.conf = null; r.why = a.lean === "none" ? "The AI check saw no clear edge, so no lean." : "The rules and the AI check disagree, so no lean."; }
     });
   }
-  const log = await pulseLog(reads);
-  return { reads: reads.map(({ stories: st, ...r }) => ({ ...r, stories: st.map(({ wt, ...s }) => s) })), next: Math.floor(now / PULSE_SLOT) * PULSE_SLOT + PULSE_SLOT, aiStatus, log, updated: now };
+  // Reads refresh every minute; the Scorecard log and the AI check stay on 5-minute slots
+  const log = now - reads[0].slot < 90e3 ? await pulseLog(reads) : "between slots";
+  return { reads: reads.map(({ stories: st, ...r }) => ({ ...r, stories: st.map(({ wt, ...s }) => s) })), next: Math.floor(now / 6e4) * 6e4 + 6e4, aiStatus, log, updated: now };
 }
 // Grade each lean after one hour (the Scorecard's "Live read" section)
 async function buildPulseScore() {
@@ -3336,7 +3340,7 @@ var ROUTES = {
   explain: [(q) => build12(q), 86400],
   calls: [() => buildCalls(), 300],
   timing: [(q) => buildTiming(String(q.m || "NQ").toUpperCase()), 900],
-  pulse: [() => buildPulse(), 300],
+  pulse: [() => buildPulse(), 50],
   pulsescore: [() => buildPulseScore(), 300]
 };
 async function handler(req, res) {
