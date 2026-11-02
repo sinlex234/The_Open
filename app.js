@@ -1142,6 +1142,7 @@ PAGES.today = () => {
     <div class="front3">
       <div class="t-left">
         <section class="briefing t-news"><div class="sec-row"><h2 class="sec">Briefing for ${esc(sessionDay().long)}</h2><a href="/news">All news</a></div><ol class="bfeed" id="bfeed">${'<li>' + skel(3) + '</li>'}</ol></section>
+        <section class="tn tn-today t-expect" id="todayExpect" hidden></section>
         <section class="more-tabs t-more">
           <div class="chips tabbar" role="tablist" aria-label="More for today">${TODAY_TABS.map(([k, l]) => `<button class="chip" role="tab" data-tab="${k}" aria-selected="false" aria-pressed="false">${l}</button>`).join('')}</div>
           <div class="tabp" data-panel="next"><div class="tab-links"><a class="more" href="/calendar">Full calendar</a></div><h2 class="sr-only" id="outlookH">What’s going to happen next</h2><div id="outlook"></div></div>
@@ -1165,6 +1166,7 @@ PAGES.today = () => {
     const gx = $('#guideX'); if (gx) gx.onclick = () => { store.set('guideDone', true); const g = $('#guide'); if (g) g.remove(); };
   }
   loadPulse();
+  if (!isLearning()) mountExpect('todayExpect');
   const deskP = api('desk?' + profileQuery(), 5 * 60e3);
   const wireP = api('wire?section=all', 60e3);
   const shut = !showWeekendNews() && allShut(myMarkets());
@@ -1352,7 +1354,7 @@ function tnHTML(cal, earn, sel) {
   const strip = days.map(d => { const x = reads[d.date];
     return `<button type="button" class="tn-day lv${x ? x.level : 'u'}" data-tn="${d.date}" aria-pressed="${d.date === sel}"><span class="tn-dl">${esc(lab(d.date))}<small>${esc(dayFmt(d.date, { month: 'short', day: 'numeric' }))}</small></span><span class="tn-dw"><i></i>${x ? esc(x.word) : 'Not out yet'}</span>${x ? `<span class="tn-dv">${['Low', 'Low', 'Medium', 'High'][x.level]} volatility</span>` : ''}</button>`; }).join('');
   if (!r) return `<div class="tn-strip">${strip}</div><p class="tn-line">That day’s calendar isn’t out yet. It usually appears over the weekend.</p>`;
-  const wins = r.wins.map(w => `<span class="tn-win${w.past ? ' past' : ''}${w.live ? ' live' : ''}"><b>${fmtTime(w.a)} – ${fmtTime(w.b)}</b><small>${esc(w.names.slice(0, 2).join(', '))}</small></span>`).join('');
+  const wins = r.wins.map(w => `<span class="tn-win${w.past ? ' past' : ''}${w.live ? ' tn-now' : ''}"><b>${fmtTime(w.a)} – ${fmtTime(w.b)}</b><small>${esc(w.names.slice(0, 2).join(', '))}</small></span>`).join('');
   return `<div class="tn-strip" role="group" aria-label="Pick a day">${strip}</div>
     <div class="tn-body lv${r.level}">
       <div class="tn-top"><p class="tn-verdict"><i></i>${esc(r.word)}<span class="tn-vol" title="Expected volatility from scheduled news"><span class="tn-vb">${[1, 2, 3].map(n => `<b class="${n <= Math.max(1, r.level) ? 'on' : ''}"></b>`).join('')}</span>${['Low', 'Low', 'Medium', 'High'][r.level]} volatility</span></p><button type="button" class="tn-x" id="tnX" aria-expanded="false">Explain</button></div>
@@ -1368,6 +1370,7 @@ function mountTradeNews(id, opts = {}) {
     const open = !!(box.querySelector('#tnMore') && !box.querySelector('#tnMore').hidden);
     box.innerHTML = `<div class="tn-head"><h2 class="sec">Trade the news?</h2><span class="tn-sub">For ${esc(tnSyms().map(x => TN_NAME[x]).join(', '))}</span></div>` + tnHTML(cal, earn, sel);
     const on = box.querySelector('.tn-day[aria-pressed="true"]'), st = box.querySelector('.tn-strip'); if (on && st && st.scrollWidth > st.clientWidth) st.scrollLeft = on.offsetLeft - st.offsetLeft - 16;
+    { const lv = ((box.querySelector('.tn-body') || {}).className || '').match(/lv\d/); box.classList.remove('lv0', 'lv1', 'lv2', 'lv3'); box.classList.add('tn-tint'); if (lv) box.classList.add(lv[0]); }
     box.querySelectorAll('[data-tn]').forEach(b => b.onclick = () => { sel = b.dataset.tn; draw(); if (opts.onPick) opts.onPick(sel); });
     const x = box.querySelector('#tnX'), more = box.querySelector('#tnMore');
     if (x && more) { const set = o => { more.hidden = !o; x.setAttribute('aria-expanded', o); x.textContent = o ? 'Hide' : 'Explain'; }; set(open); x.onclick = () => set(more.hidden); }
@@ -1390,6 +1393,53 @@ function mountTradeSlim(id) {
     el.onclick = e => { e.preventDefault(); CAL.sel = d.date; CAL.month = monthKey(d.date); go('/calendar'); };
   }).catch(() => {});
 }
+// ---------- What to expect (Today page) ----------
+// Releases the market has already reacted to drop off and the next big ones take their place.
+const REACTED_MS = 10 * 60e3;
+function tnUpcoming(events, n = 3) {
+  const ccy = tnCcys(), now = Date.now();
+  return events.filter(e => e.impact === 'High' && !e.allDay && ccy.has(e.country) && e.time + REACTED_MS > now).sort((a, b) => a.time - b.time).slice(0, n);
+}
+const leftTxt = ms => { const m = Math.max(0, Math.round(ms / 6e4)), d = Math.floor(m / 1440), h = Math.floor(m % 1440 / 60), mm = m % 60; return d ? `${d}d ${h}h` : h ? `${h}h ${mm}m` : `${mm}m`; };
+function expectHTML(cal, earn) {
+  const now = Date.now(), today = nyParts().date, nm = nyParts().mins;
+  const days = tnDays(cal.events).filter(d => d.known);
+  if (!days.length) return '';
+  // Today, unless its big releases are all out or the US session is over; then the next trading day
+  let day = days[0];
+  if (day.date === today) { const r0 = tnRead(today, cal.events, earn); if ((r0.done && r0.level >= 2) || nm >= 16 * 60 + 15) day = days[1] || day; }
+  const r = tnRead(day.date, cal.events, earn);
+  const when = day.date === today ? 'Today' : day.date === addDay(today, 1) ? 'Tomorrow' : dayFmt(day.date, { weekday: 'long' });
+  const done = cal.events.filter(e => e.impact === 'High' && !e.allDay && tnCcys().has(e.country) && nyParts(e.time).date === today && e.time + REACTED_MS <= now);
+  const up = tnUpcoming(cal.events);
+  const dLab = t => { const d = nyParts(t).date; return d === today ? 'Today' : d === addDay(today, 1) ? 'Tomorrow' : dayFmt(d, { weekday: 'short' }); };
+  const upRows = up.map(e => { const k = tnKind(e.title + ' ' + (e.name || '')), sx = TN_SURPRISE[k], live = e.time - 20 * 60e3 <= now;
+    return `<li class="tx-ev ${TN_MAJOR.test(e.title + ' ' + (e.name || '')) ? 'lv3' : 'lv2'}${live ? ' tx-now' : ''}"><div class="tx-when"><b>${esc(dLab(e.time))} ${fmtTime(e.time)}</b><small>${e.time > now ? 'in ' + leftTxt(e.time - now) : 'Reacting now'}</small></div>
+      <div class="tx-what"><p class="tx-n">${esc(e.name || e.title)} <span class="faint">${esc(e.country)}</span></p>
+      <p class="tx-arrs"><span class="tx-if">If ${esc(sx.hot)}:</span>${tnSyms().map(sym => `<span>${esc(TN_NAME[sym])} <b class="tn-arr ${sx[sym]}">${TN_ARROW[sx[sym]]}</b></span>`).join('')}</p></div></li>`; }).join('');
+  return `<div class="tn-head"><h2 class="sec">What to expect</h2><a class="more" href="/calendar">See the week</a></div>
+    <div class="tn-body lv${r.level}">
+      <div class="tn-top"><p class="tn-verdict"><i></i><span class="faint tx-day">${esc(when)}</span> ${esc(r.word)}<span class="tn-vol"><span class="tn-vb">${[1, 2, 3].map(n => `<b class="${n <= Math.max(1, r.level) ? 'on' : ''}"></b>`).join('')}</span>${['Low', 'Low', 'Medium', 'High'][r.level]} volatility</span></p><button type="button" class="tn-x" id="txX" aria-expanded="false">Explain</button></div>
+      <p class="tn-line">${esc(r.line)}</p>
+      ${up.length ? `<p class="tn-k tx-k">Next big releases</p><ul class="tx-list">${upRows}</ul>` : `<p class="tn-line faint">No more big releases on the calendar this week.</p>`}
+      ${done.length ? `<p class="tx-done"><span class="tx-check">✓</span>Already out today and priced in: ${esc([...new Set(done.map(e => `${e.name || e.title} (${fmtTime(e.time)})`))].join(', '))}. The market has reacted, so these are off the list.</p>` : ''}
+      <div class="tn-more" id="txMore" hidden>${tnExplain(r)}</div>
+    </div>`;
+}
+function mountExpect(id) {
+  let cal = null, earn = null, t = null;
+  const draw = () => { const box = document.getElementById(id); if (!box) { clearInterval(t); return; } if (!cal) return;
+    const open = !!(box.querySelector('#txMore') && !box.querySelector('#txMore').hidden);
+    const html = expectHTML(cal, earn); box.hidden = !html; box.innerHTML = html;
+    const lv = (box.querySelector('.tn-body') || {}).className || ''; box.className = 'tn tn-today t-expect tn-tint ' + ((lv.match(/lv\d/) || [''])[0]);
+    const x = box.querySelector('#txX'), more = box.querySelector('#txMore');
+    if (x && more) { const set = o => { more.hidden = !o; x.setAttribute('aria-expanded', o); x.textContent = o ? 'Hide' : 'Explain'; }; set(open); x.onclick = () => set(more.hidden); }
+  };
+  api('calendar', 10 * 60e3).then(d => { cal = d; draw(); api('earnings', 15 * 60e3).then(e => { earn = e; draw(); }).catch(() => {}); }).catch(() => {});
+  // Re-check every minute so releases drop off once the market has reacted
+  t = setInterval(() => { if (document.visibilityState === 'visible') draw(); }, 60e3);
+}
+
 PAGES.news = () => {
   const f = store.get('newsFilter', { market: 'all', impact: 'matters', topic: '', mine: true });
   if (f.impact === 'medium' || (f.impact === 'all' && !f.v2)) { f.impact = 'matters'; f.v2 = 1; }
