@@ -655,10 +655,19 @@ async function mountGoogleButton() {
         if (error) msg('aMsg', friendly(error));
       }
     });
-    const w = Math.min(400, Math.max(200, Math.round(($('#gWrap').getBoundingClientRect().width) || 320)));
-    holder.innerHTML = '';
-    google.accounts.id.renderButton(holder, { type: 'standard', theme: 'outline', size: 'large', text: 'continue_with', shape: 'rectangular', logo_alignment: 'center', width: w });
+    const wrap = $('#gWrap');
+    const draw = () => {
+      if (!wrap.offsetWidth) return;
+      const w = Math.min(400, Math.max(200, Math.round(wrap.offsetWidth)));
+      if (w === +holder.dataset.w) return;
+      holder.dataset.w = w; holder.innerHTML = '';
+      google.accounts.id.renderButton(holder, { type: 'standard', theme: 'outline', size: 'large', text: 'continue_with', shape: 'rectangular', logo_alignment: 'center', width: w });
+    };
     holder.hidden = false; $('#gGoogle').hidden = true;
+    draw();
+    // The sign-in card slides in, so measure again once it has its final width
+    if (window.ResizeObserver) { const ro = new ResizeObserver(() => draw()); ro.observe(wrap); }
+    setTimeout(draw, 450);
   } catch { /* keep the redirect button */ }
 }
 function showGate(reset = false) {
