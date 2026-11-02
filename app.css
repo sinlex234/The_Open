@@ -1562,3 +1562,11 @@ table.codes td:last-child{text-align:right!important}
 @media (max-width:760px){.prof-card{grid-template-columns:auto minmax(0,1fr)}.prof-card>.btn-ghost{grid-column:1/-1}.prof-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.prof-av{width:4.5rem;height:4.5rem}}
 .bdg-sub{grid-column:1/-1;margin:0.75rem 0 0;font:500 0.6875rem var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
 .bdg-sub .faint{text-transform:none;letter-spacing:0;font-family:var(--sans)}
+
+/* Privacy and terms */
+.legal{max-width:46rem}
+.legal .sec{margin-top:1.75rem}
+.legal ul{padding-left:1.15rem;margin:.5rem 0}
+.legal li{margin:.4rem 0;line-height:1.55}
+.legal p{line-height:1.6}
+.legal a{color:var(--acc)}

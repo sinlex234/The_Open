@@ -2896,8 +2896,8 @@ async function build16(date) {
 // api/_lib/router.js
 // ---------- call tracker: every "Likely up / down" call is logged, then graded against real prices ----------
 // Stored in Supabase with the public (publishable) key. The table only accepts new rows stamped with the current time.
-var SB_URL = "https://pgaydhtrmrcdrvgbxqgq.supabase.co";
-var SB_KEY = "sb_publishable_wU9vx3zI47P5jxCr7Gw-Pg_mC_YD_iV";
+var SB_URL = "https://jcuimqwbhxzwrnpukgra.supabase.co";
+var SB_KEY = "sb_publishable__TMrzNDk1EE7EZI0gv0xaQ_KyDcGH6r";
 async function sb(path, { method = "GET", body, prefer } = {}) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), 6e3);

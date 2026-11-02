@@ -449,7 +449,7 @@ async function loadName() {
   const md = (me.user && me.user.user_metadata) || {};
   me.name = md.full_name || md.name || md.username || '';
   if (sb && me.user) {
-    const { data } = await sb.from('profiles').select('username').eq('id', me.user.id).maybeSingle();
+    const { data } = await sb.from('open_usernames').select('username').eq('user_id', me.user.id).maybeSingle();
     if (data && data.username && !me.name) me.name = data.username;
   }
   if (!me.name && me.user && me.user.email) me.name = me.user.email.split('@')[0];
@@ -628,6 +628,8 @@ function bindCode() {
   $('#cBack').onclick = () => { ls.set(PENDING, null); clearInterval(resendTimer); $('#gateCode').hidden = true; $('#gateForm').hidden = false; setMode('signup'); };
 }
 function showGate(reset = false) {
+  // The privacy policy and terms stay readable without signing in
+  if (!reset && /^\/(privacy|terms)\/?$/.test(location.pathname)) return;
   const g = $('#gate'); g.innerHTML = gateHTML(); g.hidden = false; document.body.classList.add('locked');
   document.querySelectorAll('#authSeg button').forEach(b => b.onclick = () => setMode(b.dataset.mode));
   $('#aForgot').onclick = () => setMode('forgot');
@@ -837,6 +839,8 @@ function startWizardIfNeeded() {
 }
 async function afterSignIn(user) {
   me.user = user;
+  // Members from before the move get their setup, profile and plan back the first time they sign in
+  try { await sb.rpc('open_claim_carry'); } catch {}
   await loadName();
   ls.set('seen', true); ls.set(PENDING, null);
   const saved = await loadAnswers();

@@ -2091,6 +2091,64 @@ PAGES.glossary = () => {
   draw();
 };
 
+// ---------- Privacy policy and terms ----------
+const LEGAL_UPDATED = 'November 2, 2026';
+const CONTACT = 'alexpokhodun201@gmail.com';
+PAGES.privacy = () => {
+  document.title = 'Privacy | The Open One';
+  layout(`<article class="legal">
+    <h1 class="page-h">Privacy policy</h1>
+    <p class="page-intro">Last updated ${LEGAL_UPDATED}. This explains what The Open One stores about you, why, and how to have it removed.</p>
+    <h2 class="sec">What we store</h2>
+    <ul>
+      <li><b>Your account:</b> your email address and the username you choose. If you sign in with Google, Google shares your name, email address and profile picture with us. We never see your Google password.</li>
+      <li><b>Your setup:</b> the answers you give when you set up your briefing (markets, sessions, strategy, alerts), so the site can show what matters to you.</li>
+      <li><b>Your profile:</b> the display name, bio and photo you add, and the badges you choose to show.</li>
+      <li><b>Usage for badges and limits:</b> which days you visit and the earliest time you visit each day, and how many AI reads you use each day.</li>
+      <li><b>Your plan:</b> which plan you have and whether it came from a lifetime code or a subscription.</li>
+      <li><b>Reports you send:</b> if you use “Report a mistake”, the message you write and the headline it’s about.</li>
+    </ul>
+    <h2 class="sec">What we don’t do</h2>
+    <ul>
+      <li>We don’t sell your information or share it with advertisers.</li>
+      <li>We don’t use advertising or tracking cookies.</li>
+      <li>We never see or store card numbers. Payments, if they’re switched on, are handled entirely by Stripe.</li>
+    </ul>
+    <h2 class="sec">Services we use</h2>
+    <ul>
+      <li><b>Supabase</b> stores your account and the information above.</li>
+      <li><b>Vercel</b> hosts the website.</li>
+      <li><b>Google</b> handles “Continue with Google” sign-in.</li>
+      <li><b>Stripe</b> handles payments and billing.</li>
+      <li><b>Anthropic</b> powers AI reads. Only headlines and market names are sent to it, never your account details.</li>
+      <li>Market prices, charts and the calendar come from public sources (Yahoo Finance, CoinGecko, DexScreener, TradingView, ForexFactory). Your browser may load content from them.</li>
+    </ul>
+    <h2 class="sec">On your device</h2>
+    <p>The site keeps a few settings in your browser (your sign-in session, your chosen layout and alert preferences). Clearing your browser data removes them.</p>
+    <h2 class="sec">Removing your data</h2>
+    <p>To delete your account and everything linked to it, email <a href="mailto:${CONTACT}">${CONTACT}</a> from the address you signed up with. It’s removed within 30 days. You can change or clear your profile and setup at any time from your account menu.</p>
+    <h2 class="sec">Changes</h2>
+    <p>If this policy changes, the date at the top changes too. Questions: <a href="mailto:${CONTACT}">${CONTACT}</a>.</p>
+  </article>`);
+};
+PAGES.terms = () => {
+  document.title = 'Terms | The Open One';
+  layout(`<article class="legal">
+    <h1 class="page-h">Terms of use</h1>
+    <p class="page-intro">Last updated ${LEGAL_UPDATED}. By using The Open One you agree to these terms.</p>
+    <h2 class="sec">News and context, not advice</h2>
+    <p>Everything on The Open One, including briefings, “Likely up / down” reads, the live read, AI reads and the calendar, is general information and education. It isn’t financial, investment or trading advice, and it isn’t a recommendation to buy or sell anything. Trading is risky and you can lose money. Make your own decisions.</p>
+    <h2 class="sec">Accuracy</h2>
+    <p>Prices can be delayed, and reads can be wrong. The Scorecard shows how past calls actually turned out. Headlines belong to their publishers and link to them.</p>
+    <h2 class="sec">Your account</h2>
+    <p>Keep your sign-in details to yourself. Lifetime codes are for one person and can be cancelled if they’re shared or misused. Don’t try to break, overload or copy the site.</p>
+    <h2 class="sec">Plans</h2>
+    <p>Paid plans renew monthly until you cancel from the Plans page. Cancelling stops the next renewal; you keep your plan until the end of the period you paid for.</p>
+    <h2 class="sec">Changes and contact</h2>
+    <p>The site and these terms can change. Questions: <a href="mailto:${CONTACT}">${CONTACT}</a>. See also the <a href="/privacy">privacy policy</a>.</p>
+  </article>`);
+};
+
 // ---------- Scorecard: how the "Likely up / down" calls actually turned out ----------
 const CALL_NAME = { NQ: 'Nasdaq futures (NQ)', BTC: 'Bitcoin', EURUSD: 'EUR/USD' };
 const RES_TXT = { right: 'Right', wrong: 'Wrong', flat: 'Barely moved', pending: 'Waiting' };
@@ -2441,8 +2499,8 @@ function route(isRefresh = false) {
   refreshing = false;
 }
 function go(path) {
+  if (!started) { if (path !== location.pathname) location.assign(path); return; }
   if (path !== location.pathname) history.pushState(null, '', path);
-  if (!started) return;
   exitFs(); route(); main.focus({ preventScroll: true }); window.scrollTo({ top: 0 });
 }
 document.addEventListener('click', e => {
@@ -2475,6 +2533,8 @@ async function levelRows() {
 let calendarCache = null;
 tick(); setInterval(tick, 30e3);
 $('#bellBtn').onclick = () => { if (started) openAlerts(); };
+// Privacy and terms show straight away, signed in or not
+if (/^\/(privacy|terms)\/?$/.test(location.pathname)) { const k = location.pathname.replace(/\W/g, ''); shownPage = k; main.dataset.page = k; PAGES[k](); }
 initMe(() => {
   started = true;
   orderTabs(); mountStrip(); route(); pollResults(); lastRefresh = Date.now(); mStatus();
