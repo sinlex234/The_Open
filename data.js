@@ -1846,7 +1846,8 @@ function callStrength(h, m) {
   if (tier === "C") return { ok: false, why: "Source too weak to make a call on." };
   if (tier !== "A" && outlets < 2) return { ok: false, why: "Only one outlet so far. Waiting for a second before calling it." };
   const t = h.title;
-  if (FOREIGN_MKT.test(t) && !/\b(wall street|u\.?s\.? (stocks|shares|futures)|nasdaq|s&p|dow)\b/i.test(t)) return { ok: false, why: "About another country’s market. Usually not enough to move this one." };
+  const spill = ["futures", "stocks", "options"].includes(m) && ((readHeadline(t).NQ || {}).kind === "ai");
+  if (FOREIGN_MKT.test(t) && !spill && !/\b(wall street|u\.?s\.? (stocks|shares|futures)|nasdaq|s&p|dow)\b/i.test(t)) return { ok: false, why: "About another country’s market. Usually not enough to move this one." };
   if (["crypto", "memes"].includes(m) && !["crypto", "memes"].includes(h.theme) && !INDEX_WORDS.test(t)) return { ok: false, why: "Not a crypto or big-picture story, so no call." };
   if (["futures", "stocks", "options"].includes(m)) {
     if (["earnings", "ai"].includes(h.theme) && !MEGA.test(t) && !/\b(nasdaq|s&p|stocks|wall street|chip stocks|tech stocks)\b/i.test(t)) return { ok: false, why: "About a single smaller company. Unlikely to move the whole index." };
