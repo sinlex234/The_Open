@@ -3325,6 +3325,24 @@ async function stripeHook(req) {
 var POST_ROUTES = { airead: aiRead, aideep: aiDeep, checkout, portal, stripe: stripeHook };
 // Routes whose answer depends on the reader's plan
 var PLAN_ROUTES = new Set(["desk", "brief", "explain", "memedesk"]);
+// Read-only audit of every logged call: what drove it and how it turned out (for tuning the call engine)
+async function buildCallAudit() {
+  const since = new Date(Date.now() - 30 * 864e5).toISOString();
+  const rows = await sb(`open_calls?select=story_id,market,dir,headline,source,outlets,price,called_at&called_at=gte.${since}&order=called_at.desc&limit=1000`);
+  const charts = await settle(Object.fromEntries(Object.entries(CALL_MKTS).map(([k, c]) => [k, yahooChart(c.sym, { interval: "15m", range: "1mo" })])));
+  const out = rows.map((r) => {
+    const c = CALL_MKTS[r.market]; if (!c) return null;
+    const t = Date.parse(r.called_at), bars = charts.res[r.market] && charts.res[r.market].bars;
+    const h = grade(bars, t, (s2) => s2 + 36e5, c, r.dir), h4 = grade(bars, t, (s2) => s2 + 4 * 36e5, c, r.dir), cl = grade(bars, t, (s2) => closeAfter(s2), c, r.dir);
+    let pre60 = null, pre240 = null;
+    if (bars) { const i = bars.findIndex((b) => b.t + 15 * 6e4 > t); if (i > 4) { pre60 = +((bars[i].o / bars[i - 4].o - 1) * 100).toFixed(3); } if (i > 16) pre240 = +((bars[i].o / bars[i - 16].o - 1) * 100).toFixed(3); }
+    const rd = readHeadline(r.headline || "");
+    const k = r.market === "BTC" ? rd.BTC : r.market === "EURUSD" ? null : rd.NQ;
+    const n = ny(t);
+    return { m: r.market, d: r.dir, sid: r.story_id, h: (r.headline || "").slice(0, 90), src: r.source, tier: tierOf(r.source), o: r.outlets, kind: k ? k.kind : "?", hr: n.h, dow: n.dow, pre60, pre240, r1: h.result, p1: h.pct, r4: h4.result, p4: h4.pct, rc: cl.result, pc: cl.pct, t };
+  }).filter(Boolean);
+  return { n: out.length, rows: out, updated: Date.now() };
+}
 var ROUTES = {
   calendar: [() => build(), 900],
   ffraw: [() => ffRaw(), 1800],
@@ -3346,7 +3364,8 @@ var ROUTES = {
   calls: [() => buildCalls(), 300],
   timing: [(q) => buildTiming(String(q.m || "NQ").toUpperCase()), 900],
   pulse: [() => buildPulse(), 50],
-  pulsescore: [() => buildPulseScore(), 300]
+  pulsescore: [() => buildPulseScore(), 300],
+  callaudit: [() => buildCallAudit(), 600]
 };
 async function handler(req, res) {
   const q = req.query || {};
