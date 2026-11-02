@@ -2390,7 +2390,10 @@ var lvl = (x) => x ? `${/^(Asia|London)/.test(x.name) ? x.name : x.name.charAt(0
 // What a trader using each strategy usually does on a day like this
 function stratPlan(s2, call, lv, ev, m) {
   const up = call === "up", dn = call === "down";
-  const a1 = lv.above[0], a2 = lv.above[1] || lv.above[0], b1 = lv.below[0], b2 = lv.below[1] || lv.below[0];
+  // Skip levels hugging price (under ~0.15% away): they're noise, not the day's edges
+  const far = (arr) => { const px = parseFloat(String(lv.price || "").replace(/[$,]/g, "")); const f = arr.filter((x) => !px || Math.abs(x.v - px) / px > 0.0015); return f.length ? f.concat(arr.filter((x) => !f.includes(x))) : arr; };
+  const A = far(lv.above), B = far(lv.below);
+  const a1 = A[0], a2 = A[1] || A[0], b1 = B[0], b2 = B[1] || B[0];
   const pre = ev ? `Stay flat into ${ev.name} at ${ev.time}. ` : "";
   const sess = ["crypto", "memes"].includes(m) ? "the US session (from 9:30 AM New York)" : m === "forex" ? "the London–New York overlap (8 AM–12 PM New York)" : "the New York open (9:30–11:00 AM)";
   const P = {
