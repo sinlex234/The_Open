@@ -1572,5 +1572,6 @@ table.codes td:last-child{text-align:right!important}
 .legal a{color:var(--acc)}
 .g-wrap{display:block}
 .g-wrap[hidden]{display:none}
-.g-btn{display:flex;justify-content:center;min-height:44px;color-scheme:normal}
+.g-btn{display:flex;justify-content:center;min-height:44px;color-scheme:light}
+.g-btn iframe{border-radius:4px}
 .g-btn[hidden]{display:none}

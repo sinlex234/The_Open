@@ -657,7 +657,7 @@ async function mountGoogleButton() {
     });
     const w = Math.min(400, Math.max(200, Math.round(($('#gWrap').getBoundingClientRect().width) || 320)));
     holder.innerHTML = '';
-    google.accounts.id.renderButton(holder, { type: 'standard', theme: document.documentElement.dataset.theme === 'light' ? 'outline' : 'filled_black', size: 'large', text: 'continue_with', shape: 'rectangular', logo_alignment: 'center', width: w });
+    google.accounts.id.renderButton(holder, { type: 'standard', theme: 'outline', size: 'large', text: 'continue_with', shape: 'rectangular', logo_alignment: 'center', width: w });
     holder.hidden = false; $('#gGoogle').hidden = true;
   } catch { /* keep the redirect button */ }
 }
