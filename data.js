@@ -2386,13 +2386,17 @@ function dayLevels(L, dp, unit) {
   const below = uniq(cands.filter(([, v]) => v < px - gap).map(([n, v]) => ({ name: n, v, txt: f(v) })).sort((a, b) => b.v - a.v)).slice(0, 3);
   return { price: f(px), above, below };
 }
+// Skip levels hugging price (under ~0.15% away): they're noise, not the day's edges
+function farLevels(lv) {
+  const px = parseFloat(String(lv.price || "").replace(/[$,]/g, ""));
+  const far = (arr) => { const f = arr.filter((x) => !px || Math.abs(x.v - px) / px > 0.0015); return f.length ? f : arr; };
+  return { A: far(lv.above), B: far(lv.below) };
+}
 var lvl = (x) => x ? (/^(Asia|London)/.test(x.name) ? "the " + x.name : x.name.charAt(0).toLowerCase() + x.name.slice(1)) : "the nearest level";
 // What a trader using each strategy usually does on a day like this
 function stratPlan(s2, call, lv, ev, m) {
   const up = call === "up", dn = call === "down";
-  // Skip levels hugging price (under ~0.15% away): they're noise, not the day's edges
-  const far = (arr) => { const px = parseFloat(String(lv.price || "").replace(/[$,]/g, "")); const f = arr.filter((x) => !px || Math.abs(x.v - px) / px > 0.0015); return f.length ? f.concat(arr.filter((x) => !f.includes(x))) : arr; };
-  const A = far(lv.above), B = far(lv.below);
+  const { A, B } = farLevels(lv);
   const a1 = A[0], a2 = A[1] || A[0], b1 = B[0], b2 = B[1] || B[0];
   const pre = ev ? `Stay flat into ${ev.name} at ${ev.time}. ` : "";
   const sess = ["crypto", "memes"].includes(m) ? "the US session (from 9:30 AM New York)" : m === "forex" ? "the London–New York overlap (8 AM–12 PM New York)" : "the New York open (9:30–11:00 AM)";
@@ -2450,10 +2454,11 @@ async function dayPlanFor(prof, states, events, now) {
     const word = call === "up" ? "Bias: up" : call === "down" ? "Bias: down" : "No bias yet";
     const head = word;
     if (Math.abs(score) < 0.9 && call !== "range") why.push("The signals are mixed, so this is a slight lean, not a strong call.");
-    const flip = call === "up" ? (lv.below[1] || lv.below[0]) : call === "down" ? (lv.above[1] || lv.above[0]) : null;
+    const { A: fA, B: fB } = farLevels(lv);
+    const sweep = call === "up" ? fB[0] : fA[0], beyond = call === "up" ? fB[1] : fA[1];
     const strats = ((prof.find((x) => x.m === m) || {}).strats || []).slice(0, 2);
     const plans = (strats.length ? strats : ["unsure"]).map((s2) => ({ strategy: s2, name: STRAT_NAMES[s2] || "Your plan", steps: stratPlan(s2, call, lv, ev, m).filter(Boolean) }));
-    return { market: m, short: c.short, timing: PULSE_OF[m], call, conf, head, why, levels: lv, flip: flip ? `If price breaks ${call === "up" ? "below" : "above"} ${lvl(flip)}, the bias is wrong. Step back and reassess.` : "", event: ev, plans };
+    return { market: m, short: c.short, timing: PULSE_OF[m], call, conf, head, why, levels: lv, flip: call === "range" || !sweep ? "" : strats.includes("ict") ? (beyond ? `A quick run past ${lvl(sweep)} is expected. If price keeps going and breaks ${call === "up" ? "below" : "above"} ${lvl(beyond)}, the bias is wrong: step back and reassess.` : `A quick run past ${lvl(sweep)} is expected. If price holds ${call === "up" ? "below" : "above"} it instead of reversing, the bias is wrong: step back and reassess.`) : `If price breaks ${call === "up" ? "below" : "above"} ${lvl(beyond || sweep)} and holds, the bias is wrong: step back and reassess.`, event: ev, plans };
   }));
 }
 function playbookFor(prof, states) {

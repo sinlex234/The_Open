@@ -3,7 +3,7 @@ import {
   initMe, me, myMarkets, myAssets, isBeginner, isLearning, depth, hasStrat, levelTrader, intraday, stratsFor,
   forYouEvent, forYouHeadline, forYouStrength, relevance, greeting, windowStatus, startAlerts, openAlerts, editSetup,
   profileQuery, marketLabel, myStruggles, isProp, newsRestricted, notify,
-  userTZ, plan, isPaid, authToken, rpc, loadPlan, signedIn, mySessions as mySessionsC,
+  userTZ, plan, isPaid, authToken, rpc, loadPlan, signedIn, mySessions as mySessionsC, followUps,
 } from './me.js';
 import { GLOSSARY } from './glossary.js';
 import { SUPABASE_URL, SUPABASE_KEY } from './config.js';
@@ -714,6 +714,11 @@ function daySession(market) {
   if (mine.length) return { from: mine[0].from, to: mine[0].to, label: mine[0].phrase || mine[0].label.toLowerCase() };
   return DAY_SESS[market] || DAY_SESS.futures;
 }
+function ictWords(t, mk) {
+  const c = followUps(mk || 'futures', 'ict');
+  const entry = c.includes('ote') ? 'enter on the pullback into the 62–79% OTE zone' : c.includes('ob') && !c.includes('fvg') ? 'an order block to enter on the pullback' : 'a fair value gap to enter on the pullback';
+  return t.replace('and a fair value gap to enter on the pullback', c.includes('ote') ? 'then ' + entry : 'and ' + entry);
+}
 function dayPlanHTML(plans) {
   if (!plans || !plans.length) return '';
   const arrow = { up: '↑', down: '↓', range: '↔' };
@@ -722,30 +727,50 @@ function dayPlanHTML(plans) {
     return `<div class="dp ${p.call}">
     <div class="dp-top"><span class="dp-mk">${esc(p.short)} · ${esc(ss.label)}, ${minsTxt(ss.from)}–${minsTxt(ss.to)} ET</span><span class="pill ${p.call === 'up' ? 'up' : p.call === 'down' ? 'down' : ''}">${esc(p.conf)} confidence</span></div>
     <p class="dp-h"><i>${arrow[p.call]}</i>${esc(p.head)}${p.call !== 'range' ? `<span class="dp-sub">for your session</span>` : ''}</p>
-    <p class="dp-when" data-tk="${esc(p.timing || 'NQ')}" data-from="${ss.from}" data-to="${ss.to}" data-call="${p.call}" data-ev="${esc(p.event ? p.event.name + '|' + p.event.time : '')}"><span class="dp-k">Most likely move</span><span class="dp-wt">${p.event ? `${esc(p.event.time)}, when ${esc(p.event.name)} comes out` : 'Working it out…'}</span></p>
+    <div class="dp-when" data-tk="${esc(p.timing || 'NQ')}" data-from="${ss.from}" data-to="${ss.to}" data-call="${p.call}" data-ict="${p.plans.some(x => x.strategy === 'ict') ? 1 : 0}" data-mk="${esc(p.market)}"><span class="dp-k">Most likely move</span><span class="dp-wt">${p.event ? `${esc(p.event.time)}, when ${esc(p.event.name)} comes out` : 'Working it out…'}</span></div>
     <ul class="dp-why">${p.why.map(w => `<li>${esc(w)}</li>`).join('')}</ul>
-    ${p.plans.map(pl => `<div class="dp-plan"><p class="dp-k">Your plan · ${esc(pl.name)}</p><ol>${pl.steps.map(x => `<li>${esc(x)}</li>`).join('')}</ol></div>`).join('')}
+    ${p.plans.map(pl => `<div class="dp-plan"><p class="dp-k">Your plan · ${esc(pl.name)}</p><ol>${pl.steps.map(x => `<li>${esc(pl.strategy === 'ict' ? ictWords(x, p.market) : x)}</li>`).join('')}</ol></div>`).join('')}
     ${p.flip ? `<p class="dp-flip">${esc(p.flip)}</p>` : ''}
   </div>`; }).join('')}<p class="dp-note">From today’s news, price and the Live read, for the session you trade. A lean, not a promise, and not financial advice.</p></li>`;
 }
-// When in the reader's session price usually moves most (a big release wins), from the last month of bars
+// The reader's whole session, half hour by half hour: how much it usually moves and what to expect in each stretch
+// Wording follows the ICT concepts the trader picked in setup (no Silver Bullet talk unless they use it)
+function ictPhase(ph, call, mk) {
+  const c = followUps(mk || 'futures', 'ict'), dir = call === 'up' ? ' up' : call === 'down' ? ' down' : '';
+  const run = call === 'up' ? 'a quick run below to grab sell-side liquidity' : call === 'down' ? 'a quick run above to grab buy-side liquidity' : 'one side’s liquidity gets taken';
+  const kz = c.includes('killzones') ? 'New York AM killzone · ' : '';
+  if (ph[0] === 570) return kz + (c.includes('judas') ? `Judas swing: ${run}` : c.includes('po3') ? `Manipulation: ${run}` : `Opening run: ${run}`);
+  if (ph[0] === 600) return kz + (c.includes('sb') ? `Silver Bullet (10–11 AM): the real move${dir} usually comes here` : c.includes('po3') ? `Distribution: the real move${dir}` : `The real move${dir} usually develops here`);
+  return ph[2];
+}
+const ICT_PHASE = [[570, 600, ''], [600, 660, ''], [660, 720, 'Moves slow down into lunch'], [480, 510, 'Before the data: often a fake move'], [510, 540, 'Data reaction'], [540, 570, 'Pre-open positioning'], [720, 810, 'Lunch: usually quiet'], [810, 870, 'Afternoon session starts'], [870, 960, 'Into the close'], [120, 180, 'London open: Asia’s range often gets run'], [180, 300, 'London move']];
 function fillDayWhen() {
   document.querySelectorAll('.dp-when[data-tk]:not([data-done])').forEach(el => {
     el.dataset.done = '1';
-    const from = +el.dataset.from, to = +el.dataset.to, call = el.dataset.call, ev = el.dataset.ev;
+    const from = +el.dataset.from, to = +el.dataset.to, call = el.dataset.call, ict = el.dataset.ict === '1';
     api('timing?m=' + el.dataset.tk, 15 * 60e3).then(t => {
       const inS = (t.slots || []).filter(x => x.start >= from && x.start < to);
       if (!inS.length) return;
       const evSlot = inS.find(x => (x.events || []).some(e => e.impact === 'High'));
       const best = evSlot || inS.filter(x => x.typical).sort((a, b) => b.typical - a.typical)[0];
-      if (!best) return;
+      const mx = Math.max(1, ...inS.map(x => x.typical || 0));
       const unit = t.unit === '$' ? '$' : '', u2 = t.unit === '$' ? '' : ' ' + t.unit;
-      const size = best.typical ? `usually about ${unit}${num(best.typical, 0)}${u2}` : '';
-      const dirTxt = call === 'up' ? 'the push up' : call === 'down' ? 'the drop' : 'the move';
-      const wt = el.querySelector('.dp-wt');
-      if (evSlot) { const e = evSlot.events.find(x => x.impact === 'High'); wt.textContent = `${fmtTime(e.time)}, when ${e.name} comes out. Expect ${dirTxt} right after it${size ? ` (that half hour moves ${size})` : ''}.`; }
-      else wt.textContent = `${minsTxt(best.start)}–${minsTxt(best.end)} ET${best.tag ? ` (${best.tag})` : ''}. That’s when ${dirTxt} most likely happens: the busiest stretch of your session, ${size}.`;
-    }).catch(() => { const wt = el.querySelector('.dp-wt'); if (wt && !ev) wt.textContent = `The first hour of your session, ${minsTxt(from)}–${minsTxt(from + 60)} ET, is usually the most active.`; });
+      const dirWord = call === 'up' ? 'the push up' : call === 'down' ? 'the drop' : 'the move';
+      const ranked = inS.filter(x => x.typical).sort((a, b) => b.typical - a.typical);
+      const label = x => {
+        const e = (x.events || []).find(y => y.impact === 'High');
+        if (e) return `${e.name} at ${fmtTime(e.time)}: expect ${dirWord} right after it`;
+        let ph = ict && ICT_PHASE.find(([a, b]) => x.start >= a && x.start < b);
+        if (ph) ph = [ph[0], ph[1], ictPhase(ph, call, el.dataset.mk)];
+        if (x === best) return `Most likely time for ${dirWord}${ph ? ` · ${ph[2]}` : ''}`;
+        if (ph) return ph[2];
+        const r = ranked.indexOf(x);
+        return r <= 1 ? 'Still busy: follow-through or a pullback' : x.typical >= mx * 0.6 ? 'Moving, but less than the open' : 'Usually quiet';
+      };
+      el.innerHTML = `<span class="dp-k">When to expect it · your session</span>
+        <ol class="dp-tl">${inS.map(x => `<li class="${x === best ? 'best' : ''}"><span class="dp-tt">${minsTxt(x.start)}–${minsTxt(x.end)}</span><span class="dp-bar"><i style="width:${Math.round((x.typical || 0) / mx * 100)}%"></i></span><span class="dp-sz">${x.typical ? `~${unit}${num(x.typical, 0)}${u2}` : ''}</span><span class="dp-tx">${esc(label(x))}</span></li>`).join('')}</ol>
+        <span class="dp-tfoot">Typical size of each half hour over the last month. Times are New York time.</span>`;
+    }).catch(() => { const wt = el.querySelector('.dp-wt'); if (wt) wt.textContent = `The first hour of your session, ${minsTxt(from)}–${minsTxt(from + 60)} ET, is usually the most active.`; });
   });
 }
 function bottomLine(list) {
