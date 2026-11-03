@@ -2465,7 +2465,7 @@ async function dayPlanFor(prof, states, events, now) {
     const sweep = call === "up" ? fB[0] : fA[0], beyond = call === "up" ? fB[1] : fA[1];
     const strats = ((prof.find((x) => x.m === m) || {}).strats || []).slice(0, 2);
     const plans = (strats.length ? strats : ["unsure"]).map((s2) => ({ strategy: s2, name: STRAT_NAMES[s2] || "Your plan", steps: stratPlan(s2, call, lv, ev, m).filter(Boolean) }));
-    return { market: m, short: c.short, timing: PULSE_OF[m], call, conf, head, why, levels: lv, flip: call === "range" || !sweep ? "" : strats.includes("ict") ? (beyond ? `A quick run past ${lvl(sweep)} is expected. If price keeps going and breaks ${call === "up" ? "below" : "above"} ${lvl(beyond)}, the bias is wrong: step back and reassess.` : `A quick run past ${lvl(sweep)} is expected. If price holds ${call === "up" ? "below" : "above"} it instead of reversing, the bias is wrong: step back and reassess.`) : `If price breaks ${call === "up" ? "below" : "above"} ${lvl(beyond || sweep)} and holds, the bias is wrong: step back and reassess.`, event: ev, plans };
+    return { market: m, short: c.short, timing: PULSE_OF[m], call, conf, score: +score.toFixed(2), head, why, levels: lv, flip: call === "range" || !sweep ? "" : strats.includes("ict") ? (beyond ? `A quick run past ${lvl(sweep)} is expected. If price keeps going and breaks ${call === "up" ? "below" : "above"} ${lvl(beyond)}, the bias is wrong: step back and reassess.` : `A quick run past ${lvl(sweep)} is expected. If price holds ${call === "up" ? "below" : "above"} it instead of reversing, the bias is wrong: step back and reassess.`) : `If price breaks ${call === "up" ? "below" : "above"} ${lvl(beyond || sweep)} and holds, the bias is wrong: step back and reassess.`, event: ev, plans };
   }));
 }
 function playbookFor(prof, states) {
@@ -3072,6 +3072,10 @@ function pulseGate(key, events, now) {
   return null;
 }
 var PX_WORD = (n, unit) => `${n > 0 ? "up" : "down"} ${unit === "$" ? "$" : ""}${Math.abs(n).toLocaleString("en-US")}${unit === "$" ? "" : " " + unit}`;
+// Confidence: high needs a strong combined push with news and price both clearly pointing the same way
+function confOf(total, both) { const a = Math.abs(total); return a >= 0.8 && both ? "high" : a >= 0.6 ? "medium" : "low"; }
+// For graded history: older reads didn't store "high", so band them by their saved score (0.8+ can only happen when news and price agree)
+function confBand(score) { const a = Math.abs(+score || 0); return a >= 0.8 ? "high" : a >= 0.6 ? "medium" : "low"; }
 function pulseRead(key, stories, px, events, now, upcoming) {
   const c = CALL_MKTS[key], name = { NQ: "NQ", BTC: "Bitcoin", EURUSD: "EUR/USD" }[key];
   const news = pulseNews(stories, key, px, upcoming), price = pulsePrice(px && px[key], key);
@@ -3094,7 +3098,8 @@ function pulseRead(key, stories, px, events, now, upcoming) {
   reasons.push(Math.abs(price.ch60) < 1e-9 ? "Price is flat over the last hour." : `${name} is ${PX_WORD(price.ch60, price.unit)} in the last hour${Math.sign(price.ch30) !== Math.sign(price.ch60) && price.ch30 ? `, but ${PX_WORD(price.ch30, price.unit)} in the last 30 minutes` : ""}.`);
   if (hasNews && news.score * price.score < 0 && Math.abs(news.score) > 0.3 && Math.abs(price.score) > 0.3) return none("News and price disagree, so there’s no edge either way right now.", { reasons, score: +total.toFixed(2) });
   if (Math.abs(total) < 0.35) return none("Nothing pushing hard enough either way. Most of the time this is the honest answer.", { reasons, score: +total.toFixed(2) });
-  return { ...base, lean: total > 0 ? "up" : "down", conf: Math.abs(total) >= 0.6 ? "medium" : "low", score: +total.toFixed(2), why: hasNews ? (Math.abs(price.score) < 0.15 ? "The headlines are doing the work. Price hasn’t really moved yet." : Math.sign(news.score) === Math.sign(price.score) ? "News and price point the same way." : "News is doing most of the work; price hasn’t confirmed yet.") : "Price momentum only, with no news behind it, so treat it lightly.", reasons };
+  const both = hasNews && Math.sign(news.score) === Math.sign(price.score) && Math.abs(news.score) >= 0.3 && Math.abs(price.score) >= 0.3;
+  return { ...base, lean: total > 0 ? "up" : "down", conf: confOf(total, both), score: +total.toFixed(2), why: hasNews ? (Math.abs(price.score) < 0.15 ? "The headlines are doing the work. Price hasn’t really moved yet." : Math.sign(news.score) === Math.sign(price.score) ? "News and price point the same way." : "News is doing most of the work; price hasn’t confirmed yet.") : "Price momentum only, with no news behind it, so treat it lightly.", reasons };
 }
 async function pulseAI(reads, events, now) {
   const live = reads.filter((r) => r.lean !== "none" || r.stories.length);
@@ -3143,26 +3148,64 @@ async function buildPulse() {
   }
   // Reads refresh every minute; the Scorecard log and the AI check stay on 5-minute slots
   const log = now - reads[0].slot < 90e3 ? await pulseLog(reads) : "between slots";
-  return { reads: reads.map(({ stories: st, ...r }) => ({ ...r, stories: st.map(({ wt, ...s }) => s) })), next: Math.floor(now / 6e4) * 6e4 + 6e4, aiStatus, log, updated: now };
+  const dayLog = await logDayBias(now, reads).catch((e) => "day bias not logged: " + String(e.message || e).slice(0, 80));
+  return { reads: reads.map(({ stories: st, ...r }) => ({ ...r, stories: st.map(({ wt, ...s }) => s) })), next: Math.floor(now / 6e4) * 6e4 + 6e4, aiStatus, log, dayLog, updated: now };
 }
 // Grade each lean after one hour (the Scorecard's "Live read" section)
 async function buildPulseScore() {
   const since = new Date(Date.now() - 14 * 864e5).getTime();
   let rows;
-  try { rows = await sb(`open_pulse?select=market,slot,lean,conf,price&slot=gte.${since}&lean=neq.none&order=slot.desc&limit=1500`); }
+  try { rows = await sb(`open_pulse?select=market,slot,lean,conf,score,price&slot=gte.${since}&lean=neq.none&order=slot.desc&limit=3000`); }
   catch (e) { return { ready: false, error: String(e.message || e).slice(0, 120) }; }
   const charts = await settle(Object.fromEntries(Object.keys(PULSE_MKTS).map((k) => [k, yahooChart(CALL_MKTS[k].sym, { interval: "15m", range: "1mo" })])));
   const tally = () => ({ right: 0, wrong: 0, flat: 0, pending: 0 });
-  const sum = tally(), byConf = { low: tally(), medium: tally() }, by = {};
+  const sum = tally(), byConf = { high: tally(), medium: tally(), low: tally() }, by = {};
   const reads = rows.map((r) => {
     const c = CALL_MKTS[r.market], bars = charts.res[r.market] && charts.res[r.market].bars;
     if (!c) return null;
     const g = grade(bars, +r.slot, (s) => s + 36e5, { ...c, flat: c.flat / 2 }, r.lean);
-    sum[g.result]++; if (byConf[r.conf]) byConf[r.conf][g.result]++;
+    const cf = confBand(r.score); sum[g.result]++; byConf[cf][g.result]++;
     (by[r.market] = by[r.market] || tally())[g.result]++;
-    return { market: r.market, time: +r.slot, lean: r.lean, conf: r.conf, hour: g };
+    return { market: r.market, time: +r.slot, lean: r.lean, conf: confBand(r.score), hour: g };
   }).filter(Boolean);
   return { ready: true, days: 14, total: reads.length, summary: sum, byConf, byMarket: by, reads: reads.slice(0, 30), updated: Date.now() };
+}
+
+// ---------- Session bias record: the "Your day" call, logged once at 9:30 New York and graded at the 4 PM close ----------
+var DAY_LOG_MKTS = { futures: "NQ", crypto: "BTC", forex: "EURUSD" };
+async function logDayBias(now, reads) {
+  const t = ny(now);
+  if (/Sat|Sun/.test(t.dow || "") || t.mins < 570 || t.mins > 585) return "not 9:30";
+  let have = [];
+  try { have = await sb(`open_daybias?select=market&day=eq.${t.date}`); } catch {}
+  if (have.length >= 3) return "already logged";
+  const out = await build11({ p: Object.keys(DAY_LOG_MKTS).join(";") });
+  const rows = (out.dayplan || []).filter((d) => DAY_LOG_MKTS[d.market] && d.call !== "range").map((d) => {
+    const key = DAY_LOG_MKTS[d.market], r = reads.find((x) => x.key === key);
+    return { day: t.date, market: key, call: d.call, conf: d.conf, score: d.score, price: r && r.price != null ? r.price : null };
+  }).filter((r) => !have.some((h) => h.market === r.market));
+  if (!rows.length) return "nothing to log";
+  await sb("open_daybias?on_conflict=day,market", { method: "POST", body: rows, prefer: "resolution=ignore-duplicates,return=minimal" });
+  return "day bias logged " + rows.length;
+}
+async function buildDayScore() {
+  const since = new Date(Date.now() - 60 * 864e5).toISOString().slice(0, 10);
+  let rows;
+  try { rows = await sb(`open_daybias?select=day,market,call,conf,score,logged_at&day=gte.${since}&order=day.desc&limit=400`); }
+  catch (e) { return { ready: false, error: String(e.message || e).slice(0, 120) }; }
+  const charts = await settle(Object.fromEntries(Object.keys(PULSE_MKTS).map((k) => [k, yahooChart(CALL_MKTS[k].sym, { interval: "15m", range: "3mo" })])));
+  const tally = () => ({ right: 0, wrong: 0, flat: 0, pending: 0 });
+  const sum = tally(), byConf = { high: tally(), medium: tally(), low: tally() }, by = {};
+  const closeOf = (start) => { const d = ny(start); return start + (960 - d.mins) * 6e4; };
+  const list = rows.map((r) => {
+    const c = CALL_MKTS[r.market], bars = charts.res[r.market] && charts.res[r.market].bars;
+    if (!c) return null;
+    const g = grade(bars, new Date(r.logged_at).getTime(), closeOf, c, r.call);
+    sum[g.result]++; if (byConf[r.conf]) byConf[r.conf][g.result]++;
+    (by[r.market] = by[r.market] || tally())[g.result]++;
+    return { day: r.day, market: r.market, call: r.call, conf: r.conf, close: g };
+  }).filter(Boolean);
+  return { ready: true, since, total: list.length, summary: sum, byConf, byMarket: by, days: list.slice(0, 30), updated: Date.now() };
 }
 // ---------- plans: who the reader is, what they can use, and payments ----------
 class HttpErr extends Error { constructor(status, msg, extra) { super(msg); this.status = status; this.extra = extra || {}; } }
@@ -3376,6 +3419,7 @@ var ROUTES = {
   timing: [(q) => buildTiming(String(q.m || "NQ").toUpperCase()), 900],
   pulse: [() => buildPulse(), 50],
   pulsescore: [() => buildPulseScore(), 300],
+  dayscore: [() => buildDayScore(), 300],
   callaudit: [() => buildCallAudit(), 600]
 };
 async function handler(req, res) {

@@ -2165,11 +2165,22 @@ function gradeCell(g) {
 PAGES.scorecard = () => {
   layout(`<h1 class="page-h">Scorecard</h1>
     <p class="page-intro">Every “Likely up” and “Likely down” call in the briefing is saved the moment it’s made, with the price at that time. We check it against what price actually did an hour later and at the 4 PM New York close. Nothing is deleted, so the misses stay here too.</p>
-    <div id="scBody">${skel(3)}</div><section class="block"><div class="sec-row"><h2 class="sec">Live read, every 5 minutes</h2></div><div id="scPulse">${skel(2)}</div></section>`);
+    <div id="scBody">${skel(3)}</div><section class="block"><div class="sec-row"><h2 class="sec">Your day bias, by confidence</h2></div><div id="scDay">${skel(2)}</div></section><section class="block"><div class="sec-row"><h2 class="sec">Live read, every 5 minutes</h2></div><div id="scPulse">${skel(2)}</div></section>`);
+  fill('scDay', 'the session bias record', api('dayscore', 5 * 60e3), d => {
+    if (!d.ready) return `<div class="sc-empty"><p><b>Session bias tracking is being set up.</b></p></div>`;
+    const graded = d.summary.right + d.summary.wrong + d.summary.flat;
+    const intro = `<p class="sc-fine">The “Bias: up / down” call for NQ, Bitcoin and EUR/USD is saved once a day at 9:30 AM New York, with its confidence, and graded at the 4 PM close.${graded < 10 ? ' It needs a couple of weeks of trading days before these numbers mean much.' : ''}</p>`;
+    if (!d.total) return `<div class="sc-empty"><p><b>Tracking starts at the next 9:30 AM New York open.</b> Each market’s session bias gets saved with its confidence and checked at the 4 PM close.</p></div>`;
+    return `<div class="sc-tiles sc4">${scoreTile('All days', d.summary)}${scoreTile('High confidence', d.byConf.high)}${scoreTile('Medium confidence', d.byConf.medium)}${scoreTile('Low confidence', d.byConf.low)}</div>${intro}
+      <div class="sc-list" role="table" aria-label="Recent session biases">
+        <div class="sc-row sc-day sc-head" role="row"><span role="columnheader">Day</span><span role="columnheader">Bias</span><span role="columnheader">Confidence</span><span role="columnheader">At the close</span></div>
+        ${d.days.map(x => `<div class="sc-row sc-day" role="row"><span role="cell">${new Date(x.day + 'T12:00:00Z').toLocaleDateString('en-US', { timeZone: 'UTC', weekday: 'short', month: 'short', day: 'numeric' })}</span><span role="cell"><span class="pill ${x.call}"><b>${esc(x.market === 'EURUSD' ? 'EUR/USD' : x.market)}</b> ${x.call === 'up' ? '↑ Up' : '↓ Down'}</span></span><span role="cell" class="sc-cf ${esc(x.conf)}">${esc(x.conf.charAt(0).toUpperCase() + x.conf.slice(1))}</span><span role="cell" class="sc-g">${gradeCell(x.close)}</span></div>`).join('')}
+      </div>${stamp(d)}`;
+  });
   fill('scPulse', 'the live read score', api('pulsescore', 5 * 60e3), d => {
     if (!d.ready || !d.total) return `<div class="sc-empty"><p><b>No live reads graded yet.</b> Each “Leaning up” or “Leaning down” read is checked one hour later.</p></div>`;
-    return `<div class="sc-tiles sc3">${scoreTile('Right after 1 hour', d.summary)}${scoreTile('Low confidence', d.byConf.low)}${scoreTile('Medium confidence', d.byConf.medium)}</div>
-      <p class="sc-fine">Last ${d.days} days, ${d.total} leans. “No clear lean” reads aren’t graded. If medium confidence isn’t beating low confidence, the confidence label isn’t telling you anything yet.</p>
+    return `<div class="sc-tiles sc4">${scoreTile('All leans', d.summary)}${scoreTile('High confidence', d.byConf.high, 'News and price strongly agree')}${scoreTile('Medium confidence', d.byConf.medium)}${scoreTile('Low confidence', d.byConf.low)}</div>
+      <p class="sc-fine">Last ${d.days} days, ${d.total} leans, each checked one hour later. “No clear lean” reads aren’t graded. Confidence only means something if high beats medium and medium beats low.</p>
       ${Object.keys(d.byMarket).length ? `<div class="sc-mk">${Object.entries(d.byMarket).map(([k, t]) => `<div class="sc-mrow"><b>${esc(CALL_NAME[k] || k)}</b><span>1 hour: ${hitRate(t) == null ? '—' : hitRate(t) + '%'} <small>(${t.right + t.wrong} graded)</small></span><span></span></div>`).join('')}</div>` : ''}`;
   });
   fill('scBody', 'the scorecard', api('calls', 5 * 60e3), d => {

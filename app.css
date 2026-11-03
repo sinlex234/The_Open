@@ -989,6 +989,10 @@ table.t,.mytable,.wm-g table{max-width:100%}
 .nb-h small{display:block;color:var(--ink-3);font-size:0.75rem;margin-top:2px}
 .nb-r{display:flex;gap:0.375rem;flex-wrap:wrap;justify-content:flex-end}
 .sc-tiles.sc3{grid-template-columns:repeat(3,minmax(0,1fr))}
+.sc-tiles.sc4{grid-template-columns:repeat(4,minmax(0,1fr))}
+.sc-row.sc-day{grid-template-columns:7.5rem minmax(0,1fr) 7rem 9rem}
+.sc-cf{font-size:0.8125rem;color:var(--ink-2)}
+.sc-cf.high{color:var(--acc)}
 .pl-grid.n1{grid-template-columns:minmax(0,38.75rem)}
 .pl-grid.n2{grid-template-columns:repeat(2,minmax(0,1fr))}
 @media (max-width:980px){.pl-grid{grid-template-columns:1fr 1fr}}
@@ -999,6 +1003,8 @@ table.t,.mytable,.wm-g table{max-width:100%}
   .nb-row{flex-direction:column;align-items:flex-start;gap:2px}
   .nb-r{justify-content:flex-start}
   .sc-tiles.sc3{grid-template-columns:1fr}
+  .sc-tiles.sc4{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .sc-row.sc-day{grid-template-columns:5.5rem minmax(0,1fr) 4.5rem 6.5rem}
 }
 @media (prefers-reduced-motion:reduce){.nb-live{animation:none}}
 .pl-timer{font:500 0.7812rem/1 var(--mono);color:var(--ink-3);display:inline-flex;align-items:center;gap:0.4375rem;border:1px solid var(--rule-2);border-radius:6.1875rem;padding:0.375rem 0.6875rem;white-space:nowrap}

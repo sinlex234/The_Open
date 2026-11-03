@@ -120,6 +120,32 @@ select cron.unschedule(jobid) from cron.job where jobname = 'open-one-live-read'
 select cron.schedule('open-one-live-read', '*/5 * * * *',
   $$select net.http_get(url := 'https://the-open-one.vercel.app/api/data?fn=pulse&slot=' || floor(extract(epoch from now()) / 300)::bigint)$$);
 
+-- ---------- Confidence levels and the session bias record (added Nov 2 2026). Safe to run more than once. ----------
+-- The Live read can now be high confidence too
+alter table public.open_pulse drop constraint if exists open_pulse_conf_check;
+alter table public.open_pulse add constraint open_pulse_conf_check check (conf in ('low', 'medium', 'high'));
+
+-- The "Your day" session bias, saved once a day at 9:30 New York and graded at the 4 PM close. Anyone can read it (Scorecard).
+create table if not exists public.open_daybias (
+  id        bigint generated always as identity primary key,
+  day       date not null,
+  market    text not null check (market in ('NQ', 'BTC', 'EURUSD')),
+  call      text not null check (call in ('up', 'down')),
+  conf      text not null check (conf in ('low', 'medium', 'high')),
+  score     double precision,
+  price     double precision,
+  logged_at timestamptz not null default now(),
+  unique (day, market)
+);
+alter table public.open_daybias enable row level security;
+drop policy if exists "open_daybias: read" on public.open_daybias;
+create policy "open_daybias: read" on public.open_daybias for select using (true);
+drop policy if exists "open_daybias: add now" on public.open_daybias;
+create policy "open_daybias: add now" on public.open_daybias for insert
+  with check (logged_at between now() - interval '1 minute' and now() + interval '1 minute'
+    and day = (now() at time zone 'America/New_York')::date);
+grant select, insert on public.open_daybias to anon, authenticated;
+
 -- ---------- Plans, codes and the AI meter ----------
 create extension if not exists pgcrypto with schema extensions;
 
