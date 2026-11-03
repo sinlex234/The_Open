@@ -2611,15 +2611,20 @@ async function loadLive(force) {
   LS.loaded = true; renderLiveSoon(); lsMarkCalendar();
 }
 function lsNext(now = Date.now()) {
+  // Everything big left today (or in the next 12 hours), plus what's live or just out. Same-time releases are one card.
+  const day = nyDay(now), seen = new Set();
   const list = LS.cal.map(lsFor).filter(Boolean).filter(x => {
     const t = x.ev.time;
-    return x.kind === 'stream' ? t - now < 90 * 60e3 && now - t < 90 * 60e3 : t - now < 45 * 60e3 && now - t < 20 * 60e3;
-  });
-  // What's coming next goes first, then whatever is live or just out
+    if (t > now) return nyDay(t) === day || t - now < 12 * 3600e3;
+    return x.kind === 'stream' ? now - t < 90 * 60e3 : now - t < 20 * 60e3;
+  }).filter(x => { const k = x.kind + x.ev.time; if (seen.has(k)) return false; seen.add(k); return true; });
+  const names = x => [...new Set(LS.cal.filter(e => e.time === x.ev.time && lsFor(e) && lsFor(e).kind === x.kind).map(e => e.name || e.title))];
+  list.forEach(x => { x.names = names(x); });
   const soon = list.filter(x => x.ev.time > now).sort((a, b) => a.ev.time - b.ev.time);
   const on = list.filter(x => x.ev.time <= now).sort((a, b) => b.ev.time - a.ev.time);
-  return [...soon, ...on].slice(0, 2);
+  return [...on.slice(0, 1), ...soon].slice(0, 3);
 }
+const nyDay = t => new Date(t).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
 function lsMover() {
   return ['wh', 'cspan'].map(lsChan).find(c => c.state === 'live' && c.embed !== false && LS_MOVER.test(c.title || '')) || null;
 }
@@ -2628,6 +2633,7 @@ function lsWhen(t, now = Date.now()) {
   if (s <= 0) return null;
   if (s < 60) return `${s}s`;
   const m = Math.floor(s / 60), r = s % 60;
+  if (m >= 60) return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`;
   return m < 10 ? `${m}m ${String(r).padStart(2, '0')}s` : `${m} min`;
 }
 function renderLiveSoon() {
@@ -2637,9 +2643,10 @@ function renderLiveSoon() {
   let html = '';
   for (const x of xs) {
     const ch = lsChan(x.src), until = lsWhen(x.ev.time, now), live = x.kind === 'stream' && ch.state === 'live';
-    const head = x.kind === 'stream' ? (live ? 'Live now' : until ? `Livestream in <b data-cd="${x.ev.time}">${until}</b>` : 'Starting now') : (until ? `Release room · data in <b data-cd="${x.ev.time}">${until}</b>` : 'Just released');
-    html += `<div class="ls-card ${x.kind}${live ? ' on' : ''}"><span class="ls-dot"></span><div class="ls-txt"><p class="ls-head">${head}</p><p class="ls-name">${esc(x.ev.name || x.ev.title)} <span class="faint">· ${fmtTime(x.ev.time)} ${tzAbbr(x.ev.time)} · ${esc(x.kind === 'stream' ? ch.name : 'High volatility')}</span></p></div>
-      <div class="ls-acts">${x.kind === 'stream' ? `<button class="btn-primary sm" data-ls="${esc(x.key)}">${live ? 'Watch live' : 'Join early'}</button>` : `<button class="btn-primary sm" data-ls="${esc(x.key)}">Open release room</button><button class="btn-ghost sm" data-ls-src="${x.src}">Watch coverage</button>`}</div></div>`;
+    const head = x.kind === 'stream' ? (live ? 'Live now' : until ? `Livestream in <b data-cd="${x.ev.time}">${until}</b>` : 'Starting now') : (until ? `News drop in <b data-cd="${x.ev.time}">${until}</b>` : 'Just dropped');
+    const far = x.ev.time - now > 60 * 60e3;
+    html += `<div class="ls-card ${x.kind}${live ? ' on' : ''}${far ? ' far' : ''}"><span class="ls-dot"></span><div class="ls-txt"><p class="ls-head">${head}</p><p class="ls-name">${esc((x.names || [x.ev.name || x.ev.title]).slice(0, 2).join(' + '))} <span class="faint">· ${fmtTime(x.ev.time)} ${tzAbbr(x.ev.time)} · ${esc(x.kind === 'stream' ? ch.name : 'High volatility')}</span></p></div>
+      <div class="ls-acts">${x.kind === 'stream' ? `<button class="btn-primary sm" data-ls="${esc(x.key)}">${live ? 'Watch live' : 'Join early'}</button>` : `<button class="btn-primary sm" data-ls="${esc(x.key)}">${far ? 'Release room' : 'Open release room'}</button>${far ? '' : `<button class="btn-ghost sm" data-ls-src="${x.src}">Watch coverage</button>`}`}</div></div>`;
   }
   if (mv) html += `<div class="ls-card mover on"><span class="ls-dot"></span><div class="ls-txt"><p class="ls-head">Live now · ${esc(mv.name)}</p><p class="ls-name">${esc(mv.title)}</p></div><div class="ls-acts"><button class="btn-primary sm" data-ls-src="${mv.key}">Watch live</button></div></div>`;
   el.innerHTML = html; el.hidden = false;
@@ -2763,7 +2770,7 @@ initMe(() => {
   startLive();
   new MutationObserver(() => { if (LS.loaded && main.querySelector('.ff-row[data-k]:not([data-lsd])')) { main.querySelectorAll('.ff-row[data-k]').forEach(r => r.dataset.lsd = 1); lsMarkCalendar(); } }).observe(main, { childList: true, subtree: true });
   api('calendar', 10 * 60e3).then(d => { calendarCache = d.events; }).catch(() => {});
-  startAlerts({ calendar: () => calendarCache, wire: () => api('wire?section=all', 60e3).then(d => d.items), levels: levelRows });
+  startAlerts({ calendar: () => (LS.cal && LS.cal.length ? LS.cal : calendarCache), live: lsFor, open: x => { if (x.kind === 'stream') { const ch = lsChan(x.src); openPlayer(x.src, { title: `${x.ev.name || x.ev.title} · ${ch.name}` }); } else openRoom(x); }, wire: () => api('wire?section=all', 60e3).then(d => d.items), levels: levelRows });
 });
 addEventListener('open:tz', () => { TZ = userTZ(); cache.clear(); refreshing = false; tick(); mStatus(); route(); });
 addEventListener('open:profile', () => { orderTabs(); mountStrip(); cache.clear(); route(); });

@@ -809,29 +809,57 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') { const m = 
 
 // ================= alerts =================
 let alertGetters = null, alertTimer = null;
-function toast(title, body) {
-  const t = $('#toast'); if (!t) return;
-  t.innerHTML = `<b>${esc(title)}</b><span>${esc(body)}</span><button aria-label="Dismiss">×</button>`;
-  t.hidden = false; t.querySelector('button').onclick = () => { t.hidden = true; };
-  clearTimeout(toast._t); toast._t = setTimeout(() => { t.hidden = true; }, 12000);
+// Toasts stack, so a countdown alert isn't covered by a breaking story that arrives at the same moment
+function toast(title, body, onOpen) {
+  let st = $('#toastStack');
+  if (!st) { st = document.createElement('div'); st.id = 'toastStack'; st.setAttribute('role', 'status'); document.body.appendChild(st); }
+  const t = document.createElement('div'); t.className = 'toast' + (onOpen ? ' toast-act' : '');
+  t.innerHTML = `<b>${esc(title)}</b><span>${esc(body)}</span>${onOpen ? '<a href="#" class="toast-go">Open</a>' : ''}<button aria-label="Dismiss">×</button>`;
+  const close = () => t.remove();
+  t.querySelector('button').onclick = close;
+  if (onOpen) t.querySelector('.toast-go').onclick = ev => { ev.preventDefault(); close(); onOpen(); };
+  st.appendChild(t);
+  while (st.children.length > 3) (st.querySelector('.toast:not(.toast-act)') || st.firstChild).remove();
+  setTimeout(close, onOpen && /in 1 min|now/i.test(title) ? 60000 : 15000);
 }
-export function notify(key, title, body) {
+export function notify(key, title, body, onOpen) {
   const sent = ls.get('sent', {});
   const today = nyDate(Date.now());
   Object.keys(sent).forEach(k => { if (sent[k] !== today) delete sent[k]; });
   if (sent[key]) return;
   sent[key] = today; ls.set('sent', sent);
   if ('Notification' in window && Notification.permission === 'granted') {
-    try { new Notification(title, { body, icon: 'icon.svg', tag: key }); } catch { toast(title, body); }
-  } else toast(title, body);
+    try { const n = new Notification(title, { body, icon: 'icon.svg', tag: key, requireInteraction: !!onOpen && /in 1 min|now/i.test(title) }); if (onOpen) n.onclick = () => { try { window.focus(); } catch {} n.close(); onOpen(); }; } catch { toast(title, body, onOpen); }
+  } else toast(title, body, onOpen);
+}
+// Countdown before big news in your markets: 1 hour, 30, 15, 10, 5 and 1 minute out, then when it starts.
+// Only the latest step you've reached fires, so opening the site 20 minutes before doesn't send the 1-hour alert.
+export const STEPS = [60, 30, 15, 10, 5, 1, 0];
+const stepTxt = m => m === 60 ? '1 hour' : m + ' min';
+function countdownAlerts(AL, now) {
+  const steps = Array.isArray(AL.steps) ? AL.steps : STEPS;
+  const groups = {};
+  (alertGetters.calendar() || []).forEach(e => {
+    const x = alertGetters.live ? alertGetters.live(e) : (e.impact === 'High' && myCurrencies().has(e.country) ? { kind: 'release', key: e.title + e.time, ev: e } : null);
+    if (!x || now - e.time > 90e3 || e.time - now > 61 * 60e3) return;
+    const g = groups[x.kind + e.time] || (groups[x.kind + e.time] = { x, names: [] });
+    const nm = e.name || e.title; if (!g.names.includes(nm)) g.names.push(nm);
+  });
+  Object.values(groups).forEach(({ x, names }) => {
+    const left = x.ev.time - now, what = names.slice(0, 2).join(' and ');
+    const step = left <= 0 ? 0 : [...STEPS].reverse().find(m => m > 0 && left <= m * 60e3);
+    if (step == null || !steps.includes(step)) return;
+    const stream = x.kind === 'stream';
+    const title = step === 0 ? (stream ? `Live now: ${what}` : `Out now: ${what}`) : `${stream ? 'Livestream' : 'News drop'} in ${stepTxt(step)}: ${what}`;
+    const body = step === 0 ? (stream ? 'Click to watch. The player stays open while you use the site.' : 'Click to open the release room and see the number and what it means for your markets.')
+      : `${fmtTime(x.ev.time)}. ${stream ? 'Click to join early.' : 'Click to open the release room and watch the countdown.'} ${forYouEvent(x.ev) || x.ev.why || ''}`.trim();
+    notify(`cd:${x.kind}:${x.ev.time}:${step}`, title, body, alertGetters.open ? () => alertGetters.open(x) : null);
+  });
 }
 async function checkAlerts() {
   if (!hasProfile() || !alertGetters) return;
   const AL = me.alerts, now = Date.now(), m = nyMins(now), today = nyDate(now);
-  if (AL.news) {
-    (alertGetters.calendar() || []).filter(e => e.impact === 'High' && myCurrencies().has(e.country) && e.time > now && e.time - now <= (AL.lead || 5) * 60e3)
-      .forEach(e => notify('ev:' + e.title + e.time, `${e.name} in ${Math.max(1, Math.round((e.time - now) / 60e3))} min`, `${e.country}, ${fmtTime(e.time)}. ${forYouEvent(e) || e.why}`));
-  }
+  if (AL.news) countdownAlerts(AL, now);
   if (AL.breaking && alertGetters.wire) {
     try { (await alertGetters.wire()).filter(h => h.breaking && relevance(h) - (h.score || 0) >= 1.5).slice(0, 2).forEach(h => notify('br:' + h.title.toLowerCase().replace(/\W+/g, '').slice(0, 80), 'Breaking: ' + h.title, forYouHeadline(h) || h.why || h.source)); } catch {}
   }
@@ -847,7 +875,7 @@ async function checkAlerts() {
     } catch {}
   }
 }
-export function startAlerts(getters) { alertGetters = getters; clearInterval(alertTimer); alertTimer = setInterval(checkAlerts, 30e3); setTimeout(checkAlerts, 4000); }
+export function startAlerts(getters) { alertGetters = getters; clearInterval(alertTimer); alertTimer = setInterval(checkAlerts, 15e3); setTimeout(checkAlerts, 4000); }
 export function openAlerts() {
   const p = $('#alertsPanel'); const AL = me.alerts;
   const perm = !('Notification' in window) ? 'unsupported' : Notification.permission;
@@ -856,15 +884,16 @@ export function openAlerts() {
     <p class="muted small">Alerts show while this site is open in a tab, even in the background. Keep the tab open (pinning it helps): if Chrome puts the tab to sleep, alerts pause until you come back.</p>
     <p class="small ap-status">${!('Notification' in window) ? 'Status: this browser can’t show notifications.' : Notification.permission === 'granted' ? 'Status: desktop notifications are on ✓' : Notification.permission === 'denied' ? 'Status: notifications are blocked for this site ✗' : 'Status: notifications aren’t turned on yet. Click “Allow notifications” below.'}</p>
     ${perm === 'granted' ? '' : perm === 'unsupported' ? '<p class="small muted">This browser can’t show notifications, so alerts appear as banners on the page.</p>' : (perm === 'denied' ? '<p class="small muted">Notifications are blocked for this site. Turn them on in your browser’s site settings. Until then, alerts appear as banners on the page.</p>' : '<button class="btn-primary" id="apPerm" style="width:100%;margin:8px 0 4px">Allow notifications</button>')}
-    <label class="tg"><input type="checkbox" id="apNews" ${AL.news ? 'checked' : ''}><span><b>Before big scheduled news in my markets</b><small><select id="apLead">${[2, 5, 10, 15, 30].map(v => `<option value="${v}" ${AL.lead === v ? 'selected' : ''}>${v} min</option>`).join('')}</select> ahead</small></span></label>
+    <label class="tg"><input type="checkbox" id="apNews" ${AL.news ? 'checked' : ''}><span><b>Countdown to big news and livestreams</b><small>Red events in your markets, like CPI, jobs and Fed speeches.</small></span></label>
+    <div class="ap-steps" id="apSteps">${STEPS.map(m => `<label><input type="checkbox" value="${m}" ${(Array.isArray(AL.steps) ? AL.steps : STEPS).includes(m) ? 'checked' : ''}>${m === 0 ? 'When it starts' : m === 60 ? '1 hour' : m + ' min'}</label>`).join('')}</div>
     <label class="tg"><input type="checkbox" id="apRes" ${AL.results !== false ? 'checked' : ''}><span><b>Results the moment big data comes out</b><small>The actual number, the surprise against forecast, and what it likely means for your markets.</small></span></label>
     <label class="tg"><input type="checkbox" id="apBreak" ${AL.breaking ? 'checked' : ''}><span><b>Breaking stories about my markets</b><small>Only big stories that touch what you trade.</small></span></label>
     <label class="tg"><input type="checkbox" id="apSess" ${AL.sessions ? 'checked' : ''}><span><b>When my usual trading time starts</b><small>${esc(mySessions().map(s => s.label).join(', ') || 'Set your times in Edit my setup')}</small></span></label>
     ${lv ? `<label class="tg"><input type="checkbox" id="apLv" ${AL.levels ? 'checked' : ''}><span><b>When price nears yesterday’s high or low</b><small>Based on prices that can lag up to 15 minutes.</small></span></label>` : ''}
     <button class="btn-ghost" id="apTest" style="margin-top:10px">Send a test alert</button>`;
   p.hidden = false;
-  const save = () => { me.alerts = { results: $('#apRes').checked, news: $('#apNews').checked, lead: +$('#apLead').value, breaking: $('#apBreak').checked, sessions: $('#apSess').checked, levels: lv ? $('#apLv').checked : false }; ls.set('alerts', me.alerts); if (me.answers) saveAnswers({ ...me.answers, alerts: me.alerts }); };
-  ['apRes', 'apNews', 'apLead', 'apBreak', 'apSess', 'apLv'].forEach(id => { if ($('#' + id)) $('#' + id).onchange = save; });
+  const save = () => { me.alerts = { results: $('#apRes').checked, news: $('#apNews').checked, steps: [...document.querySelectorAll('#apSteps input:checked')].map(i => +i.value), breaking: $('#apBreak').checked, sessions: $('#apSess').checked, levels: lv ? $('#apLv').checked : false }; ls.set('alerts', me.alerts); if (me.answers) saveAnswers({ ...me.answers, alerts: me.alerts }); };
+  ['apRes', 'apNews', 'apBreak', 'apSess', 'apLv'].forEach(id => { if ($('#' + id)) $('#' + id).onchange = save; }); document.querySelectorAll('#apSteps input').forEach(i => i.onchange = save);
   p.querySelector('.x').onclick = () => { p.hidden = true; };
   if ($('#apPerm')) $('#apPerm').onclick = async () => { await Notification.requestPermission(); openAlerts(); };
   $('#apTest').onclick = () => {
