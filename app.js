@@ -2064,7 +2064,7 @@ PAGES.calendar = () => {
       <div class="mc-days">${cells.join('')}</div>
       <div class="mc-foot"><div class="seg" role="group" aria-label="Show"><button type="button" data-mode="day" aria-pressed="${CAL.mode === 'day'}">Day</button><button type="button" data-mode="week" aria-pressed="${CAL.mode === 'week'}">Week</button></div>
         <button type="button" class="linkbtn" id="mcToday">Today</button></div>
-      <p class="mc-note">Calendar data covers this week${hi > addDay(weekStart(today), 6) ? ' and next week' : ''}. Next week’s events usually appear over the weekend.</p>`;
+      <p class="mc-note">Calendar data covers this week${hi > addDay(weekStart(today), 6) ? ' and next week' : ''}. Next week’s events usually appear over the weekend. CPI, jobs reports and Fed decisions show further ahead from the official schedules.</p>`;
     $('#mcal').querySelectorAll('[data-day]').forEach(b => b.onclick = () => { CAL.sel = b.dataset.day; CAL.mode = 'day'; if (monthKey(CAL.sel) !== CAL.month) CAL.month = monthKey(CAL.sel); draw(); });
     $('#mcal').querySelectorAll('[data-mon]').forEach(b => b.onclick = () => { CAL.month = addMonth(CAL.month, +b.dataset.mon); grid(); });
     $('#mcal').querySelectorAll('[data-mode]').forEach(b => b.onclick = () => { CAL.mode = b.dataset.mode; draw(); });
@@ -2582,6 +2582,7 @@ async function levelRows() {
 // Only red (high-impact) events for the user's currencies get a stream or a release room.
 const LS = { ch: {}, cal: [], room: null, tick: null, loaded: false };
 const LS_STREAM = [
+  { re: /election/i, ccy: 'USD', src: 'cspan', what: 'Election night coverage' },
   { re: /fomc press conference|press conference.*(fed|fomc)|powell/i, ccy: 'USD', src: 'fed', what: 'Fed press conference' },
   { re: /fomc statement|federal funds rate|fed interest rate|fomc economic projections/i, ccy: 'USD', src: 'fed', what: 'Fed decision' },
   { re: /president trump|trump speaks|white house|address to the nation/i, ccy: 'USD', src: 'wh', what: 'White House' },
@@ -2593,10 +2594,11 @@ const LS_STREAM = [
 const LS_CHANNEL_FALLBACK = { fed: 'UCAzhpt9DmG6PnHXjmJTvRGQ', wh: 'UCYxRlFDqcWM4y7FfpiAN3KQ', bloomberg: 'UCIALMKvObZNtJ6AmdCLP7Lg', yahoo: 'UCEAZeUIeJs0IjQiqTCdVSIg', cspan: 'UCb--64Gl51jIEVE-GLDAVTg', boe: 'UCZ25rmSDSnjIWZxjd2-04Rg' };
 const LS_NAMES = { fed: 'Federal Reserve', wh: 'The White House', bloomberg: 'Bloomberg Television', yahoo: 'Yahoo Finance', cspan: 'C-SPAN', boe: 'Bank of England', cnbc: 'CNBC Television' };
 // Big live moments outside the calendar: a White House or C-SPAN stream about something that moves markets
-const LS_MOVER = /tariff|trade deal|china|iran|israel|russia|ukraine|strike|military|war|sanction|oil|economy|inflation|fed\b|interest rate|jobs|crypto|bitcoin|stablecoin|executive order|address to the nation|press conference|announcement|deal/i;
+const LS_MOVER = /election|tariff|trade deal|china|iran|israel|russia|ukraine|strike|military|war|sanction|oil|economy|inflation|fed\b|interest rate|jobs|crypto|bitcoin|stablecoin|executive order|address to the nation|press conference|announcement|deal/i;
 const lsKey = e => `${e.country}|${e.title}|${e.time}`;
 function lsFor(e) {
-  if (!e || e.impact !== 'High' || e.allDay || TN_NOTREL.test(e.title) || !tnCcys().has(e.country)) return null;
+  const elec = /election/i.test(e.title) && e.country === 'USD';
+  if (!e || e.impact !== 'High' || (e.allDay && !elec) || (TN_NOTREL.test(e.title) && !elec) || !tnCcys().has(e.country)) return null;
   const t = `${e.title} ${e.name || ''}`;
   const s = LS_STREAM.find(x => x.ccy === e.country && x.re.test(t));
   if (s) return { kind: 'stream', src: s.src, what: s.what, key: lsKey(e), ev: e };

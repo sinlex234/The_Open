@@ -367,6 +367,26 @@ async function ffFeeds() {
     throw e;
   }
 }
+// Official release schedules (BLS: CPI and jobs; Federal Reserve: FOMC). Times are New York time.
+var OFFICIAL_DATES = {
+  cpi: ["2026-11-10", "2026-12-10", "2027-01-13", "2027-02-11", "2027-03-10", "2027-04-13", "2027-05-12", "2027-06-10", "2027-07-14", "2027-08-11", "2027-09-14", "2027-10-14", "2027-11-10", "2027-12-10"],
+  jobs: ["2026-11-06", "2026-12-04", "2027-01-08", "2027-02-05", "2027-03-05", "2027-04-02", "2027-05-07", "2027-06-04", "2027-07-02", "2027-08-06", "2027-09-03", "2027-10-08", "2027-11-05", "2027-12-03"],
+  fomc: ["2026-12-09", "2027-01-27", "2027-03-17", "2027-04-28", "2027-06-09", "2027-07-28", "2027-09-15", "2027-10-27", "2027-12-08"]
+};
+function nyWall(date, hh, mm) {
+  const guess = Date.parse(`${date}T${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:00Z`);
+  const p = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).formatToParts(new Date(guess));
+  const g = Object.fromEntries(p.map((x) => [x.type, x.value]));
+  const asNy = Date.parse(`${g.year}-${g.month}-${g.day}T${g.hour}:${g.minute}:00Z`);
+  return guess + (guess - asNy);
+}
+function officialDates() {
+  const out = [], add = (d, h, m, title) => out.push({ title, country: "USD", impact: "High", time: nyWall(d, h, m), date: d });
+  OFFICIAL_DATES.cpi.forEach((d) => { add(d, 8, 30, "CPI m/m"); add(d, 8, 30, "Core CPI m/m"); add(d, 8, 30, "CPI y/y"); });
+  OFFICIAL_DATES.jobs.forEach((d) => { add(d, 8, 30, "Non-Farm Employment Change"); add(d, 8, 30, "Unemployment Rate"); add(d, 8, 30, "Average Hourly Earnings m/m"); });
+  OFFICIAL_DATES.fomc.forEach((d) => { add(d, 14, 0, "Federal Funds Rate"); add(d, 14, 0, "FOMC Statement"); add(d, 14, 30, "FOMC Press Conference"); });
+  return out;
+}
 async function build() {
   let res = {}, errors = {};
   try {
@@ -383,6 +403,11 @@ async function build() {
     seen.add(k);
     return true;
   }).map((e) => ({ title: e.title, country: e.country, impact: e.impact, forecast: decode(e.forecast || "").replace(/\u00a0/g, " ").trim(), previous: decode(e.previous || "").replace(/\u00a0/g, " ").trim(), time: e.time, allDay: /T00:00:00/.test(e.date) && /holiday|meeting|summit|election/i.test(e.title), ...explainEvent(e) })).sort((a, b) => a.time - b.time);
+  // The feed only covers this week. Add the biggest US dates from the official BLS and Fed schedules so they show further out.
+  const lastFeed = events.length ? Math.max(...events.map((e) => e.time)) : Date.now();
+  const extra = officialDates().filter((e) => e.time > lastFeed && e.time - Date.now() < 70 * 864e5 && !events.some((x) => x.country === "USD" && x.title === e.title && Math.abs(x.time - e.time) < 864e5));
+  extra.forEach((e) => events.push({ ...e, forecast: "", previous: "", allDay: false, official: true, ...explainEvent(e) }));
+  events.sort((a, b) => a.time - b.time);
   if (errors.nextWeek && /404/.test(errors.nextWeek)) delete errors.nextWeek;
   return { events, errors, updated: Date.now() };
 }
