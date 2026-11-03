@@ -427,20 +427,54 @@ function relEffects(r) {
   });
   return out.slice(0, 4);
 }
+// Turn a release into a plain up/down call. When the rule cuts both ways, follow the market's first real move.
+const REL_REACT = { futures: ['NQ', 3, 'pts'], stocks: ['NQ', 3, 'pts'], options: ['NQ', 3, 'pts'], crypto: ['BTC', 20, '$'], memes: ['BTC', 20, '$'] };
+function relResolve(e, r) {
+  if (e.dir === 'up' || e.dir === 'down' || e.paused) return { ...e, how: 'rule' };
+  let ref = REL_REACT[e.market], flip = 1;
+  if (!ref && e.market === 'forex') { ref = ['EUR/USD', 2, 'pips']; if (/USD|dollar/i.test(e.label)) flip = -1; }
+  const s = ref && (r.since || []).find(x => x.label === ref[0]);
+  if (!s || Math.abs(s.change) < ref[1]) return { ...e, dir: 'mixed', how: 'wait' };
+  return { ...e, dir: s.change * flip > 0 ? 'up' : 'down', how: 'react', move: s };
+}
+function relMoveTxt(m) {
+  const amt = Math.abs(m.change).toLocaleString('en-US', { maximumFractionDigits: m.unit === 'pts' ? 1 : 0 });
+  return `${m.label} is ${m.change < 0 ? 'down' : 'up'} ${m.unit === '$' ? '$' + amt : amt + ' ' + m.unit}`;
+}
+function relVerdict(r) {
+  const effs = relEffects(r).map(e => relResolve(e, r));
+  const main = effs[0] || null;
+  const name = r.name || r.title;
+  const cmp = r.dir === 'up' ? 'above' : r.dir === 'down' ? 'below' : 'right at';
+  const what = r.forecast ? `${name} came in at ${r.actual}, ${cmp} the ${r.forecast} expected${r.label && r.dir !== 'inline' ? `: ${r.label.toLowerCase()}` : ''}.` : `${name} came in at ${r.actual}.`;
+  let head = 'No clear call', cls = '', why = [what];
+  if (r.dir === 'inline') { why.push('Close to what markets expected, so the move usually fades fast.'); return { head: 'Little reaction expected', cls, why: why.join(' '), effs, main }; }
+  if (main && (main.dir === 'up' || main.dir === 'down')) {
+    head = `${main.market === 'futures' ? 'NQ & ES' : main.label} ${main.dir === 'up' ? '↑ likely up' : '↓ likely down'}`; cls = main.dir;
+    if (main.how === 'rule') { if (r.text) why.push(r.text); if (main.reason) why.push(main.reason); }
+    else { const rs = (main.reason || '').replace(/\s*Watch the first reaction\.?/i, '').replace(/\.$/, ''); why.push(`On paper this cuts both ways: ${rs.charAt(0).toLowerCase() + rs.slice(1)}.`); why.push(`When it's a toss-up, the first real move usually decides it, and ${relMoveTxt(main.move)} since the release.`); }
+  } else if (main) {
+    head = `${main.market === 'futures' ? 'NQ & ES' : main.label}: waiting for the first move`;
+    why.push((main.reason || '').replace(/\s*Watch the first reaction\.?/i, ''), 'The site will call it up or down as soon as the market picks a side, usually within a minute or two.');
+  }
+  return { head, cls, why: why.filter(Boolean).join(' '), effs, main };
+}
+const relCallPill = e => `<span class="pill ${e.paused ? 'paused' : e.dir === 'up' ? 'up' : e.dir === 'down' ? 'down' : ''}"><b>${esc(e.label)}</b> ${e.paused ? '⏸ Call paused' : e.dir === 'up' ? '↑ Likely up' : e.dir === 'down' ? '↓ Likely down' : '… Waiting for the first move'}</span>`;
 function releasedHTML() {
   const now = Date.now(), gone = store.get('relDismissed', []);
   const list = Object.values(results.map).filter(r => r.released && r.actual && now - r.time < 90 * 60e3 && !gone.includes(r.key) && r.impact !== 'Low' && (r.impact === 'High' || forYouEvent(r))).sort((a, b) => b.time - a.time).slice(0, 3);
   if (!list.length) return '';
   return list.map(r => {
-    const effs = relEffects(r);
-    const cls = r.dir === 'up' ? 'up' : r.dir === 'down' ? 'down' : '';
+    const v = relVerdict(r), rest = v.effs.slice(1);
+    const cls = r.ccyDir === 'good' ? 'up' : r.ccyDir === 'bad' ? 'down' : '';
     return `<article class="rel" data-key="${esc(r.key)}">
       <button class="x rel-x" aria-label="Hide this result">×</button>
       <p class="rel-top"><span class="rel-live"></span>Just released · ${fmtTime(r.time)} ${tzAbbr(r.time)} · ${esc(r.country)}</p>
       <h2 class="rel-h">${esc(r.name || r.title)}</h2>
-      <div class="rel-nums"><div><small>Actual</small><b class="${cls}">${esc(r.actual)}</b></div>${r.forecast ? `<div><small>Forecast</small><b>${esc(r.forecast)}</b></div>` : ''}${r.previous ? `<div><small>Previous</small><b>${esc(r.previous)}</b></div>` : ''}${r.label ? `<div class="rel-lab"><span class="pill ${cls || 'acc'}">${esc(r.label)}</span></div>` : ''}</div>
-      ${r.text ? `<p class="rel-text">${esc(r.text)}</p>` : ''}
-      ${effs.length ? `<div class="rel-effs">${effs.map(e => `<div class="beff"><span class="pill ${e.paused ? 'paused' : e.dir === 'up' ? 'up' : e.dir === 'down' ? 'down' : ''}"><b>${esc(e.label)}</b> ${e.paused ? '⏸ Call paused' : DIR_TXT[e.dir] || ''}</span><span class="br">${esc(e.reason)}</span></div>`).join('')}</div>` : ''}
+      <p class="rel-call ${v.cls}">${esc(v.head)}</p>
+      <div class="rel-nums"><div><small>Actual</small><b class="${cls}">${esc(r.actual)}</b></div>${r.forecast ? `<div><small>Forecast</small><b>${esc(r.forecast)}</b></div>` : ''}${r.previous ? `<div><small>Previous</small><b>${esc(r.previous)}</b></div>` : ''}</div>
+      <p class="rel-text"><b>Why:</b> ${esc(v.why)}</p>
+      ${rest.length ? `<div class="rel-effs">${rest.map(e => `<div class="beff">${relCallPill(e)}<span class="br">${esc(e.how === 'react' ? `Following the first move after the release.` : e.reason || '')}</span></div>`).join('')}</div>` : ''}
       ${(r.since || []).length ? `<p class="rel-since"><span>Since the release:</span> ${r.since.map(x => reactTxt(x).replace(' since</span>', '</span>')).join(' · ')}</p>` : ''}
     </article>`;
   }).join('');
@@ -472,13 +506,14 @@ async function pollResults() {
         });
         const now = Date.now();
         fast = (j.events || []).some(ev => !ev.actual && ev.time - now < 60e3 && now - ev.time < 30 * 60e3);
+        if (LS.room) { renderRoom(); if (!(results.map[LS.room.key] || {}).actual && LS.room.ev.time - now < 5 * 60e3) fast = 'room'; }
         results.loaded = true;
         renderReleased();
         if (changed && started && ['today', 'calendar', 'futures', 'forex'].includes(shownPage)) route(true);
       }
     }
   } catch {}
-  results.timer = setTimeout(pollResults, fast ? 5000 : 60000);
+  results.timer = setTimeout(pollResults, fast === 'room' ? 2500 : fast ? 5000 : 60000);
 }
 
 // ---------- shared pieces ----------
@@ -1209,6 +1244,7 @@ PAGES.today = () => {
       <p class="page-intro" id="todayIntro">${isLearning() ? 'Here’s how today’s news connects to the markets you’re learning about.' : ws.text ? esc(ws.text) : 'Here’s what matters for your markets today.'}</p>
     </div>
     <div class="since" id="since" hidden></div>
+    <div class="ls-soon" id="liveSoon" hidden></div>
     <div class="front3">
       <div class="t-left">
         <section class="briefing t-news"><div class="sec-row"><h2 class="sec">Briefing for ${esc(sessionDay().long)}</h2><a href="/news">All news</a></div><ol class="bfeed" id="bfeed">${'<li>' + skel(3) + '</li>'}</ol></section>
@@ -1236,6 +1272,7 @@ PAGES.today = () => {
     const gx = $('#guideX'); if (gx) gx.onclick = () => { store.set('guideDone', true); const g = $('#guide'); if (g) g.remove(); };
   }
   loadPulse();
+  renderLiveSoon();
   if (!isLearning()) mountExpect('todayExpect');
   const deskP = api('desk?' + profileQuery(), 5 * 60e3);
   const wireP = api('wire?section=all', 60e3);
@@ -1902,7 +1939,7 @@ function ffRow(e, act, today, now, nextT, showT) {
   const past = e.time < now - 60e3 && !e.allDay, isNext = e.time === nextT;
   const fy = forYouEvent(e);
   const body = [e.what ? `<p>${esc(e.what)}</p>` : '', e.why ? `<p>${esc(e.why)}</p>` : '', e.note ? `<p class="note">${esc(e.note)}</p>` : '', r && r.text ? `<p><b>${esc(r.label || '')}.</b> ${esc(r.text)}</p>` : '', fy ? `<p class="ff-fy-b"><b>For you:</b> ${esc(fy)}</p>` : ''].join('');
-  return `<details class="ff-row${past ? ' past' : ''}${isNext ? ' next' : ''}${imp === 'High' ? ' hi' : ''}"><summary>
+  return `<details class="ff-row${past ? ' past' : ''}${isNext ? ' next' : ''}${imp === 'High' ? ' hi' : ''}" data-k="${esc(`${e.country}|${e.title}|${e.time}`)}"><summary>
       <span class="ff-t">${showT ? (e.allDay ? 'All day' : fmtTime(e.time).replace(' ', '').toLowerCase()) : ''}</span>
       <span class="ff-c">${esc(e.country)}</span>
       <span class="ff-i">${ffIcon(imp)}</span>
@@ -2540,6 +2577,178 @@ async function levelRows() {
   return myAssets().map(a => assetView(a, D)).filter(v => v && v.L).map(v => ({ id: shortName(v.a), L: v.L.levels, fmt: x => (v.money ? '$' : '') + num(x, v.dp) }));
 }
 
+
+// ---------- Live: livestreams, the floating player and the release room ----------
+// Only red (high-impact) events for the user's currencies get a stream or a release room.
+const LS = { ch: {}, cal: [], room: null, tick: null, loaded: false };
+const LS_STREAM = [
+  { re: /fomc press conference|press conference.*(fed|fomc)|powell/i, ccy: 'USD', src: 'fed', what: 'Fed press conference' },
+  { re: /fomc statement|federal funds rate|fed interest rate|fomc economic projections/i, ccy: 'USD', src: 'fed', what: 'Fed decision' },
+  { re: /president trump|trump speaks|white house|address to the nation/i, ccy: 'USD', src: 'wh', what: 'White House' },
+  { re: /fomc member|fed chair|fed governor|speaks|testif/i, ccy: 'USD', src: 'bloomberg', what: 'Fed speaker coverage' },
+  { re: /ecb press conference|lagarde|main refinancing rate|monetary policy statement|deposit facility/i, ccy: 'EUR', src: 'bloomberg', what: 'ECB coverage' },
+  { re: /official bank rate|boe|bailey|mpc/i, ccy: 'GBP', src: 'boe', what: 'Bank of England' },
+  { re: /boj|policy rate|ueda/i, ccy: 'JPY', src: 'bloomberg', what: 'Bank of Japan coverage' }
+];
+const LS_CHANNEL_FALLBACK = { fed: 'UCAzhpt9DmG6PnHXjmJTvRGQ', wh: 'UCYxRlFDqcWM4y7FfpiAN3KQ', bloomberg: 'UCIALMKvObZNtJ6AmdCLP7Lg', yahoo: 'UCEAZeUIeJs0IjQiqTCdVSIg', cspan: 'UCb--64Gl51jIEVE-GLDAVTg', boe: 'UCZ25rmSDSnjIWZxjd2-04Rg' };
+const LS_NAMES = { fed: 'Federal Reserve', wh: 'The White House', bloomberg: 'Bloomberg Television', yahoo: 'Yahoo Finance', cspan: 'C-SPAN', boe: 'Bank of England', cnbc: 'CNBC Television' };
+// Big live moments outside the calendar: a White House or C-SPAN stream about something that moves markets
+const LS_MOVER = /tariff|trade deal|china|iran|israel|russia|ukraine|strike|military|war|sanction|oil|economy|inflation|fed\b|interest rate|jobs|crypto|bitcoin|stablecoin|executive order|address to the nation|press conference|announcement|deal/i;
+const lsKey = e => `${e.country}|${e.title}|${e.time}`;
+function lsFor(e) {
+  if (!e || e.impact !== 'High' || e.allDay || TN_NOTREL.test(e.title) || !tnCcys().has(e.country)) return null;
+  const t = `${e.title} ${e.name || ''}`;
+  const s = LS_STREAM.find(x => x.ccy === e.country && x.re.test(t));
+  if (s) return { kind: 'stream', src: s.src, what: s.what, key: lsKey(e), ev: e };
+  return { kind: 'release', src: e.country === 'USD' ? 'yahoo' : 'bloomberg', what: 'Release room', key: lsKey(e), ev: e };
+}
+const lsChan = k => LS.ch[k] || { key: k, name: LS_NAMES[k] || k, channel: LS_CHANNEL_FALLBACK[k], state: 'unknown' };
+async function loadLive(force) {
+  try { const d = await api('streams', force ? 0 : 45e3); (d.channels || []).forEach(c => { LS.ch[c.key] = c; }); } catch {}
+  try { const c = await api('calendar', 10 * 60e3); LS.cal = c.events || []; } catch {}
+  LS.loaded = true; renderLiveSoon(); lsMarkCalendar();
+}
+function lsNext(now = Date.now()) {
+  const list = LS.cal.map(lsFor).filter(Boolean).filter(x => {
+    const t = x.ev.time;
+    return x.kind === 'stream' ? t - now < 90 * 60e3 && now - t < 90 * 60e3 : t - now < 45 * 60e3 && now - t < 20 * 60e3;
+  });
+  // What's coming next goes first, then whatever is live or just out
+  const soon = list.filter(x => x.ev.time > now).sort((a, b) => a.ev.time - b.ev.time);
+  const on = list.filter(x => x.ev.time <= now).sort((a, b) => b.ev.time - a.ev.time);
+  return [...soon, ...on].slice(0, 2);
+}
+function lsMover() {
+  return ['wh', 'cspan'].map(lsChan).find(c => c.state === 'live' && c.embed !== false && LS_MOVER.test(c.title || '')) || null;
+}
+function lsWhen(t, now = Date.now()) {
+  const s = Math.round((t - now) / 1e3);
+  if (s <= 0) return null;
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60), r = s % 60;
+  return m < 10 ? `${m}m ${String(r).padStart(2, '0')}s` : `${m} min`;
+}
+function renderLiveSoon() {
+  const el = $('#liveSoon'); if (!el) return;
+  const now = Date.now(), xs = lsNext(now), mv = lsMover();
+  if (!xs.length && !mv) { el.hidden = true; el.innerHTML = ''; return; }
+  let html = '';
+  for (const x of xs) {
+    const ch = lsChan(x.src), until = lsWhen(x.ev.time, now), live = x.kind === 'stream' && ch.state === 'live';
+    const head = x.kind === 'stream' ? (live ? 'Live now' : until ? `Livestream in <b data-cd="${x.ev.time}">${until}</b>` : 'Starting now') : (until ? `Release room · data in <b data-cd="${x.ev.time}">${until}</b>` : 'Just released');
+    html += `<div class="ls-card ${x.kind}${live ? ' on' : ''}"><span class="ls-dot"></span><div class="ls-txt"><p class="ls-head">${head}</p><p class="ls-name">${esc(x.ev.name || x.ev.title)} <span class="faint">· ${fmtTime(x.ev.time)} ${tzAbbr(x.ev.time)} · ${esc(x.kind === 'stream' ? ch.name : 'High volatility')}</span></p></div>
+      <div class="ls-acts">${x.kind === 'stream' ? `<button class="btn-primary sm" data-ls="${esc(x.key)}">${live ? 'Watch live' : 'Join early'}</button>` : `<button class="btn-primary sm" data-ls="${esc(x.key)}">Open release room</button><button class="btn-ghost sm" data-ls-src="${x.src}">Watch coverage</button>`}</div></div>`;
+  }
+  if (mv) html += `<div class="ls-card mover on"><span class="ls-dot"></span><div class="ls-txt"><p class="ls-head">Live now · ${esc(mv.name)}</p><p class="ls-name">${esc(mv.title)}</p></div><div class="ls-acts"><button class="btn-primary sm" data-ls-src="${mv.key}">Watch live</button></div></div>`;
+  el.innerHTML = html; el.hidden = false;
+}
+// Countdown text updates every second without re-rendering
+function lsTick() {
+  const now = Date.now();
+  document.querySelectorAll('[data-cd]').forEach(b => { const w = lsWhen(+b.dataset.cd, now); if (w) b.textContent = w; else { renderLiveSoon(); } });
+  if (LS.room) renderRoom(true);
+}
+function lsMarkCalendar() {
+  document.querySelectorAll('.ff-row[data-k]').forEach(row => {
+    if (row.querySelector('.ls-btn')) return;
+    const e = LS.cal.find(x => lsKey(x) === row.dataset.k); const x = lsFor(e);
+    if (!x) return;
+    const ch = lsChan(x.src), live = x.kind === 'stream' && ch.state === 'live';
+    const b = document.createElement('button'); b.type = 'button'; b.className = `ls-btn ${x.kind}${live ? ' on' : ''}`; b.dataset.ls = x.key;
+    b.innerHTML = x.kind === 'stream' ? `<span class="ls-dot"></span>${live ? 'Live now' : 'Livestream'}` : '<span class="ls-dot"></span>Release room';
+    b.title = x.kind === 'stream' ? `Watch on ${ch.name}` : 'Countdown, the actual number the moment it lands, and a live 1-minute chart';
+    const host = row.querySelector('.ff-e'); if (host) host.appendChild(b);
+  });
+}
+// ---- floating player: drag the bar to move it, drag the corner to resize, keeps playing while you browse ----
+function openPlayer(src, opt = {}) {
+  const ch = lsChan(src);
+  const vid = opt.vid || ch.vid;
+  const url = vid ? `https://www.youtube.com/embed/${vid}?autoplay=1&playsinline=1&rel=0` : `https://www.youtube.com/embed/live_stream?channel=${ch.channel}&autoplay=1&playsinline=1`;
+  let p = $('#lsPlayer');
+  if (!p) {
+    p = document.createElement('div'); p.id = 'lsPlayer'; p.className = 'lsp'; p.setAttribute('role', 'dialog'); p.setAttribute('aria-label', 'Livestream player');
+    p.innerHTML = `<div class="lsp-bar"><span class="ls-dot"></span><span class="lsp-t"></span><div class="lsp-b"><button type="button" data-sz="s" title="Small">S</button><button type="button" data-sz="m" title="Medium">M</button><button type="button" data-sz="l" title="Large">L</button><button type="button" class="lsp-min" title="Minimize" aria-label="Minimize">–</button><button type="button" class="lsp-x" title="Close" aria-label="Close">×</button></div></div><div class="lsp-v"><iframe allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe><div class="lsp-shield"></div></div><span class="lsp-grip" aria-hidden="true"></span>`;
+    document.body.appendChild(p);
+    const box = store.get('lsBox', null);
+    const place = (b) => { const w = Math.min(Math.max(b.w, 280), innerWidth - 16), h = Math.min(Math.max(b.h, 158), innerHeight - 16); p.style.width = w + 'px'; p.style.height = h + 'px'; p.style.left = Math.min(Math.max(8, b.x), innerWidth - w - 8) + 'px'; p.style.top = Math.min(Math.max(8, b.y), innerHeight - h - 8) + 'px'; };
+    const save = () => { const r = p.getBoundingClientRect(); store.set('lsBox', { x: r.left, y: r.top, w: r.width, h: r.height }); };
+    const def = () => { const w = Math.min(480, innerWidth - 24), h = Math.round(w * 9 / 16) + 36; return { w, h, x: innerWidth - w - 16, y: innerHeight - h - 16 }; };
+    place(box || def());
+    const drag = (el, fn) => el.addEventListener('pointerdown', ev => { if (ev.button !== 0 || ev.target.closest('button')) return; ev.preventDefault(); const r = p.getBoundingClientRect(), sx = ev.clientX, sy = ev.clientY; p.classList.add('moving'); el.setPointerCapture(ev.pointerId);
+      const mv = e2 => fn(r, e2.clientX - sx, e2.clientY - sy); const up = () => { p.classList.remove('moving'); el.removeEventListener('pointermove', mv); el.removeEventListener('pointerup', up); save(); }; el.addEventListener('pointermove', mv); el.addEventListener('pointerup', up); });
+    drag(p.querySelector('.lsp-bar'), (r, dx, dy) => place({ x: r.left + dx, y: r.top + dy, w: r.width, h: r.height }));
+    drag(p.querySelector('.lsp-grip'), (r, dx, dy) => place({ x: r.left, y: r.top, w: r.width + dx, h: r.height + dy }));
+    const SZ = { s: 320, m: 480, l: Math.min(860, innerWidth - 32) };
+    p.querySelectorAll('[data-sz]').forEach(b => b.onclick = () => { const r = p.getBoundingClientRect(), w = Math.min(SZ[b.dataset.sz], innerWidth - 16), h = Math.round(w * 9 / 16) + 36; p.classList.remove('min'); place({ x: r.right - w, y: r.bottom - h, w, h }); save(); });
+    p.querySelector('.lsp-min').onclick = () => p.classList.toggle('min');
+    p.querySelector('.lsp-x').onclick = () => { p.querySelector('iframe').src = 'about:blank'; p.remove(); };
+    addEventListener('resize', () => { if (document.body.contains(p)) { const r = p.getBoundingClientRect(); place({ x: r.left, y: r.top, w: r.width, h: r.height }); } });
+  }
+  p.classList.remove('min');
+  p.querySelector('.lsp-t').textContent = opt.title || (ch.title ? `${ch.name} · ${ch.title}` : ch.name);
+  p.classList.toggle('on', ch.state === 'live');
+  const f = p.querySelector('iframe'); if (f.src !== url) f.src = url;
+}
+// ---- release room: countdown, then actual vs forecast the moment it lands, with a live 1-minute chart ----
+function openRoom(x) {
+  LS.room = x;
+  let o = $('#lsRoom');
+  if (!o) { o = document.createElement('div'); o.id = 'lsRoom'; o.className = 'lsr'; o.setAttribute('role', 'dialog'); o.setAttribute('aria-modal', 'true'); document.body.appendChild(o); }
+  const sym = (myAssets().find(a => a.tv) || {}).tv || 'OANDA:NAS100USD';
+  o.innerHTML = `<div class="lsr-in"><div class="lsr-top"><p class="lsr-k"><span class="ls-dot"></span>Release room · ${esc(x.ev.country)} · High volatility</p><button type="button" class="lsr-x" aria-label="Close release room">×</button></div>
+    <h2 class="lsr-h">${esc(x.ev.name || x.ev.title)}</h2>
+    <div class="lsr-grid"><div class="lsr-main"><div id="lsrBody"></div><div class="lsr-acts"><button type="button" class="btn-ghost sm" data-ls-src="${x.src}">Watch market coverage</button></div></div>
+    <div class="lsr-chart"><div class="lsr-ch-h"><span>Live 1-minute chart</span><span class="faint small">${esc((myAssets().find(a => a.tv) || {}).name || 'Nasdaq 100')}</span></div><div id="lsrChart" class="lsr-tv"></div></div></div></div>`;
+  o.hidden = false; document.body.classList.add('room-open');
+  o.querySelector('.lsr-x').onclick = closeRoom;
+  o.onclick = ev => { if (ev.target === o) closeRoom(); };
+  try { tvWidget($('#lsrChart'), 'advanced-chart', { autosize: true, symbol: sym, interval: '1', timezone: 'America/New_York', theme: tvTheme(), style: '1', locale: 'en', hide_volume: true, allow_symbol_change: true, save_image: false, calendar: false, hide_side_toolbar: true }); } catch {}
+  renderRoom();
+  pollResults();
+}
+function closeRoom() { LS.room = null; const o = $('#lsRoom'); if (o) { o.hidden = true; o.innerHTML = ''; } document.body.classList.remove('room-open'); }
+function renderRoom(tickOnly) {
+  const x = LS.room, el = $('#lsrBody'); if (!x || !el) return;
+  const r = results.map[x.key] || null, now = Date.now(), t = x.ev.time;
+  const done = r && r.released && r.actual;
+  if (tickOnly && el.dataset.state === (done ? 'done' : 'wait') && !done) { const c = el.querySelector('.lsr-cd'); if (c) c.innerHTML = lsClock(t - now); return; }
+  if (tickOnly && done && el.dataset.state === 'done') return;
+  el.dataset.state = done ? 'done' : 'wait';
+  const fc = (r && r.forecast) || x.ev.forecast || '', pv = ((r && r.previous) || x.ev.previous || '').split('|')[0];
+  if (!done) {
+    el.innerHTML = `<div class="lsr-cd">${lsClock(t - now)}</div><p class="lsr-sub">${t > now ? `Out at ${fmtTime(t)} ${tzAbbr(t)}. The number appears here the moment it lands.` : 'Waiting for the number. It usually appears within seconds.'}</p>
+      <div class="lsr-nums"><div><small>Forecast</small><b>${esc(fc || '—')}</b></div><div><small>Previous</small><b>${esc(pv || '—')}</b></div><div class="lsr-act"><small>Actual</small><b class="faint">…</b></div></div>
+      <p class="lsr-note">The first minute after big data is often a fake-out. The site waits 10 minutes before its Live read leans again.</p>`;
+    return;
+  }
+  const v = relVerdict(r), rest = v.effs.slice(1);
+  el.innerHTML = `<p class="lsr-call ${v.cls}">${esc(v.head)}</p>
+    <div class="lsr-nums big"><div class="lsr-act"><small>Actual</small><b class="${r.ccyDir === 'good' ? 'up' : r.ccyDir === 'bad' ? 'down' : ''}">${esc(r.actual)}</b></div><div><small>Forecast</small><b>${esc(fc || '—')}</b></div><div><small>Previous</small><b>${esc(pv || '—')}</b></div></div>
+    <p class="lsr-text"><b>Why:</b> ${esc(v.why)}</p>
+    ${rest.length ? `<p class="lsr-k2">Your other markets</p><div class="rel-effs">${rest.map(e => `<div class="beff">${relCallPill(e)}<small>${esc(e.how === 'react' ? 'Following the first move after the release.' : e.reason || '')}</small></div>`).join('')}</div>` : ''}
+    ${(r.since || []).length ? `<p class="rel-since"><span>Since the release:</span> ${r.since.map(s => reactTxt(s).replace(' since</span>', '</span>')).join(' · ')}</p>` : ''}`;
+}
+function lsClock(ms) {
+  if (ms <= 0) return '<span class="lsr-now">Releasing…</span>';
+  const s = Math.ceil(ms / 1e3), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  return (h ? `${h}:${String(m).padStart(2, '0')}` : `${m}`) + `:${String(sec).padStart(2, '0')}`;
+}
+document.addEventListener('click', ev => {
+  const b = ev.target.closest('[data-ls],[data-ls-src]'); if (!b) return;
+  ev.preventDefault(); ev.stopPropagation();
+  if (b.dataset.lsSrc) { openPlayer(b.dataset.lsSrc); return; }
+  const e = LS.cal.find(x => lsKey(x) === b.dataset.ls); const x = lsFor(e); if (!x) return;
+  if (x.kind === 'stream') { const ch = lsChan(x.src); openPlayer(x.src, { title: `${x.ev.name || x.ev.title} · ${ch.name}` }); }
+  else openRoom(x);
+}, true);
+document.addEventListener('keydown', ev => { if (ev.key === 'Escape' && LS.room) closeRoom(); });
+function startLive() {
+  loadLive();
+  clearInterval(LS.tick); LS.tick = setInterval(lsTick, 1000);
+  setInterval(() => { if (document.visibilityState === 'visible') loadLive(); }, 60e3);
+}
+
 // ---------- start ----------
 let calendarCache = null;
 tick(); setInterval(tick, 30e3);
@@ -2549,6 +2758,8 @@ if (/^\/(privacy|terms)\/?$/.test(location.pathname)) { const k = location.pathn
 initMe(() => {
   started = true;
   orderTabs(); mountStrip(); route(); pollResults(); lastRefresh = Date.now(); mStatus();
+  startLive();
+  new MutationObserver(() => { if (LS.loaded && main.querySelector('.ff-row[data-k]:not([data-lsd])')) { main.querySelectorAll('.ff-row[data-k]').forEach(r => r.dataset.lsd = 1); lsMarkCalendar(); } }).observe(main, { childList: true, subtree: true });
   api('calendar', 10 * 60e3).then(d => { calendarCache = d.events; }).catch(() => {});
   startAlerts({ calendar: () => calendarCache, wire: () => api('wire?section=all', 60e3).then(d => d.items), levels: levelRows });
 });

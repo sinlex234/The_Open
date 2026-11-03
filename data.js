@@ -3171,6 +3171,38 @@ async function buildPulseScore() {
   return { ready: true, days: 14, total: reads.length, summary: sum, byConf, byMarket: by, reads: reads.slice(0, 30), updated: Date.now() };
 }
 
+
+// ---------- Live streams: which official YouTube channels are live or scheduled right now ----------
+// The site only embeds the official player; it never copies or re-broadcasts the stream.
+var STREAM_CH = {
+  fed: { id: "UCAzhpt9DmG6PnHXjmJTvRGQ", name: "Federal Reserve" },
+  wh: { id: "UCYxRlFDqcWM4y7FfpiAN3KQ", name: "The White House" },
+  bloomberg: { id: "UCIALMKvObZNtJ6AmdCLP7Lg", name: "Bloomberg Television" },
+  yahoo: { id: "UCEAZeUIeJs0IjQiqTCdVSIg", name: "Yahoo Finance" },
+  cspan: { id: "UCb--64Gl51jIEVE-GLDAVTg", name: "C-SPAN" },
+  cnbc: { id: "UCrp_UI8XtuYfpiqluWLD7Lw", name: "CNBC Television" },
+  boe: { id: "UCZ25rmSDSnjIWZxjd2-04Rg", name: "Bank of England" }
+};
+var unesc = (t) => String(t || "").replace(/&amp;/g, "&").replace(/&#39;|&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+async function channelLive(key) {
+  const c = STREAM_CH[key];
+  return memo("yt:" + key, 55e3, async () => {
+    const t = await getText(`https://www.youtube.com/channel/${c.id}/live`, { headers: { "Accept-Language": "en-US,en;q=0.9", Cookie: "CONSENT=YES+1" }, timeout: 6e3 });
+    const vid = (t.match(/<link rel="canonical" href="https:\/\/www\.youtube\.com\/watch\?v=([\w-]{11})"/) || [])[1] || null;
+    if (!vid) return { key, name: c.name, channel: c.id, state: "off" };
+    const title = unesc((t.match(/<meta name="title" content="([^"]*)"/) || t.match(/<meta property="og:title" content="([^"]*)"/) || [])[1] || "");
+    const start = +((t.match(/"scheduledStartTime":"(\d+)"/) || [])[1] || 0) * 1e3 || null;
+    const live = /"isLiveNow":true/.test(t) || (/"isLive":true/.test(t) && !/"isUpcoming":true/.test(t));
+    const upcoming = !live && (/"isUpcoming":true/.test(t) || (start && start > Date.now() - 6e4));
+    const embed = !/"playableInEmbed":false/.test(t);
+    return { key, name: c.name, channel: c.id, state: live ? "live" : upcoming ? "upcoming" : "off", vid: live || upcoming ? vid : null, title, start, embed };
+  });
+}
+async function buildStreams() {
+  const { res } = await settle(Object.fromEntries(Object.keys(STREAM_CH).map((k) => [k, channelLive(k)])));
+  const chans = Object.keys(STREAM_CH).map((k) => res[k] || { key: k, name: STREAM_CH[k].name, channel: STREAM_CH[k].id, state: "unknown" });
+  return { channels: chans, updated: Date.now() };
+}
 // ---------- Session bias record: the "Your day" call, logged once at 9:30 New York and graded at the 4 PM close ----------
 var DAY_LOG_MKTS = { futures: "NQ", crypto: "BTC", forex: "EURUSD" };
 async function logDayBias(now, reads) {
@@ -3420,6 +3452,7 @@ var ROUTES = {
   pulse: [() => buildPulse(), 50],
   pulsescore: [() => buildPulseScore(), 300],
   dayscore: [() => buildDayScore(), 300],
+  streams: [() => buildStreams(), 45],
   callaudit: [() => buildCallAudit(), 600]
 };
 async function handler(req, res) {
