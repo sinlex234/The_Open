@@ -2654,10 +2654,10 @@ function renderLiveSoon() {
     const ch = lsChan(x.src), until = lsWhen(x.ev.time, now), live = x.kind === 'stream' && ch.state === 'live';
     const head = x.kind === 'stream' ? (live ? 'Live now' : until ? `Livestream in <b data-cd="${x.ev.time}">${until}</b>` : 'Starting now') : (until ? `News drop in <b data-cd="${x.ev.time}">${until}</b>` : 'Just dropped');
     const far = x.ev.time - now > 60 * 60e3;
-    html += `<div class="ls-card ${x.kind}${live ? ' on' : ''}${far ? ' far' : ''}"><span class="ls-dot"></span><div class="ls-txt"><p class="ls-head">${head}</p><p class="ls-name">${esc((x.names || [x.ev.name || x.ev.title]).slice(0, 2).join(' + '))} <span class="faint">· ${fmtTime(x.ev.time)} ${tzAbbr(x.ev.time)} · ${esc(x.kind === 'stream' ? ch.name : 'High volatility')}</span></p></div>
+    html += `<div class="ls-card ${x.kind}${live ? ' on' : ''}${far ? ' far' : ''}"><span class="ls-dot"></span><div class="ls-txt"><p class="ls-head">${head}</p><p class="ls-name">${esc((x.names || [x.ev.name || x.ev.title]).slice(0, 2).join(' + '))} <span class="faint">· ${live ? esc(ch.title || 'On air') : `${fmtTime(x.ev.time)} ${tzAbbr(x.ev.time)}`} · ${esc(x.kind === 'stream' ? ch.name : 'High volatility')}</span></p></div>
       <div class="ls-acts">${x.kind === 'stream' ? `<button class="btn-primary sm" data-ls="${esc(x.key)}">${live ? 'Watch live' : 'Join early'}</button>` : `<button class="btn-primary sm" data-ls="${esc(x.key)}">${far ? 'Release room' : 'Open release room'}</button>${far ? '' : `<button class="btn-ghost sm" data-ls-src="${x.src}">Watch coverage</button>`}`}</div></div>`;
   }
-  if (mv) html += `<div class="ls-card mover on"><span class="ls-dot"></span><div class="ls-txt"><p class="ls-head">Live now · ${esc(mv.name)}</p><p class="ls-name">${esc(mv.title)}</p></div><div class="ls-acts"><button class="btn-primary sm" data-ls-src="${mv.key}">Watch live</button></div></div>`;
+  if (mv && !xs.some(x => x.kind === 'stream' && x.src === mv.key && lsChan(x.src).state === 'live')) html += `<div class="ls-card mover on"><span class="ls-dot"></span><div class="ls-txt"><p class="ls-head">Live now · ${esc(mv.name)}</p><p class="ls-name">${esc(mv.title)}</p></div><div class="ls-acts"><button class="btn-primary sm" data-ls-src="${mv.key}">Watch live</button></div></div>`;
   el.innerHTML = html; el.hidden = false;
 }
 // Countdown text updates every second without re-rendering
