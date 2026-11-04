@@ -3520,7 +3520,7 @@ async function buildRhyme(q) {
 // Rule-based: inside each topic, the words that keep coming back (China, election, Nvidia…) become a thread.
 var TH_GENERIC = new Set("rise rises rising risen fall falls falling fell drop drops dropped jump jumps jumped gain gains gained slip slips slipped climb climbs climbed slide slides slid surge surges surged rally rallies rallied record week weeks month months year years higher lower expected expects expectations says said report reports reported shares share price prices data news ahead first since could would like most than under back near time trading traders investors investor analyst analysts percent points index futures plans plan amid after before over still while just could should their them they been being where when which there these those against make makes made sees seen show shows shown hits hit high highs lows rate rates cuts cut biggest major latest fresh early late session today tomorrow yesterday monday tuesday wednesday thursday friday weekend global world markets market stocks stock company companies firm firms deal deals talks quarter third second fourth billion million trillion amid gets take takes taken keep keeps help helps calls call says".split(" "));
 var TH_SHORT = new Set(["fed", "ecb", "boj", "boe", "oil", "gdp", "cpi", "ppi", "pce", "sec", "etf", "opec", "gop", "iran", "gaza", "ai", "uk", "eu"]);
-var thWords = (t) => [...new Set(String(t || "").toLowerCase().replace(/[’']s\b/g, "").replace(/[’']/g, "").replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter((w) => (w.length > 3 || TH_SHORT.has(w)) && !STOP.has(w) && !TH_GENERIC.has(w) && !/^\d/.test(w)))];
+var thWords = (t) => [...new Set(String(t || "").replace(/^[A-Za-z][\w ]{1,20}:\s+/, "").replace(/\s+By (Reuters|Bloomberg|Investing\.com)$/i, "").toLowerCase().replace(/[’']s\b/g, "").replace(/[’']/g, "").replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter((w) => (w.length > 3 || TH_SHORT.has(w)) && !STOP.has(w) && !TH_GENERIC.has(w) && !/^\d/.test(w)))];
 var TH_MK = { futures: "NQ", stocks: "NQ", options: "NQ", crypto: "BTC", memes: "BTC", forex: "EURUSD" };
 async function threadPool() {
   const [hist, wire] = await Promise.all([rhymeHistory().catch(() => []), memo("w8all", 6e4, () => build8("all")).catch(() => null)]);
@@ -3535,29 +3535,28 @@ async function threadPool() {
   (wire && wire.items || []).forEach((h) => { const x = pool.find((p) => p.id === h.id); if (x) { x.link = h.link; x.live = true; } });
   return pool.sort((a, b) => b.t - a.t);
 }
+// Words too broad to name a story on their own (they're the topic, not the story)
+var TH_BROAD = new Set("oil crude energy earnings beat beats misses miss results profit revenue tech chip chips chipmaker semiconductor crypto bitcoin cryptocurrency inflation gold dollar yield yields treasury treasuries bond bonds economy economic growth fed rate rates hike hikes cutting policy central bank banks trump president government wall street nasdaq dow equity equities index indexes trade jobs labor unemployment consumer prices outlook forecast guidance demand supply sales spending investors value valuation financialjuice reuters bloomberg cnbc".split(" "));
 function findThreads(pool) {
-  const byTheme = {};
-  pool.forEach((h) => (byTheme[h.theme] = byTheme[h.theme] || []).push(h));
-  const threads = [];
-  Object.entries(byTheme).forEach(([theme, hs]) => {
-    if (hs.length < 3) return;
-    const freq = {};
-    hs.forEach((h) => h.words.forEach((w) => { freq[w] = (freq[w] || 0) + 1; }));
-    let keys = Object.entries(freq).filter(([, n]) => n >= 3).sort((a, b) => b[1] - a[1]).map(([w]) => w).slice(0, 12);
-    // merge words that nearly always appear together ("democrats" + "congress")
-    const groups = [];
-    keys.forEach((k) => {
-      const withK = hs.filter((h) => h.words.includes(k));
-      const g = groups.find((gr) => withK.filter((h) => h.words.includes(gr.keys[0])).length >= withK.length * 0.5);
-      if (g) g.keys.push(k); else groups.push({ keys: [k] });
-    });
-    const used = new Set();
-    groups.forEach((g) => {
-      const mem = hs.filter((h) => !used.has(h.id) && g.keys.some((k) => h.words.includes(k)));
-      if (mem.length < 3) return;
-      mem.forEach((h) => used.add(h.id));
-      threads.push({ theme, label: mem[0].label || theme, keys: g.keys.slice(0, 3), members: mem.sort((a, b) => b.t - a.t) });
-    });
+  const N = pool.length, freq = {};
+  pool.forEach((h) => h.words.forEach((w) => { freq[w] = (freq[w] || 0) + 1; }));
+  const keys = Object.entries(freq).filter(([w, n]) => n >= 3 && n <= Math.max(8, N * 0.2) && !TH_BROAD.has(w)).sort((x, y) => y[1] - x[1]).map(([w]) => w).slice(0, 40);
+  // words that nearly always come together are one story ("democrats" + "midterms")
+  const groups = [];
+  keys.forEach((k) => {
+    const withK = pool.filter((h) => h.words.includes(k));
+    const g = groups.find((gr) => withK.filter((h) => h.words.includes(gr.keys[0])).length >= withK.length * 0.5);
+    if (g) g.keys.push(k); else groups.push({ keys: [k] });
+  });
+  const used = new Set(), threads = [];
+  groups.forEach((g) => {
+    const mem = pool.filter((h) => !used.has(h.id) && g.keys.some((k) => h.words.includes(k)));
+    if (mem.length < 3) return;
+    mem.forEach((h) => used.add(h.id));
+    const tc = {}; mem.forEach((h) => { tc[h.theme] = (tc[h.theme] || 0) + 1; });
+    const theme = Object.entries(tc).sort((x, y) => y[1] - x[1])[0][0];
+    const label = (mem.find((h) => h.theme === theme) || {}).label || theme;
+    threads.push({ theme, label, keys: g.keys.slice(0, 3), members: mem.sort((x, y) => y.t - x.t) });
   });
   return threads;
 }
@@ -3579,7 +3578,7 @@ async function buildThreads() {
     const p0 = priceAt(bars, first.t), p1 = bars.length ? bars[bars.length - 1].c : null;
     const since = p0 != null && p1 != null ? { mk, change: c.pip ? Math.round((p1 - p0) / c.pip) : +(p1 - p0).toFixed(c.dp), unit: c.unit, pct: +((p1 - p0) / p0 * 100).toFixed(2) } : null;
     const title = th.keys.slice(0, 2).map(cap1).join(" and ");
-    const id = th.theme + "-" + th.keys[0];
+    const id = th.keys[0];
     return { id, title, kicker: th.label, theme: th.theme, mk, count: m.length, first: first.t, last: last.t, status, statusTxt, since, live: m.filter((h) => h.live).map((h) => h.id).slice(0, 40), score: recent24 * 2 + recent3h * 3 + m.length * 0.3 - (now - last.t) / 36e5 * 0.05,
       latest: { title: last.title, source: last.source, t: last.t }, start: { title: first.title, source: first.source, t: first.t } };
   }).filter((t) => now - t.last < 4 * 864e5).sort((a, b) => b.score - a.score).slice(0, 12);
@@ -3587,7 +3586,7 @@ async function buildThreads() {
 }
 async function buildThread(id) {
   const pool = await threadPool();
-  const th = findThreads(pool).find((t) => t.theme + "-" + t.keys[0] === id);
+  const th = findThreads(pool).find((t) => t.keys[0] === id);
   if (!th) return { id, missing: true };
   const themeDef = THEMES.find((x) => x.id === th.theme), mk = TH_MK[(themeDef && themeDef.markets || [])[0]] || "NQ";
   const m = th.members.slice(0, 40), first = m[m.length - 1];
