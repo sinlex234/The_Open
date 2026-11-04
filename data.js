@@ -3513,7 +3513,7 @@ async function buildRhyme(q) {
     out[mk] = { n, up, down, flat: n - up - down, median: med, unit: CALL_MKTS[mk].unit, read: dir > 0 ? "up" : dir < 0 ? "down" : null,
       examples: cands.slice(0, 5).map((r) => ({ headline: r.title, source: r.source, time: r.t, move: r.next[mk].move, way: r.next[mk].way })) };
   });
-  return { title, theme: tag.themeLabel || null, markets: out, history: hist.length, days: 60, updated: Date.now() };
+  return { title, theme: tag.themeLabel || null, markets: out, history: hist.length, graded: hist.filter((r) => Object.keys(r.next).length).length, themes: [...new Set(hist.map((r) => r.theme))].length, days: 60, updated: Date.now() };
 }
 // ---------- Session bias record: the "Your day" call, logged once at 9:30 New York and graded at the 4 PM close ----------
 var DAY_LOG_MKTS = { futures: "NQ", crypto: "BTC", forex: "EURUSD" };

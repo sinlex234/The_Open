@@ -576,14 +576,14 @@ function rhymeMove(v, unit) { const sign = v > 0 ? '+' : v < 0 ? '−' : ''; con
 function rhymeHTML(d) {
   const mk = Object.entries(d.markets || {});
   const blocks = mk.map(([k, x]) => {
-    if (x.n < 4) return `<div class="rh-m"><p class="rh-h">${esc(RH_NAME[k])}</p><p class="rh-thin">Only ${x.n} similar headline${x.n === 1 ? '' : 's'} so far. This fills in as the site saves more history.</p></div>`;
+    if (x.n < 4) return `<div class="rh-m"><p class="rh-h">${esc(RH_NAME[k])}</p><p class="rh-thin">${x.n ? `Only ${x.n} similar headline${x.n === 1 ? '' : 's'} so far` : 'No similar headlines saved yet'}. This fills in as the site saves more history.</p></div>`;
     const lean = x.flat * 2 >= x.n ? '' : x.down >= 3 && x.down >= x.up * 2 ? 'down' : x.up >= 3 && x.up >= x.down * 2 ? 'up' : '';
     const head = x.flat * 2 >= x.n ? `${RH_NAME[k]} barely moved ${x.flat} of ${x.n} times` : lean ? `${RH_NAME[k]} ${lean === 'down' ? 'fell' : 'rose'} ${lean === 'down' ? x.down : x.up} of ${x.n} times` : `${RH_NAME[k]} went both ways: up ${x.up}, down ${x.down} of ${x.n}`;
     return `<div class="rh-m"><p class="rh-h ${lean}">${esc(head)} <span>in the next hour</span></p>
       <p class="rh-sub">Typical move ${esc(rhymeMove(x.median, x.unit))}${x.flat ? ` · ${x.flat} barely moved` : ''}</p>
       <ul class="rh-list">${x.examples.map(e => `<li><span class="rh-d">${new Date(e.time).toLocaleDateString('en-US', { timeZone: TZ, month: 'short', day: 'numeric' })}</span><span class="rh-t">${esc(e.headline)} <small>${esc(e.source || '')}</small></span><span class="rh-v ${e.way === 'up' ? 'up' : e.way === 'down' ? 'down' : ''}">${esc(rhymeMove(e.move, x.unit))}</span></li>`).join('')}</ul></div>`;
   }).join('');
-  return `<p class="hist-cap">This rhymes with…</p>${blocks}<p class="rh-foot">Past headlines on the same topic${d.theme ? ` (${esc(d.theme.toLowerCase())})` : ''} read the same way, from the last ${d.days} days. What happened before, not a promise. Small samples can mislead.</p>`;
+  return `<p class="hist-cap">This rhymes with…</p>${blocks}<p class="rh-foot">Past headlines on the same topic${d.theme ? ` (${esc(d.theme)})` : ''} read the same way, from the last ${d.days} days. What happened before, not a promise. Small samples can mislead.</p>`;
 }
 document.addEventListener('click', ev => {
   const b = ev.target.closest('.rh-x'); if (!b) return;
