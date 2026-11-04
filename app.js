@@ -1934,11 +1934,85 @@ const ymd = ds => new Date(ds + 'T12:00:00Z');
 const dayFmt = (ds, o) => ymd(ds).toLocaleDateString('en-US', { timeZone: 'UTC', ...o });
 const IMP_RANK = { High: 3, Medium: 2, Low: 1, Holiday: 0 };
 
+// ---------- history chart: the last 12 official readings, this month's forecast, and last month's revision ----------
+const HIST_RE = /CPI [my]\/[my]|PPI m\/m|Retail Sales m\/m|Non-Farm Employment Change|^Unemployment Rate|Average Hourly Earnings m\/m|Unemployment Claims|GDP q\/q|PCE Price Index|JOLTS Job Openings/i;
+const histSlot = (e, r) => e.country === 'USD' && HIST_RE.test(e.title) ? `<div class="hist" data-hist="${esc(e.title)}" data-fc="${esc(e.forecast || (r && r.forecast) || '')}" data-act="${esc(r && r.actual || '')}"></div>` : '';
+function revisionTxt(e, r) {
+  if (!r || !r.actual || !e.previous || !r.previous) return '';
+  const a = String(e.previous).split('|')[0].trim(), b = String(r.previous).trim();
+  const na = parseFloat(a.replace(/[^\d.-]/g, '')), nb = parseFloat(b.replace(/[^\d.-]/g, ''));
+  if (isNaN(na) || isNaN(nb) || na === nb) return '';
+  return `Last month was revised ${nb > na ? 'up' : 'down'} from ${a} to ${b}.`;
+}
+function fillHist(root = document) {
+  root.querySelectorAll('.hist[data-hist]:not([data-done])').forEach(el => {
+    if (!el.parentElement || !el.parentElement.offsetParent) return; // only when it's on screen (an open row or the release room)
+    el.dataset.done = 1; el.innerHTML = '<p class="hist-cap faint">Loading the last 12 releases…</p>';
+    api('hist?k=' + encodeURIComponent(el.dataset.hist), 3 * 3600e3).then(d => { el.innerHTML = histHTML(d, el.dataset.fc, el.dataset.act); }).catch(() => { el.innerHTML = ''; });
+  });
+}
+function histHTML(d, fc, act) {
+  const pts = (d.points || []).slice(-12);
+  if (pts.length < 3) return '';
+  const num = v => { const n = parseFloat(String(v || '').replace(/[^\d.-]/g, '')); return isNaN(n) ? null : n; };
+  const f = num(fc), a = num(act);
+  // If today's number is already out and FRED doesn't have it yet, draw it as the newest bar
+  const bars = pts.map(p => ({ v: p.v, t: p.txt, lab: histLab(p.d, d.kind, d.id) }));
+  if (a != null && Math.abs(bars[bars.length - 1].v - a) > 1e-9 && bars.length) bars.push({ v: a, t: act, lab: 'Now', now: true });
+  const all = bars.map(b => b.v).concat(f != null ? [f] : []);
+  const lo = Math.min(0, ...all), hi = Math.max(0, ...all), span = (hi - lo) || 1;
+  const n = bars.length + (f != null ? 1 : 0), W = 300, H = 96, top = 14, bot = 18, gap = 3;
+  const bw = (W - gap * (n - 1)) / n, y = v => top + (hi - v) / span * (H - top - bot), y0 = y(0);
+  let svg = '';
+  bars.forEach((b, i) => {
+    const x = i * (bw + gap), yv = y(b.v), last = i === bars.length - 1;
+    svg += `<rect x="${x.toFixed(1)}" y="${Math.min(yv, y0).toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(1, Math.abs(y0 - yv)).toFixed(1)}" rx="1.5" class="${last ? 'hb-last' : 'hb'}${b.v < 0 ? ' neg' : ''}"><title>${esc(b.lab)}: ${esc(b.t)}</title></rect>`;
+  });
+  if (f != null) {
+    const x = bars.length * (bw + gap), yv = y(f);
+    svg += `<rect x="${(x + 0.5).toFixed(1)}" y="${Math.min(yv, y0).toFixed(1)}" width="${(bw - 1).toFixed(1)}" height="${Math.max(1, Math.abs(y0 - yv)).toFixed(1)}" rx="1.5" class="hb-fc"><title>Forecast: ${esc(fc)}</title></rect>`;
+  }
+  svg += `<line x1="0" x2="${W}" y1="${y0.toFixed(1)}" y2="${y0.toFixed(1)}" class="h0"/>`;
+  const lb = bars[bars.length - 1], lx = (bars.length - 1) * (bw + gap) + bw / 2, vy = v => (v >= 0 ? y(v) - 3 : y(v) + 9).toFixed(1);
+  svg += `<text x="0" y="${H - 4}" class="hl">${esc(bars[0].lab)}</text>`;
+  svg += `<text x="${lx.toFixed(1)}" y="${vy(lb.v)}" text-anchor="middle" class="hv">${esc(lb.t)}</text>`;
+  if (f != null) { const fx = bars.length * (bw + gap) + bw / 2; svg += `<text x="${fx.toFixed(1)}" y="${vy(f)}" text-anchor="middle" class="hv fc">${esc(fc)}</text><text x="${W}" y="${H - 4}" text-anchor="end" class="hl">${esc(lb.lab)} · Forecast</text>`; }
+  else svg += `<text x="${W}" y="${H - 4}" text-anchor="end" class="hl">${esc(lb.lab)}</text>`;
+  const vals = pts.map(p => p.v), avg = vals.reduce((x, y) => x + y, 0) / vals.length, last = pts[pts.length - 1];
+  const unit = /%$/.test(last.txt) ? '%' : /K$/.test(last.txt) ? 'K' : /M$/.test(last.txt) ? 'M' : '';
+  const fmtV = v => (d.kind === 'jobs' || d.kind === 'claims' ? Math.round(v) : d.kind === 'jolts' ? v.toFixed(2) : v.toFixed(1)) + unit;
+  let line = `Average over the last ${pts.length}: ${fmtV(avg)}. Latest official: ${last.txt} (${histLab(last.d, d.kind, d.id)}).`;
+  if (f != null) line += ` The forecast of ${fc} is ${Math.abs(f - avg) < Math.abs(avg) * 0.15 + 0.05 ? 'close to' : f > avg ? 'above' : 'below'} the recent average.`;
+  return `<p class="hist-cap">Last ${pts.length} releases${f != null ? ' and this one’s forecast' : ''}</p><svg viewBox="0 0 ${W} ${H}" class="hist-svg" role="img" aria-label="Bar chart of the last ${pts.length} releases">${svg}</svg><p class="hist-note">${esc(line)} <a href="${esc(d.link)}" target="_blank" rel="noopener">Official data: FRED</a></p>`;
+}
+function histLab(dt, kind, id) {
+  const d = new Date(dt + 'T12:00:00Z');
+  if (kind === 'claims') return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+  if (id === 'A191RL1Q225SBEA') return `Q${Math.floor(d.getUTCMonth() / 3) + 1} ’${String(d.getUTCFullYear()).slice(2)}`;
+  return d.toLocaleDateString('en-US', { month: 'short', year: '2-digit', timeZone: 'UTC' }).replace(' ', ' ’');
+}
+document.addEventListener('toggle', ev => { if (ev.target.matches && ev.target.matches('details.ff-row') && ev.target.open) fillHist(ev.target); }, true);
+// Before the number: if it beats or misses, which way your markets likely go and why
+function scenHTML(e, r) {
+  const sc = e.scen; if (!sc || (r && r.actual)) return '';
+  const num = /\d/.test(e.forecast || '');
+  const speech = /speaks|testif|press conference|minutes|statement/i.test(e.title);
+  const row = (d) => {
+    const x = sc[d], effs = relEffects({ effects: x.effects }).map(f => relResolve(f, { since: [] }));
+    const main = effs[0], rest = effs.slice(1).filter((f, i, a) => a.findIndex(g => g.label === f.label) === i);
+    const lab = main ? (main.market === 'futures' ? 'NQ & ES' : main.label) : '';
+    const call = !main ? '' : main.dir === 'up' ? `${lab} ↑ likely up` : main.dir === 'down' ? `${lab} ↓ likely down` : `${lab}: either way, watch the first move`;
+    const cond = speech || !num ? x.label : `${d === 'up' ? 'Above' : 'Below'} ${e.forecast}: ${x.label.toLowerCase()}`;
+    return `<div class="scen-r"><p class="scen-if">If ${esc(cond.charAt(0).toLowerCase() + cond.slice(1))}</p>${call ? `<p class="scen-call ${main.dir === 'up' || main.dir === 'down' ? main.dir : ''}">${esc(call)}</p>` : ''}<p class="scen-why">${esc(x.text)}${main && main.reason ? ' ' + esc(main.reason) : ''}</p>${rest.length ? `<div class="scen-more">${rest.map(f => `<span class="pill ${f.dir === 'up' ? 'up' : f.dir === 'down' ? 'down' : ''}"><b>${esc(f.label)}</b> ${f.dir === 'up' ? '↑' : f.dir === 'down' ? '↓' : '↕'}</span>`).join('')}</div>` : ''}</div>`;
+  };
+  return `<div class="scen"><p class="hist-cap">How this could move your markets</p><div class="scen-g">${row('up')}${row('down')}</div>${num ? '<p class="scen-note faint">Close to the forecast usually means a small move that fades. The bigger the surprise, the bigger the move.</p>' : ''}</div>`;
+}
 function ffRow(e, act, today, now, nextT, showT) {
   const imp = impOf(e), r = act[`${e.country}|${e.title}|${e.time}`];
   const past = e.time < now - 60e3 && !e.allDay, isNext = e.time === nextT;
   const fy = forYouEvent(e);
-  const body = [e.what ? `<p>${esc(e.what)}</p>` : '', e.why ? `<p>${esc(e.why)}</p>` : '', e.note ? `<p class="note">${esc(e.note)}</p>` : '', r && r.text ? `<p><b>${esc(r.label || '')}.</b> ${esc(r.text)}</p>` : '', fy ? `<p class="ff-fy-b"><b>For you:</b> ${esc(fy)}</p>` : ''].join('');
+  const rev = revisionTxt(e, r);
+  const body = [e.what ? `<p>${esc(e.what)}</p>` : '', e.why ? `<p>${esc(e.why)}</p>` : '', e.note ? `<p class="note">${esc(e.note)}</p>` : '', r && r.text ? `<p><b>${esc(r.label || '')}.</b> ${esc(r.text)}</p>` : '', rev ? `<p class="ff-rev">${esc(rev)}</p>` : '', fy ? `<p class="ff-fy-b"><b>For you:</b> ${esc(fy)}</p>` : '', scenHTML(e, r), histSlot(e, r)].join('');
   return `<details class="ff-row${past ? ' past' : ''}${isNext ? ' next' : ''}${imp === 'High' ? ' hi' : ''}" data-k="${esc(`${e.country}|${e.title}|${e.time}`)}"><summary>
       <span class="ff-t">${showT ? (e.allDay ? 'All day' : fmtTime(e.time).replace(' ', '').toLowerCase()) : ''}</span>
       <span class="ff-c">${esc(e.country)}</span>
@@ -2737,7 +2811,9 @@ function renderRoom(tickOnly) {
   if (!done) {
     el.innerHTML = `<div class="lsr-cd">${lsClock(t - now)}</div><p class="lsr-sub">${t > now ? `Out at ${fmtTime(t)} ${tzAbbr(t)}. The number appears here the moment it lands.` : 'Waiting for the number. It usually appears within seconds.'}</p>
       <div class="lsr-nums"><div><small>Forecast</small><b>${esc(fc || '—')}</b></div><div><small>Previous</small><b>${esc(pv || '—')}</b></div><div class="lsr-act"><small>Actual</small><b class="faint">…</b></div></div>
-      <p class="lsr-note">The first minute after big data is often a fake-out. The site waits 10 minutes before its Live read leans again.</p>`;
+      ${scenHTML(x.ev, r)}
+      <p class="lsr-note">The first minute after big data is often a fake-out. The site waits 10 minutes before its Live read leans again.</p>${histSlot(x.ev, r)}`;
+    fillHist(el);
     return;
   }
   const v = relVerdict(r), rest = v.effs.slice(1);
@@ -2745,7 +2821,9 @@ function renderRoom(tickOnly) {
     <div class="lsr-nums big"><div class="lsr-act"><small>Actual</small><b class="${r.ccyDir === 'good' ? 'up' : r.ccyDir === 'bad' ? 'down' : ''}">${esc(r.actual)}</b></div><div><small>Forecast</small><b>${esc(fc || '—')}</b></div><div><small>Previous</small><b>${esc(pv || '—')}</b></div></div>
     <p class="lsr-text"><b>Why:</b> ${esc(v.why)}</p>
     ${rest.length ? `<p class="lsr-k2">Your other markets</p><div class="rel-effs">${rest.map(e => `<div class="beff">${relCallPill(e)}<small>${esc(e.how === 'react' ? 'Following the first move after the release.' : e.reason || '')}</small></div>`).join('')}</div>` : ''}
-    ${(r.since || []).length ? `<p class="rel-since"><span>Since the release:</span> ${r.since.map(s => reactTxt(s).replace(' since</span>', '</span>')).join(' · ')}</p>` : ''}`;
+    ${(r.since || []).length ? `<p class="rel-since"><span>Since the release:</span> ${r.since.map(s => reactTxt(s).replace(' since</span>', '</span>')).join(' · ')}</p>` : ''}
+    ${revisionTxt(x.ev, r) ? `<p class="ff-rev">${esc(revisionTxt(x.ev, r))}</p>` : ''}${r.src === 'FRED' ? '<p class="faint small">Number from FRED (backup source).</p>' : ''}${histSlot(x.ev, r)}`;
+  fillHist(el);
 }
 function lsClock(ms) {
   if (ms <= 0) return '<span class="lsr-now">Releasing…</span>';

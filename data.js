@@ -371,6 +371,12 @@ async function ffFeeds() {
 var OFFICIAL_DATES = {
   cpi: ["2026-11-10", "2026-12-10", "2027-01-13", "2027-02-11", "2027-03-10", "2027-04-13", "2027-05-12", "2027-06-10", "2027-07-14", "2027-08-11", "2027-09-14", "2027-10-14", "2027-11-10", "2027-12-10"],
   jobs: ["2026-11-06", "2026-12-04", "2027-01-08", "2027-02-05", "2027-03-05", "2027-04-02", "2027-05-07", "2027-06-04", "2027-07-02", "2027-08-06", "2027-09-03", "2027-10-08", "2027-11-05", "2027-12-03"],
+  ppi: ["2026-11-13", "2026-12-15", "2027-01-14", "2027-02-12", "2027-03-12", "2027-04-14", "2027-05-13", "2027-06-11", "2027-07-15", "2027-08-10", "2027-09-10", "2027-10-15", "2027-11-12", "2027-12-15"],
+  retail: ["2026-11-17", "2026-12-16"],
+  // BEA: GDP estimate kind per date (a = advance, p = second, f = third) and Personal Income and Outlays (PCE) on the same days
+  gdp: [["2026-11-25", "p"], ["2026-12-23", "f"], ["2027-01-28", "a"], ["2027-02-25", "p"], ["2027-03-31", "f"], ["2027-04-29", "a"], ["2027-05-27", "p"], ["2027-06-25", "f"], ["2027-07-29", "a"], ["2027-08-25", "p"], ["2027-09-30", "f"], ["2027-10-28", "a"], ["2027-11-24", "p"], ["2027-12-22", "f"]],
+  // Weekly jobless claims are Thursdays; Thanksgiving week moves to Wednesday
+  claimsMoved: { "2026-11-26": "2026-11-25", "2027-11-25": "2027-11-24" },
   fomc: ["2026-12-09", "2027-01-27", "2027-03-17", "2027-04-28", "2027-06-09", "2027-07-28", "2027-09-15", "2027-10-27", "2027-12-08"]
 };
 function nyWall(date, hh, mm) {
@@ -381,11 +387,28 @@ function nyWall(date, hh, mm) {
   return guess + (guess - asNy);
 }
 function officialDates() {
-  const out = [], add = (d, h, m, title) => out.push({ title, country: "USD", impact: "High", time: nyWall(d, h, m), date: d });
+  const out = [], add = (d, h, m, title, impact = "High") => out.push({ title, country: "USD", impact, time: nyWall(d, h, m), date: d });
   OFFICIAL_DATES.cpi.forEach((d) => { add(d, 8, 30, "CPI m/m"); add(d, 8, 30, "Core CPI m/m"); add(d, 8, 30, "CPI y/y"); });
   OFFICIAL_DATES.jobs.forEach((d) => { add(d, 8, 30, "Non-Farm Employment Change"); add(d, 8, 30, "Unemployment Rate"); add(d, 8, 30, "Average Hourly Earnings m/m"); });
+  OFFICIAL_DATES.ppi.forEach((d) => { add(d, 8, 30, "PPI m/m", "High"); add(d, 8, 30, "Core PPI m/m", "High"); });
+  OFFICIAL_DATES.retail.forEach((d) => { add(d, 8, 30, "Retail Sales m/m", "High"); add(d, 8, 30, "Core Retail Sales m/m", "High"); });
+  OFFICIAL_DATES.gdp.forEach(([d, k]) => { add(d, 8, 30, k === "a" ? "Advance GDP q/q" : k === "p" ? "Prelim GDP q/q" : "Final GDP q/q", k === "a" ? "High" : "Medium"); add(d, 8, 30, "Core PCE Price Index m/m", "High"); });
+  // Claims: only the next three weeks, so the calendar doesn't fill up with weekly rows
+  for (let i = 0; i < 4; i++) {
+    const t = new Date(Date.now() + i * 7 * 864e5), dow = t.getUTCDay(), thu = new Date(t.getTime() + ((4 - dow + 7) % 7) * 864e5).toISOString().slice(0, 10);
+    add(OFFICIAL_DATES.claimsMoved[thu] || thu, 8, 30, "Unemployment Claims", "Medium");
+  }
   OFFICIAL_DATES.fomc.forEach((d) => { add(d, 14, 0, "Federal Funds Rate"); add(d, 14, 0, "FOMC Statement"); add(d, 14, 30, "FOMC Press Conference"); });
   return out;
+}
+// Before a release: what a beat or a miss would likely do to each market, so the calendar can say up or down
+function scenFor(e) {
+  if (!["High", "Medium"].includes(e.impact) || e.allDay || /election|holiday|auction/i.test(e.title)) return {};
+  const sc = SCEN.find((x) => x.re.test(e.title) || x.re.test(e.name || ""));
+  if (!sc && (e.impact !== "High" || /speaks|testif|minutes|meeting|conference/i.test(e.title))) return {};
+  const fill = (t) => t.replace(/CCY/g, CCY_NAME[e.country] || e.country);
+  const side = (d) => ({ label: sc ? sc[d][0] : d === "up" ? "Stronger than forecast" : "Weaker than forecast", text: sc ? fill(sc[d][1]) : fill(d === "up" ? "CCY would likely strengthen." : "CCY would likely weaken."), effects: releaseEffects(sc, e.country, d) });
+  return { scen: { up: side("up"), down: side("down") } };
 }
 async function build() {
   let res = {}, errors = {};
@@ -402,11 +425,11 @@ async function build() {
     if (seen.has(k)) return false;
     seen.add(k);
     return true;
-  }).map((e) => ({ title: e.title, country: e.country, impact: e.impact, forecast: decode(e.forecast || "").replace(/\u00a0/g, " ").trim(), previous: decode(e.previous || "").replace(/\u00a0/g, " ").trim(), time: e.time, allDay: /T00:00:00/.test(e.date) && /holiday|meeting|summit|election/i.test(e.title), ...explainEvent(e) })).sort((a, b) => a.time - b.time);
+  }).map((e) => ({ title: e.title, country: e.country, impact: e.impact, forecast: decode(e.forecast || "").replace(/\u00a0/g, " ").trim(), previous: decode(e.previous || "").replace(/\u00a0/g, " ").trim(), time: e.time, allDay: /T00:00:00/.test(e.date) && /holiday|meeting|summit|election/i.test(e.title), ...explainEvent(e) })).map((e) => ({ ...e, ...scenFor(e) })).sort((a, b) => a.time - b.time);
   // The feed only covers this week. Add the biggest US dates from the official BLS and Fed schedules so they show further out.
   const lastFeed = events.length ? Math.max(...events.map((e) => e.time)) : Date.now();
   const extra = officialDates().filter((e) => e.time > lastFeed && e.time - Date.now() < 70 * 864e5 && !events.some((x) => x.country === "USD" && x.title === e.title && Math.abs(x.time - e.time) < 864e5));
-  extra.forEach((e) => events.push({ ...e, forecast: "", previous: "", allDay: false, official: true, ...explainEvent(e) }));
+  extra.forEach((e) => { const x = { ...e, forecast: "", previous: "", allDay: false, official: true, ...explainEvent(e) }; events.push({ ...x, ...scenFor(x) }); });
   events.sort((a, b) => a.time - b.time);
   if (errors.nextWeek && /404/.test(errors.nextWeek)) delete errors.nextWeek;
   return { events, errors, updated: Date.now() };
@@ -2863,6 +2886,62 @@ function releaseEffects(sc, ccy, d) {
     { market: "crypto", label: "Crypto", dir: "mixed", reason: "Crypto usually follows the first move in stocks on data like this." }
   ];
 }
+
+// ---------- official history (FRED, free, no key): the last 12 readings for each big US release ----------
+// Turns the raw series into the same number the calendar shows (m/m %, y/y %, jobs added, rate, claims).
+var FRED_MAP = [
+  [/^Core CPI m\/m/i, "CPILFESL", "mm"], [/^CPI m\/m/i, "CPIAUCSL", "mm"],
+  [/^Core CPI y\/y/i, "CPILFESL", "yy"], [/^CPI y\/y/i, "CPIAUCSL", "yy"],
+  [/^Core PPI m\/m/i, "PPIFES", "mm"], [/^PPI m\/m/i, "PPIFIS", "mm"],
+  [/^Core Retail Sales m\/m/i, "RSFSXMV", "mm"], [/^Retail Sales m\/m/i, "RSAFS", "mm"],
+  [/Non-Farm Employment Change/i, "PAYEMS", "jobs"], [/^Unemployment Rate/i, "UNRATE", "rate"],
+  [/Average Hourly Earnings m\/m/i, "CES0500000003", "mm"], [/Unemployment Claims/i, "ICSA", "claims"],
+  [/GDP q\/q/i, "A191RL1Q225SBEA", "rate", "q"], [/^Core PCE Price Index m\/m/i, "PCEPILFE", "mm"],
+  [/^PCE Price Index m\/m/i, "PCEPI", "mm"], [/^Core PCE Price Index y\/y/i, "PCEPILFE", "yy"],
+  [/JOLTS Job Openings/i, "JTSJOL", "jolts"]
+];
+var fredSpec = (title) => { const m = FRED_MAP.find(([re]) => re.test(title || "")); return m ? { id: m[1], kind: m[2], q: m[3] === "q" } : null; };
+async function fredRaw(id, fresh) {
+  const t = await memo("fred:" + id, fresh ? 45e3 : 3 * 3600e3, () => getText(`https://fred.stlouisfed.org/graph/fredgraph.csv?id=${id}&cosd=${new Date(Date.now() - 900 * 864e5).toISOString().slice(0, 10)}`, { timeout: 8e3 }));
+  return t.trim().split("\n").slice(1).map((l) => { const [d, v] = l.split(","); return { d, v: parseFloat(v) }; }).filter((r) => r.d && !isNaN(r.v));
+}
+function fredSeries(rows, kind) {
+  const out = [];
+  rows.forEach((r, i) => {
+    const p = rows[i - 1], y = rows[i - 12];
+    let v = null, txt = "";
+    if (kind === "mm" && p) { v = +((r.v / p.v - 1) * 100).toFixed(1); txt = v.toFixed(1) + "%"; }
+    else if (kind === "yy" && y) { v = +((r.v / y.v - 1) * 100).toFixed(1); txt = v.toFixed(1) + "%"; }
+    else if (kind === "jobs" && p) { v = Math.round(r.v - p.v); txt = v + "K"; }
+    else if (kind === "rate") { v = +r.v.toFixed(1); txt = v.toFixed(1) + "%"; }
+    else if (kind === "claims") { v = Math.round(r.v / 1e3); txt = v + "K"; }
+    else if (kind === "jolts") { v = +(r.v / 1e3).toFixed(2); txt = v.toFixed(2) + "M"; }
+    if (v != null) out.push({ d: r.d, v, txt });
+  });
+  return out;
+}
+async function buildHist(title) {
+  const sp = fredSpec(title);
+  if (!sp) return { title, points: [], source: null };
+  const pts = fredSeries(await fredRaw(sp.id), sp.kind).slice(-12);
+  return { title, id: sp.id, kind: sp.kind, points: pts, source: "FRED, Federal Reserve Bank of St. Louis", link: `https://fred.stlouisfed.org/series/${sp.id}`, updated: Date.now() };
+}
+// Backup for actual numbers: if Nasdaq hasn't posted the number a couple of minutes after the release,
+// take it from FRED once FRED has the new month (or week). Not used for GDP or JOLTS, which get revised in place.
+function fredRefDate(title, releaseT) {
+  const d = new Date(releaseT), sp = fredSpec(title);
+  if (!sp || sp.q || sp.kind === "jolts") return null;
+  if (sp.kind === "claims") { const s = new Date(d.getTime() - ((d.getUTCDay() + 1) % 7 || 7) * 864e5); return s.toISOString().slice(0, 10); }
+  const m = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - 1, 1));
+  return m.toISOString().slice(0, 10);
+}
+async function fredBackup(title, releaseT) {
+  const sp = fredSpec(title), ref = fredRefDate(title, releaseT);
+  if (!sp || !ref) return null;
+  const pts = fredSeries(await fredRaw(sp.id, true), sp.kind);
+  const hit = pts.find((p) => p.d === ref);
+  return hit ? hit.txt : null;
+}
 var RES_REACT = ["NQ", "EURUSD", "GOLD", "BTC"];
 async function build16(date) {
   const now = Date.now(), today0 = ny(now).date;
@@ -2882,7 +2961,7 @@ async function build16(date) {
     const c = await settle(Object.fromEntries(RES_REACT.map((k) => [k, yahooChart(REACT[k].sym, { interval: "1m", range: "1d" })])));
     charts = c.res;
   }
-  const out = evs.map((e) => {
+  const mk = (e, over) => {
     const em = ny(e.time).mins;
     const cands = rows.filter((r) => r.ccy === e.country && r.mins != null && Math.abs(r.mins - em) <= 3);
     // Same name twice (e.g. "CPI" for both m/m and y/y): prefer the one whose forecast matches ours
@@ -2896,7 +2975,8 @@ async function build16(date) {
     };
     let best = null, bs = 0, bfit = -1;
     cands.forEach((r) => { const sc2 = evScore(e.title, r.name); if (sc2 < 0.25) return; const ft = fit(r); if (sc2 + ft > bs + bfit) { bs = sc2; bfit = ft; best = r; } });
-    const actual = best && best.actual ? best.actual : "";
+    const actual = best && best.actual ? best.actual : over || "";
+    const src = best && best.actual ? "Nasdaq" : over ? "FRED" : null;
     const forecast = (best && best.consensus) || e.forecast || "";
     const a = numOf(actual), f = numOf(forecast);
     const released = !!actual && e.time <= now + 6e4;
@@ -2912,9 +2992,16 @@ async function build16(date) {
     return {
       key: `${e.country}|${e.title}|${e.time}`, title: e.title, name: e.name, country: e.country, impact: e.impact, time: e.time,
       forecast, previous: (best && best.previous) || e.previous || "", actual, released, dir: d, ccyDir, label: lab,
-      text: text.replace(/CCY/g, CCY_NAME[e.country] || e.country), effects: released && e.impact !== "Low" ? releaseEffects(sc, e.country, d) : [], since
+      text: text.replace(/CCY/g, CCY_NAME[e.country] || e.country), effects: released && e.impact !== "Low" ? releaseEffects(sc, e.country, d) : [], since, src
     };
-  });
+  };
+  const out = evs.map((e) => mk(e));
+  // Backup: a number Nasdaq hasn't posted 90 seconds after the release comes from FRED once it's there
+  const miss = out.map((x, i) => [x, i]).filter(([x]) => isToday && !x.actual && x.country === "USD" && x.impact !== "Low" && now - x.time > 90e3 && now - x.time < 8 * 3600e3 && fredSpec(x.title));
+  if (miss.length) {
+    const vals = await Promise.all(miss.map(([x]) => fredBackup(x.title, x.time).catch(() => null)));
+    miss.forEach(([, i], j) => { if (vals[j]) out[i] = mk(evs[i], vals[j]); });
+  }
   return { events: out, matched: out.filter((x) => x.actual).length, updated: now };
 }
 
@@ -3470,6 +3557,7 @@ var ROUTES = {
   world: [() => build13(), 120],
   ticks: [(q) => build15(q), 2],
   results: [(q) => build16(q.date), 5],
+  hist: [(q) => buildHist(String(q.k || "").slice(0, 80)), 3600],
   memedesk: [(q) => build14(q), hasAI() ? 600 : 180],
   explain: [(q) => build12(q), 86400],
   calls: [() => buildCalls(), 300],
