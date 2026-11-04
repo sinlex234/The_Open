@@ -3520,7 +3520,9 @@ async function buildRhyme(q) {
 // Rule-based: inside each topic, the words that keep coming back (China, election, Nvidia…) become a thread.
 var TH_GENERIC = new Set("rise rises rising risen fall falls falling fell drop drops dropped jump jumps jumped gain gains gained slip slips slipped climb climbs climbed slide slides slid surge surges surged rally rallies rallied record week weeks month months year years higher lower expected expects expectations says said report reports reported shares share price prices data news ahead first since could would like most than under back near time trading traders investors investor analyst analysts percent points index futures plans plan amid after before over still while just could should their them they been being where when which there these those against make makes made sees seen show shows shown hits hit high highs lows rate rates cuts cut biggest major latest fresh early late session today tomorrow yesterday monday tuesday wednesday thursday friday weekend global world markets market stocks stock company companies firm firms deal deals talks quarter third second fourth billion million trillion amid gets take takes taken keep keeps help helps calls call says".split(" "));
 var TH_SHORT = new Set(["fed", "ecb", "boj", "boe", "oil", "gdp", "cpi", "ppi", "pce", "sec", "etf", "opec", "gop", "iran", "gaza", "ai", "uk", "eu"]);
-var thWords = (t) => [...new Set(String(t || "").replace(/^[A-Za-z][\w ]{1,20}:\s+/, "").replace(/\s+By (Reuters|Bloomberg|Investing\.com)$/i, "").toLowerCase().replace(/[’']s\b/g, "").replace(/[’']/g, "").replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter((w) => (w.length > 3 || TH_SHORT.has(w)) && !STOP.has(w) && !TH_GENERIC.has(w) && !/^\d/.test(w)))];
+var TH_SYN = { midterm: "election", midterms: "election", elections: "election", democrats: "election", democrat: "election", democratic: "election", republicans: "election", republican: "election", gop: "election", congress: "election", senate: "election", ballot: "election", votes: "election", voters: "election", tariff: "tariffs", hack: "binance", hacked: "binance", hackers: "binance", lagarde: "ecb", powell: "powell", nvidia: "nvidia", hormuz: "iran", tehran: "iran" };
+var TH_TITLE = { election: "Election results", iran: "Iran and oil", binance: "Binance hack", ai: "The AI trade", ecb: "The ECB", tariffs: "Tariffs", powell: "Powell and the Fed", nvidia: "Nvidia", china: "China", shutdown: "Government shutdown", opec: "OPEC supply" };
+var thWords = (t) => [...new Set(String(t || "").replace(/^[A-Za-z][\w ]{1,20}:\s+/, "").replace(/\s+By (Reuters|Bloomberg|Investing\.com)$/i, "").toLowerCase().replace(/[’']s\b/g, "").replace(/[’']/g, "").replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter((w) => (w.length > 3 || TH_SHORT.has(w)) && !STOP.has(w) && !TH_GENERIC.has(w) && !/^\d/.test(w)).map((w) => TH_SYN[w] || w))];
 var TH_MK = { futures: "NQ", stocks: "NQ", options: "NQ", crypto: "BTC", memes: "BTC", forex: "EURUSD" };
 async function threadPool() {
   const [hist, wire] = await Promise.all([rhymeHistory().catch(() => []), memo("w8all", 6e4, () => build8("all")).catch(() => null)]);
@@ -3536,7 +3538,7 @@ async function threadPool() {
   return pool.sort((a, b) => b.t - a.t);
 }
 // Words too broad to name a story on their own (they're the topic, not the story)
-var TH_BROAD = new Set("oil crude energy earnings beat beats misses miss results profit revenue tech chip chips chipmaker semiconductor crypto bitcoin cryptocurrency inflation gold dollar yield yields treasury treasuries bond bonds economy economic growth fed rate rates hike hikes cutting policy central bank banks trump president government wall street nasdaq dow equity equities index indexes trade jobs labor unemployment consumer prices outlook forecast guidance demand supply sales spending investors value valuation financialjuice reuters bloomberg cnbc".split(" "));
+var TH_BROAD = new Set("concerns concern worries worry fears fear victory sweep pressure pressures center centers financial data wobbles wobble outlook rally rallies soar soars tumble tumbles sink sinks plunge plunges selloff rout boost boosts lifts weighs weigh hopes hope bets bet focus parse watch strong weak big small top best worst oil crude energy earnings beat beats misses miss results profit revenue tech chip chips chipmaker semiconductor crypto bitcoin cryptocurrency inflation gold dollar yield yields treasury treasuries bond bonds economy economic growth fed rate rates hike hikes cutting policy central bank banks trump president government wall street nasdaq dow equity equities index indexes trade jobs labor unemployment consumer prices outlook forecast guidance demand supply sales spending investors value valuation financialjuice reuters bloomberg cnbc".split(" "));
 function findThreads(pool) {
   const N = pool.length, freq = {};
   pool.forEach((h) => h.words.forEach((w) => { freq[w] = (freq[w] || 0) + 1; }));
@@ -3551,7 +3553,7 @@ function findThreads(pool) {
   const used = new Set(), threads = [];
   groups.forEach((g) => {
     const mem = pool.filter((h) => !used.has(h.id) && g.keys.some((k) => h.words.includes(k)));
-    if (mem.length < 3) return;
+    if (mem.length < 4) return;
     mem.forEach((h) => used.add(h.id));
     const tc = {}; mem.forEach((h) => { tc[h.theme] = (tc[h.theme] || 0) + 1; });
     const theme = Object.entries(tc).sort((x, y) => y[1] - x[1])[0][0];
@@ -3577,11 +3579,11 @@ async function buildThreads() {
     const c = CALL_MKTS[mk], bars = charts.res[mk] && charts.res[mk].bars || [];
     const p0 = priceAt(bars, first.t), p1 = bars.length ? bars[bars.length - 1].c : null;
     const since = p0 != null && p1 != null ? { mk, change: c.pip ? Math.round((p1 - p0) / c.pip) : +(p1 - p0).toFixed(c.dp), unit: c.unit, pct: +((p1 - p0) / p0 * 100).toFixed(2) } : null;
-    const title = th.keys.slice(0, 2).map(cap1).join(" and ");
+    const title = TH_TITLE[th.keys[0]] || th.keys.slice(0, 2).map(cap1).join(" and ");
     const id = th.keys[0];
     return { id, title, kicker: th.label, theme: th.theme, mk, count: m.length, first: first.t, last: last.t, status, statusTxt, since, live: m.filter((h) => h.live).map((h) => h.id).slice(0, 40), score: recent24 * 2 + recent3h * 3 + m.length * 0.3 - (now - last.t) / 36e5 * 0.05,
       latest: { title: last.title, source: last.source, t: last.t }, start: { title: first.title, source: first.source, t: first.t } };
-  }).filter((t) => now - t.last < 4 * 864e5).sort((a, b) => b.score - a.score).slice(0, 12);
+  }).filter((t) => now - t.last < 4 * 864e5).sort((a, b) => b.score - a.score).slice(0, 8);
   return { threads: out, pool: pool.length, updated: now };
 }
 async function buildThread(id) {
@@ -3605,7 +3607,7 @@ async function buildThread(id) {
     p0 != null && p1 != null ? `${name} is ${p1 >= p0 ? "up" : "down"} ${c.pip ? Math.abs(Math.round((p1 - p0) / c.pip)) + " pips" : c.unit === "$" ? "$" + Math.abs(Math.round(p1 - p0)).toLocaleString("en-US") : Math.abs(p1 - p0).toFixed(1) + " pts"} since the story began.` : "",
     graded >= 3 ? `${moved} of ${graded} headlines moved ${name} noticeably in the hour after.` : ""
   ].filter(Boolean).join(" ");
-  return { id, title: th.keys.slice(0, 2).map(cap1).join(" and "), kicker: themeDef ? themeDef.label : th.theme, mk, name, unit: c.unit, dp: c.dp, summary, items, series, updated: Date.now() };
+  return { id, title: TH_TITLE[th.keys[0]] || th.keys.slice(0, 2).map(cap1).join(" and "), kicker: themeDef ? themeDef.label : th.theme, mk, name, unit: c.unit, dp: c.dp, summary, items, series, updated: Date.now() };
 }
 // ---------- Session bias record: the "Your day" call, logged once at 9:30 New York and graded at the 4 PM close ----------
 var DAY_LOG_MKTS = { futures: "NQ", crypto: "BTC", forex: "EURUSD" };
