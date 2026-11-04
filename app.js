@@ -2597,11 +2597,20 @@ const LS_NAMES = { fed: 'Federal Reserve', wh: 'The White House', bloomberg: 'Bl
 const LS_MOVER = /election|tariff|trade deal|china|iran|israel|russia|ukraine|strike|military|war|sanction|oil|economy|inflation|fed\b|interest rate|jobs|crypto|bitcoin|stablecoin|executive order|address to the nation|press conference|announcement|deal/i;
 const lsKey = e => `${e.country}|${e.title}|${e.time}`;
 function lsFor(e) {
+  if (!e) return null;
   const elec = /election/i.test(e.title) && e.country === 'USD';
-  if (!e || e.impact !== 'High' || (e.allDay && !elec) || (TN_NOTREL.test(e.title) && !elec) || !tnCcys().has(e.country)) return null;
+  if ( e.impact !== 'High' || (e.allDay && !elec) || (TN_NOTREL.test(e.title) && !elec) || !tnCcys().has(e.country)) return null;
   const t = `${e.title} ${e.name || ''}`;
   const s = LS_STREAM.find(x => x.ccy === e.country && x.re.test(t));
-  if (s) return { kind: 'stream', src: s.src, what: s.what, key: lsKey(e), ev: e };
+  if (s) {
+    // Calendar times for speeches and events can be placeholders. When the channel has posted the stream,
+    // its own scheduled start (or the fact it's live) wins, as long as it's the same day's event.
+    const ch = LS.ch[s.src], near = t2 => Math.abs(t2 - e.time) < 14 * 3600e3;
+    let ev = e;
+    if (ch && ch.start && (ch.state === 'upcoming' || ch.state === 'live') && near(ch.start)) ev = { ...e, time: ch.start, calTime: e.time };
+    else if (ch && ch.state === 'live' && near(Date.now())) ev = { ...e, time: Math.min(e.time, Date.now()), calTime: e.time };
+    return { kind: 'stream', src: s.src, what: s.what, key: lsKey(e), ev, live: !!ch && ch.state === 'live' };
+  }
   return { kind: 'release', src: e.country === 'USD' ? 'yahoo' : 'bloomberg', what: 'Release room', key: lsKey(e), ev: e };
 }
 const lsChan = k => LS.ch[k] || { key: k, name: LS_NAMES[k] || k, channel: LS_CHANNEL_FALLBACK[k], state: 'unknown' };
@@ -2616,9 +2625,9 @@ function lsNext(now = Date.now()) {
   const list = LS.cal.map(lsFor).filter(Boolean).filter(x => {
     const t = x.ev.time;
     if (t > now) return nyDay(t) === day || t - now < 12 * 3600e3;
-    return x.kind === 'stream' ? now - t < 90 * 60e3 : now - t < 20 * 60e3;
+    return x.kind === 'stream' ? (x.live || now - t < 90 * 60e3) : now - t < 20 * 60e3;
   }).filter(x => { const k = x.kind + x.ev.time; if (seen.has(k)) return false; seen.add(k); return true; });
-  const names = x => [...new Set(LS.cal.filter(e => e.time === x.ev.time && lsFor(e) && lsFor(e).kind === x.kind).map(e => e.name || e.title))];
+  const names = x => [...new Set(LS.cal.filter(e => e.time === (x.ev.calTime ?? x.ev.time) && lsFor(e) && lsFor(e).kind === x.kind).map(e => e.name || e.title))];
   list.forEach(x => { x.names = names(x); });
   const soon = list.filter(x => x.ev.time > now).sort((a, b) => a.ev.time - b.ev.time);
   const on = list.filter(x => x.ev.time <= now).sort((a, b) => b.ev.time - a.ev.time);
