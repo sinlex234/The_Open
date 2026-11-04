@@ -3538,11 +3538,11 @@ async function threadPool() {
   return pool.sort((a, b) => b.t - a.t);
 }
 // Words too broad to name a story on their own (they're the topic, not the story)
-var TH_BROAD = new Set("concerns concern worries worry fears fear victory sweep pressure pressures center centers financial data wobbles wobble outlook rally rallies soar soars tumble tumbles sink sinks plunge plunges selloff rout boost boosts lifts weighs weigh hopes hope bets bet focus parse watch strong weak big small top best worst oil crude energy earnings beat beats misses miss results profit revenue tech chip chips chipmaker semiconductor crypto bitcoin cryptocurrency inflation gold dollar yield yields treasury treasuries bond bonds economy economic growth fed rate rates hike hikes cutting policy central bank banks trump president government wall street nasdaq dow equity equities index indexes trade jobs labor unemployment consumer prices outlook forecast guidance demand supply sales spending investors value valuation financialjuice reuters bloomberg cnbc".split(" "));
+var TH_BROAD = new Set("following follows post posts amid toward towards across within without another other ahead behind latest concerns concern worries worry fears fear victory sweep pressure pressures center centers financial data wobbles wobble outlook rally rallies soar soars tumble tumbles sink sinks plunge plunges selloff rout boost boosts lifts weighs weigh hopes hope bets bet focus parse watch strong weak big small top best worst oil crude energy earnings beat beats misses miss results profit revenue tech chip chips chipmaker semiconductor crypto bitcoin cryptocurrency inflation gold dollar yield yields treasury treasuries bond bonds economy economic growth fed rate rates hike hikes cutting policy central bank banks trump president government wall street nasdaq dow equity equities index indexes trade jobs labor unemployment consumer prices outlook forecast guidance demand supply sales spending investors value valuation financialjuice reuters bloomberg cnbc".split(" "));
 function findThreads(pool) {
   const N = pool.length, freq = {};
   pool.forEach((h) => h.words.forEach((w) => { freq[w] = (freq[w] || 0) + 1; }));
-  const keys = Object.entries(freq).filter(([w, n]) => n >= 3 && n <= Math.max(8, N * 0.2) && !TH_BROAD.has(w)).sort((x, y) => y[1] - x[1]).map(([w]) => w).slice(0, 40);
+  const keys = Object.entries(freq).filter(([w, n]) => n >= 3 && n <= Math.max(8, N * 0.35) && !TH_BROAD.has(w)).sort((x, y) => y[1] - x[1]).map(([w]) => w).slice(0, 40);
   // words that nearly always come together are one story ("democrats" + "midterms")
   const groups = [];
   keys.forEach((k) => {
@@ -3591,7 +3591,7 @@ async function buildThread(id) {
   const th = findThreads(pool).find((t) => t.keys[0] === id);
   if (!th) return { id, missing: true };
   const themeDef = THEMES.find((x) => x.id === th.theme), mk = TH_MK[(themeDef && themeDef.markets || [])[0]] || "NQ";
-  const m = th.members.slice(0, 40), first = m[m.length - 1];
+  const m = th.members.slice(0, 40), first = th.members[th.members.length - 1];
   const c = CALL_MKTS[mk], ch = await yahooChart(c.sym, { interval: "15m", range: "1mo" }).catch(() => null);
   const bars = (ch && ch.bars || []).filter((b) => b.t >= first.t - 6 * 36e5);
   const step = Math.max(1, Math.ceil(bars.length / 160));
@@ -3602,7 +3602,7 @@ async function buildThread(id) {
   const name = mk === "EURUSD" ? "EUR/USD" : mk === "BTC" ? "Bitcoin" : "NQ";
   const moved = items.filter((x) => x.next && x.next.way !== "flat").length, graded = items.filter((x) => x.next).length;
   const summary = [
-    `${items.length} headlines over ${days} day${days === 1 ? "" : "s"}. It started with “${first.title}” (${first.source}).`,
+    `${th.members.length} headlines over ${days} day${days === 1 ? "" : "s"}. It started with “${first.title}” (${first.source}).`,
     `Latest: “${m[0].title}” (${m[0].source}).`,
     p0 != null && p1 != null ? `${name} is ${p1 >= p0 ? "up" : "down"} ${c.pip ? Math.abs(Math.round((p1 - p0) / c.pip)) + " pips" : c.unit === "$" ? "$" + Math.abs(Math.round(p1 - p0)).toLocaleString("en-US") : Math.abs(p1 - p0).toFixed(1) + " pts"} since the story began.` : "",
     graded >= 3 ? `${moved} of ${graded} headlines moved ${name} noticeably in the hour after.` : ""
