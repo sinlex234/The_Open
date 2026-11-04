@@ -2901,8 +2901,13 @@ var FRED_MAP = [
   [/JOLTS Job Openings/i, "JTSJOL", "jolts"]
 ];
 var fredSpec = (title) => { const m = FRED_MAP.find(([re]) => re.test(title || "")); return m ? { id: m[1], kind: m[2], q: m[3] === "q" } : null; };
+// FRED turns away requests that pretend to be a browser, so this one goes out plain
+async function fredFetch(url) {
+  const c = new AbortController(), t = setTimeout(() => c.abort(), 8e3);
+  try { const r = await fetch(url, { headers: { Accept: "text/csv,*/*" }, signal: c.signal }); if (!r.ok) throw new Error(r.status + " from FRED"); return await r.text(); } finally { clearTimeout(t); }
+}
 async function fredRaw(id, fresh) {
-  const t = await memo("fred:" + id, fresh ? 45e3 : 3 * 3600e3, () => getText(`https://fred.stlouisfed.org/graph/fredgraph.csv?id=${id}&cosd=${new Date(Date.now() - 900 * 864e5).toISOString().slice(0, 10)}`, { timeout: 8e3 }));
+  const t = await memo("fred:" + id, fresh ? 45e3 : 3 * 3600e3, () => fredFetch(`https://fred.stlouisfed.org/graph/fredgraph.csv?id=${id}&cosd=${new Date(Date.now() - 900 * 864e5).toISOString().slice(0, 10)}`));
   return t.trim().split("\n").slice(1).map((l) => { const [d, v] = l.split(","); return { d, v: parseFloat(v) }; }).filter((r) => r.d && !isNaN(r.v));
 }
 function fredSeries(rows, kind) {
@@ -3557,9 +3562,6 @@ var ROUTES = {
   world: [() => build13(), 120],
   ticks: [(q) => build15(q), 2],
   results: [(q) => build16(q.date), 5],
-  probe: [async () => { const urls = ["https://fred.stlouisfed.org/graph/fredgraph.csv?id=UNRATE&cosd=2026-01-01", "https://fred.stlouisfed.org/data/UNRATE.txt", "https://api.bls.gov/publicAPI/v1/timeseries/data/LNS14000000", "https://api.db.nomics.world/v22/series/BLS/ln/LNS14000000?observations=1&format=json"]; const out = [];
-    for (const u of urls) for (const ua of [true, false]) { const t0 = Date.now(); const c = new AbortController(); const tm = setTimeout(() => c.abort(), 7e3); try { const r = await fetch(u, { headers: ua ? { "User-Agent": UA, Accept: "*/*" } : { Accept: "text/csv,application/json,*/*" }, signal: c.signal }); const t = await r.text(); out.push([u.slice(8, 50), ua, r.status, Date.now() - t0, t.slice(0, 60)]); } catch (e) { out.push([u.slice(8, 50), ua, "ERR " + e.message, Date.now() - t0]); } finally { clearTimeout(tm); } }
-    return { out }; }, 0],
   hist: [(q) => buildHist(String(q.k || "").slice(0, 80)), 3600],
   memedesk: [(q) => build14(q), hasAI() ? 600 : 180],
   explain: [(q) => build12(q), 86400],
