@@ -3557,6 +3557,9 @@ var ROUTES = {
   world: [() => build13(), 120],
   ticks: [(q) => build15(q), 2],
   results: [(q) => build16(q.date), 5],
+  probe: [async () => { const urls = ["https://fred.stlouisfed.org/graph/fredgraph.csv?id=UNRATE&cosd=2026-01-01", "https://fred.stlouisfed.org/data/UNRATE.txt", "https://api.bls.gov/publicAPI/v1/timeseries/data/LNS14000000", "https://api.db.nomics.world/v22/series/BLS/ln/LNS14000000?observations=1&format=json"]; const out = [];
+    for (const u of urls) for (const ua of [true, false]) { const t0 = Date.now(); const c = new AbortController(); const tm = setTimeout(() => c.abort(), 7e3); try { const r = await fetch(u, { headers: ua ? { "User-Agent": UA, Accept: "*/*" } : { Accept: "text/csv,application/json,*/*" }, signal: c.signal }); const t = await r.text(); out.push([u.slice(8, 50), ua, r.status, Date.now() - t0, t.slice(0, 60)]); } catch (e) { out.push([u.slice(8, 50), ua, "ERR " + e.message, Date.now() - t0]); } finally { clearTimeout(tm); } }
+    return { out }; }, 0],
   hist: [(q) => buildHist(String(q.k || "").slice(0, 80)), 3600],
   memedesk: [(q) => build14(q), hasAI() ? 600 : 180],
   explain: [(q) => build12(q), 86400],
