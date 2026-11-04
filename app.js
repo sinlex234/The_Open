@@ -1278,6 +1278,7 @@ PAGES.today = () => {
     </div>
     <div class="since" id="since" hidden></div>
     <div class="ls-soon" id="liveSoon" hidden></div>
+    <section class="th-strip" id="thStrip" hidden></section>
     <div class="front3">
       <div class="t-left">
         <section class="briefing t-news"><div class="sec-row"><h2 class="sec">Briefing for ${esc(sessionDay().long)}</h2><a href="/news">All news</a></div><ol class="bfeed" id="bfeed">${'<li>' + skel(3) + '</li>'}</ol></section>
@@ -1595,7 +1596,7 @@ PAGES.news = () => {
     <div class="chips" role="group" aria-label="Market"><span class="chips-label">Market</span>${[['all', 'Everything'], ['futures', 'Stocks and futures'], ['forex', 'Forex'], ['crypto', 'Crypto'], ['memes', 'Memecoins']].map(([k, l]) => `<button class="chip" data-mk="${k}" aria-pressed="${f.market === k}">${l}</button>`).join('')}</div>
     <div class="chips" role="group" aria-label="Topic"><span class="chips-label">Topic</span><button class="chip" data-tp="" aria-pressed="${!f.topic}">All topics</button>${Object.entries(SECTION_NAMES).map(([k, l]) => `<button class="chip" data-tp="${k}" aria-pressed="${f.topic === k}">${l}</button>`).join('')}</div>
     <div class="chips" role="group" aria-label="Show"><span class="chips-label">Show</span>${[['matters', 'Market-moving'], ['high', 'Big stories only'], ['all', 'Everything']].map(([k, l]) => `<button class="chip" data-im="${k}" aria-pressed="${f.impact === k}">${l}</button>`).join('')}<button class="chip" id="mineFirst" aria-pressed="${f.mine}">My markets first</button></div>
-    ${shellHTML({ noChart: true, left: '<a class="tn-slim" id="tradeNews" href="/calendar" hidden></a><div class="newbar" id="newBar" hidden></div><div class="newsroom" id="wireList"></div><p class="stale-note" id="staleNote" hidden></p>' })}`);
+    ${shellHTML({ noChart: true, left: '<a class="tn-slim" id="tradeNews" href="/calendar" hidden></a><section class="th-strip" id="thStrip" hidden></section><div class="newbar" id="newBar" hidden></div><div class="newsroom" id="wireList"></div><p class="stale-note" id="staleNote" hidden></p>' })}`);
   startNow();
   mountTradeSlim('tradeNews');
   const rer = () => { store.set('newsFilter', f); refreshing = false; PAGES.news(); };
@@ -2899,6 +2900,83 @@ function startLive() {
   setInterval(() => { if (document.visibilityState === 'visible') loadLive(); }, 60e3);
 }
 
+
+// ---------- Story threads: ongoing stories as a timeline of headlines, with price alongside ----------
+const TH = { list: [], byStory: {}, loaded: false };
+const thFollow = () => store.get('thFollow', []);
+const thFollowing = id => thFollow().some(x => x.id === id);
+function thToggle(id) {
+  const f = thFollow(), t = TH.list.find(x => x.id === id);
+  store.set('thFollow', f.some(x => x.id === id) ? f.filter(x => x.id !== id) : [...f, { id, title: t ? t.title : id, last: t ? t.last : Date.now() }].slice(-12));
+  document.querySelectorAll(`[data-thf="${CSS.escape(id)}"]`).forEach(b => { const on = thFollowing(id); b.classList.toggle('on', on); b.textContent = on ? '★ Following' : '☆ Follow'; b.setAttribute('aria-pressed', on); });
+}
+const thMoveTxt = x => x ? `${x.mk === 'EURUSD' ? 'EUR/USD' : x.mk === 'BTC' ? 'Bitcoin' : 'NQ'} ${rhymeMove(x.change, x.unit)} since it began` : '';
+async function loadThreads() {
+  try { const d = await api('threads', 5 * 60e3); TH.list = d.threads || []; TH.byStory = {}; TH.list.forEach(t => (t.live || []).forEach(id => { if (!TH.byStory[id]) TH.byStory[id] = t; })); TH.loaded = true; } catch {}
+  renderThreadStrip(); markThreads();
+}
+function renderThreadStrip() {
+  const el = $('#thStrip'); if (!el) return;
+  const n = shownPage === 'news' ? 6 : 4, list = TH.list.slice(0, n);
+  if (!list.length) { el.hidden = true; return; }
+  el.innerHTML = `<div class="sec-row"><h2 class="sec">Developing stories</h2></div><div class="th-row">${list.map(t => `<button type="button" class="th-card ${esc(t.status)}" data-th="${esc(t.id)}">
+      <span class="th-k">${esc(t.kicker)}${thFollowing(t.id) ? ' · ★' : ''}</span><b class="th-t">${esc(t.title)}</b>
+      <span class="th-s"><i class="th-dot"></i>${esc(t.statusTxt.split('. ')[0])}</span>
+      <span class="th-l">${esc(t.latest.title)}</span>
+      <span class="th-f"><span>${t.count} updates</span>${t.since ? `<span class="${t.since.change > 0 ? 'up' : t.since.change < 0 ? 'down' : ''}">${esc(thMoveTxt(t.since))}</span>` : ''}</span></button>`).join('')}</div>`;
+  el.hidden = false;
+}
+function markThreads() {
+  if (!TH.loaded) return;
+  main.querySelectorAll('[data-id]:not([data-thd])').forEach(li => {
+    li.dataset.thd = 1;
+    const t = TH.byStory[li.dataset.id]; if (!t) return;
+    const host = li.querySelector('.meta, .nr-meta') || li; if (host.querySelector('.th-chip')) return;
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'th-chip'; b.dataset.th = t.id;
+    b.innerHTML = `Part of: <b>${esc(t.title)}</b> · ${t.count} updates`; host.appendChild(b);
+  });
+}
+async function openThread(id) {
+  let o = $('#thModal');
+  if (!o) { o = document.createElement('div'); o.id = 'thModal'; o.className = 'lsr'; document.body.appendChild(o); }
+  o.hidden = false; document.body.classList.add('room-open');
+  o.innerHTML = `<div class="lsr-in th-box" role="dialog" aria-modal="true" aria-label="Story thread"><div class="lsr-top"><p class="lsr-k"><span class="ls-dot"></span>Developing story</p><button type="button" class="lsr-x th-x" aria-label="Close">×</button></div><div id="thBody">${skel(4)}</div></div>`;
+  const close = () => { o.hidden = true; o.innerHTML = ''; document.body.classList.remove('room-open'); };
+  o.querySelector('.th-x').onclick = close; o.onclick = ev => { if (ev.target === o) close(); };
+  try {
+    const d = await api('thread?id=' + encodeURIComponent(id), 3 * 60e3);
+    const b = $('#thBody'); if (!b) return;
+    if (d.missing) { b.innerHTML = '<p class="empty">This story has gone quiet and isn’t tracked any more.</p>'; return; }
+    const on = thFollowing(id);
+    b.innerHTML = `<p class="th-kick">${esc(d.kicker)}</p>
+      <div class="th-head"><h2 class="lsr-h">${esc(d.title)}</h2><button type="button" class="btn-ghost sm th-fol${on ? ' on' : ''}" data-thf="${esc(id)}" aria-pressed="${on}">${on ? '★ Following' : '☆ Follow'}</button></div>
+      <p class="th-sum">${esc(d.summary)}</p>
+      ${thChart(d)}
+      <p class="hist-cap">Timeline</p>
+      <ol class="th-tl">${d.items.map(x => `<li><span class="th-when">${new Date(x.t).toLocaleDateString('en-US', { timeZone: TZ, month: 'short', day: 'numeric' })}<small>${fmtTime(x.t)}</small></span><span class="th-it">${x.link ? `<a href="${esc(x.link)}" target="_blank" rel="noopener">${esc(x.title)}</a>` : esc(x.title)}<small>${esc(x.source || '')}</small></span><span class="th-mv ${x.next ? (x.next.way === 'up' ? 'up' : x.next.way === 'down' ? 'down' : '') : ''}">${x.next ? esc(rhymeMove(x.next.move, x.next.unit)) : ''}</span></li>`).join('')}</ol>
+      <p class="rh-foot">Grouped automatically from the headlines the site has saved. The number on the right is how ${esc(d.name)} moved in the hour after each headline. Follow a story to get an alert when a new headline lands.</p>`;
+    // remember that the reader has seen the latest chapter
+    const f = thFollow(); const me2 = f.find(x => x.id === id); if (me2 && d.items[0]) { me2.last = Math.max(me2.last || 0, d.items[0].t); store.set('thFollow', f); }
+  } catch (e) { const b = $('#thBody'); if (b) b.innerHTML = errBox('this story', e.message); }
+}
+function thChart(d) {
+  const pts = d.series || []; if (pts.length < 5) return '';
+  const W = 600, H = 150, pad = 6, t0 = pts[0][0], t1 = pts[pts.length - 1][0];
+  const vs = pts.map(p => p[1]), lo = Math.min(...vs), hi = Math.max(...vs), sp = (hi - lo) || 1;
+  const x = t => pad + (t - t0) / ((t1 - t0) || 1) * (W - pad * 2), y = v => pad + (hi - v) / sp * (H - pad * 2 - 14);
+  const path = pts.map((p, i) => `${i ? 'L' : 'M'}${x(p[0]).toFixed(1)},${y(p[1]).toFixed(1)}`).join('');
+  const near = t => { let b = pts[0]; for (const p of pts) { if (p[0] <= t) b = p; else break; } return b; };
+  const dots = d.items.filter(i => i.t >= t0 && i.t <= t1).map(i => { const p = near(i.t); return `<circle cx="${x(i.t).toFixed(1)}" cy="${y(p[1]).toFixed(1)}" r="3.2" class="th-pt ${i.next ? i.next.way : ''}"><title>${esc(i.title)}</title></circle>`; }).join('');
+  const lab = t => new Date(t).toLocaleDateString('en-US', { timeZone: TZ, month: 'short', day: 'numeric' });
+  return `<p class="hist-cap">${esc(d.name)} through the story · each dot is a headline</p><svg viewBox="0 0 ${W} ${H}" class="th-svg" role="img" aria-label="${esc(d.name)} price with headline markers"><path d="${path}" class="th-line"/>${dots}<text x="${pad}" y="${H - 2}" class="hl">${lab(t0)}</text><text x="${W - pad}" y="${H - 2}" text-anchor="end" class="hl">${lab(t1)}</text></svg>`;
+}
+document.addEventListener('click', ev => {
+  const f = ev.target.closest('[data-thf]'); if (f) { ev.preventDefault(); ev.stopPropagation(); thToggle(f.dataset.thf); return; }
+  const b = ev.target.closest('[data-th]'); if (!b) return;
+  ev.preventDefault(); openThread(b.dataset.th);
+});
+document.addEventListener('keydown', ev => { const o = $('#thModal'); if (ev.key === 'Escape' && o && !o.hidden) { o.hidden = true; o.innerHTML = ''; document.body.classList.remove('room-open'); } });
+
 // ---------- start ----------
 let calendarCache = null;
 tick(); setInterval(tick, 30e3);
@@ -2909,9 +2987,10 @@ initMe(() => {
   started = true;
   orderTabs(); mountStrip(); route(); pollResults(); lastRefresh = Date.now(); mStatus();
   startLive();
-  new MutationObserver(() => { if (LS.loaded && main.querySelector('.ff-row[data-k]:not([data-lsd])')) { main.querySelectorAll('.ff-row[data-k]').forEach(r => r.dataset.lsd = 1); lsMarkCalendar(); } }).observe(main, { childList: true, subtree: true });
+  new MutationObserver(() => { if (LS.loaded && main.querySelector('.ff-row[data-k]:not([data-lsd])')) { main.querySelectorAll('.ff-row[data-k]').forEach(r => r.dataset.lsd = 1); lsMarkCalendar(); } if (TH.loaded) { if (main.querySelector('[data-id]:not([data-thd])')) markThreads(); const st = $('#thStrip'); if (st && st.hidden && TH.list.length && !st.dataset.done) { st.dataset.done = 1; renderThreadStrip(); } } }).observe(main, { childList: true, subtree: true });
+  loadThreads(); setInterval(() => { if (document.visibilityState === 'visible') loadThreads(); }, 5 * 60e3);
   api('calendar', 10 * 60e3).then(d => { calendarCache = d.events; }).catch(() => {});
-  startAlerts({ calendar: () => (LS.cal && LS.cal.length ? LS.cal : calendarCache), live: lsFor, open: x => { if (x.kind === 'stream') { const ch = lsChan(x.src); openPlayer(x.src, { title: `${x.ev.name || x.ev.title} · ${ch.name}` }); } else openRoom(x); }, wire: () => api('wire?section=all', 60e3).then(d => d.items), levels: levelRows });
+  startAlerts({ threads: () => TH.list, openThread, calendar: () => (LS.cal && LS.cal.length ? LS.cal : calendarCache), live: lsFor, open: x => { if (x.kind === 'stream') { const ch = lsChan(x.src); openPlayer(x.src, { title: `${x.ev.name || x.ev.title} · ${ch.name}` }); } else openRoom(x); }, wire: () => api('wire?section=all', 60e3).then(d => d.items), levels: levelRows });
 });
 addEventListener('open:tz', () => { TZ = userTZ(); cache.clear(); refreshing = false; tick(); mStatus(); route(); });
 addEventListener('open:profile', () => { orderTabs(); mountStrip(); cache.clear(); route(); });

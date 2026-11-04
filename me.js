@@ -860,6 +860,13 @@ async function checkAlerts() {
   if (!hasProfile() || !alertGetters) return;
   const AL = me.alerts, now = Date.now(), m = nyMins(now), today = nyDate(now);
   if (AL.news) countdownAlerts(AL, now);
+  // Followed story threads: one alert per new headline
+  if (alertGetters.threads) {
+    const f = ls.get('thFollow', []); let changed = false;
+    (alertGetters.threads() || []).forEach(t => { const x = f.find(y => y.id === t.id); if (!x || !t.latest || t.latest.t <= (x.last || 0) || now - t.latest.t > 3 * 36e5) return;
+      x.last = t.latest.t; changed = true; notify(`th:${t.id}:${t.latest.t}`, `New in ${t.title}`, `${t.latest.title} (${t.latest.source})`, alertGetters.openThread ? () => alertGetters.openThread(t.id) : null); });
+    if (changed) ls.set('thFollow', f);
+  }
   if (AL.breaking && alertGetters.wire) {
     try { (await alertGetters.wire()).filter(h => h.breaking && relevance(h) - (h.score || 0) >= 1.5).slice(0, 2).forEach(h => notify('br:' + h.title.toLowerCase().replace(/\W+/g, '').slice(0, 80), 'Breaking: ' + h.title, forYouHeadline(h) || h.why || h.source)); } catch {}
   }
