@@ -407,7 +407,7 @@ function scenFor(e) {
   const sc = SCEN.find((x) => x.re.test(e.title) || x.re.test(e.name || ""));
   if (!sc && (e.impact !== "High" || /speaks|testif|minutes|meeting|conference/i.test(e.title))) return {};
   const fill = (t) => t.replace(/CCY/g, CCY_NAME[e.country] || e.country);
-  const side = (d) => ({ label: sc ? sc[d][0] : d === "up" ? "Stronger than forecast" : "Weaker than forecast", text: sc ? fill(sc[d][1]) : fill(d === "up" ? "CCY would likely strengthen." : "CCY would likely weaken."), effects: releaseEffects(sc, e.country, d) });
+  const side = (d) => ({ label: sc ? sc[d][0] : d === "up" ? "Stronger than forecast" : "Weaker than forecast", text: sc ? fill(sc[d][1]) : fill(d === "up" ? "CCY would likely strengthen." : "CCY would likely weaken."), effects: adjustEffects(releaseEffects(sc, e.country, d), sc ? sc.title : "Economic data") });
   return { scen: { up: side("up"), down: side("down") } };
 }
 async function build() {
@@ -2513,7 +2513,8 @@ async function dayPlanFor(prof, states, events, now) {
     const sweep = call === "up" ? fB[0] : fA[0], beyond = call === "up" ? fB[1] : fA[1];
     const strats = ((prof.find((x) => x.m === m) || {}).strats || []).slice(0, 2);
     const plans = (strats.length ? strats : ["unsure"]).map((s2) => ({ strategy: s2, name: STRAT_NAMES[s2] || "Your plan", steps: stratPlan(s2, call, lv, ev, m).filter(Boolean) }));
-    return { market: m, short: c.short, timing: PULSE_OF[m], call, conf, score: +score.toFixed(2), head, why, levels: lv, flip: call === "range" || !sweep ? "" : strats.includes("ict") ? (beyond ? `A quick run past ${lvl(sweep)} is expected. If price keeps going and breaks ${call === "up" ? "below" : "above"} ${lvl(beyond)}, the bias is wrong: step back and reassess.` : `A quick run past ${lvl(sweep)} is expected. If price holds ${call === "up" ? "below" : "above"} it instead of reversing, the bias is wrong: step back and reassess.`) : `If price breaks ${call === "up" ? "below" : "above"} ${lvl(beyond || sweep)} and holds, the bias is wrong: step back and reassess.`, event: ev, plans };
+    const A = adjustNow(), capTo = A && A.day[DAY_LOG_MKTS[m]], shown = capConf(conf, capTo);
+    return { market: m, short: c.short, timing: PULSE_OF[m], call, conf: shown, rawConf: conf, capped: shown !== conf ? `Confidence capped at ${capTo}: this market's ${capTo === "medium" ? "high" : "medium"}-confidence day biases have been right less than half the time lately.` : null, score: +score.toFixed(2), head, why, levels: lv, flip: call === "range" || !sweep ? "" : strats.includes("ict") ? (beyond ? `A quick run past ${lvl(sweep)} is expected. If price keeps going and breaks ${call === "up" ? "below" : "above"} ${lvl(beyond)}, the bias is wrong: step back and reassess.` : `A quick run past ${lvl(sweep)} is expected. If price holds ${call === "up" ? "below" : "above"} it instead of reversing, the bias is wrong: step back and reassess.`) : `If price breaks ${call === "up" ? "below" : "above"} ${lvl(beyond || sweep)} and holds, the bias is wrong: step back and reassess.`, event: ev, plans };
   }));
 }
 function playbookFor(prof, states) {
@@ -2997,7 +2998,8 @@ async function build16(date) {
     return {
       key: `${e.country}|${e.title}|${e.time}`, title: e.title, name: e.name, country: e.country, impact: e.impact, time: e.time,
       forecast, previous: (best && best.previous) || e.previous || "", actual, released, dir: d, ccyDir, label: lab,
-      text: text.replace(/CCY/g, CCY_NAME[e.country] || e.country), effects: released && e.impact !== "Low" ? releaseEffects(sc, e.country, d) : [], since, src
+      text: text.replace(/CCY/g, CCY_NAME[e.country] || e.country), effects: released && e.impact !== "Low" ? adjustEffects(releaseEffects(sc, e.country, d), sc ? sc.title : "Economic data") : [], since, src,
+      kind: sc ? sc.title : "Economic data"
     };
   };
   const out = evs.map((e) => mk(e));
@@ -3007,7 +3009,8 @@ async function build16(date) {
     const vals = await Promise.all(miss.map(([x]) => fredBackup(x.title, x.time).catch(() => null)));
     miss.forEach(([, i], j) => { if (vals[j]) out[i] = mk(evs[i], vals[j]); });
   }
-  return { events: out, matched: out.filter((x) => x.actual).length, updated: now };
+  const relLog = isToday ? await logRelCalls(out).catch((e) => "not logged: " + String(e.message || e).slice(0, 80)) : "not today";
+  return { relLog, events: out, matched: out.filter((x) => x.actual).length, updated: now };
 }
 
 // api/_lib/router.js
@@ -3059,9 +3062,9 @@ function closeAfter(t) {
   if (!wk(date) || n.mins >= 16 * 60) { do date = addDays(date, 1); while (!wk(date)); }
   return nyToMs(date, 16 * 60);
 }
-function grade(bars, from, to, c, dir) {
+function grade(bars, from, to, c, dir, step = 15 * 6e4) {
   if (!bars || !bars.length) return { result: "pending" };
-  const i0 = bars.findIndex((b) => b.t + 15 * 6e4 > from);
+  const i0 = bars.findIndex((b) => b.t + step > from);
   if (i0 < 0) return { result: "pending" };
   const start = Math.max(from, bars[i0].t), end = to(start);
   if (end > Date.now()) return { result: "pending", due: end };
@@ -3246,6 +3249,9 @@ async function buildPulse() {
   const events = res.cal && res.cal.events || [];
   const upcoming = events.filter((e) => e.time > now && e.impact !== "Low" && (e.country === "USD" || e.impact === "High"));
   const reads = Object.keys(PULSE_MKTS).map((k) => pulseRead(k, stories, res.px, events, now, upcoming));
+  // Automatic adjustment: a market whose high or medium confidence has been underperforming gets capped
+  const A = adjustNow();
+  if (A) reads.forEach((r) => { const cap = A.conf[r.key]; if (r.conf && cap && capConf(r.conf, cap) !== r.conf) { r.conf = capConf(r.conf, cap); r.capped = `Confidence capped at ${cap}: this market's ${cap === "medium" ? "high" : "medium"}-confidence reads have been right less than half the time lately.`; } });
   // Reuse the AI note if this 5-minute slot was already read (keeps the AI to one run per slot)
   let saved = [];
   try { saved = await sb(`open_pulse?select=market,lean,note,engine&slot=eq.${reads[0].slot}`); } catch {}
@@ -3276,16 +3282,17 @@ async function buildPulseScore() {
   catch (e) { return { ready: false, error: String(e.message || e).slice(0, 120) }; }
   const charts = await settle(Object.fromEntries(Object.keys(PULSE_MKTS).map((k) => [k, yahooChart(CALL_MKTS[k].sym, { interval: "15m", range: "1mo" })])));
   const tally = () => ({ right: 0, wrong: 0, flat: 0, pending: 0 });
-  const sum = tally(), byConf = { high: tally(), medium: tally(), low: tally() }, by = {};
+  const sum = tally(), byConf = { high: tally(), medium: tally(), low: tally() }, by = {}, byMkConf = {};
   const reads = rows.map((r) => {
     const c = CALL_MKTS[r.market], bars = charts.res[r.market] && charts.res[r.market].bars;
     if (!c) return null;
     const g = grade(bars, +r.slot, (s) => s + 36e5, { ...c, flat: c.flat / 2 }, r.lean);
     const cf = confBand(r.score); sum[g.result]++; byConf[cf][g.result]++;
     (by[r.market] = by[r.market] || tally())[g.result]++;
+    const mc = byMkConf[r.market] = byMkConf[r.market] || { high: tally(), medium: tally(), low: tally() }; mc[cf][g.result]++;
     return { market: r.market, time: +r.slot, lean: r.lean, conf: confBand(r.score), hour: g };
   }).filter(Boolean);
-  return { ready: true, days: 14, total: reads.length, summary: sum, byConf, byMarket: by, reads: reads.slice(0, 30), updated: Date.now() };
+  return { ready: true, days: 14, total: reads.length, summary: sum, byConf, byMarket: by, byMkConf, reads: reads.slice(0, 30), updated: Date.now() };
 }
 
 
@@ -3320,6 +3327,123 @@ async function buildStreams() {
   const chans = Object.keys(STREAM_CH).map((k) => res[k] || { key: k, name: STREAM_CH[k].name, channel: STREAM_CH[k].id, state: "unknown" });
   return { channels: chans, updated: Date.now() };
 }
+
+// ---------- Release calls: every up/down call after a big release is saved, then graded ----------
+// Rule calls (the "if above / if below" read, published before the number) are graded from the price at the release.
+// Calls that follow the first move are graded from the price when the call was made, so they don't get credit for a move that already happened.
+var REL_MKTS = { NQ: { m: ["futures", "stocks", "options"], react: "NQ", min: 3 }, BTC: { m: ["crypto", "memes"], react: "BTC", min: 20 }, EURUSD: { m: ["forex"], react: "EURUSD", min: 2 } };
+var mktKeyOf = (m) => Object.keys(REL_MKTS).find((k) => REL_MKTS[k].m.includes(m)) || null;
+var _relLogged = new Set();
+function relCallsToLog(out) {
+  const now = Date.now(), rows = [];
+  out.forEach((ev) => {
+    if (!ev.released || !["up", "down"].includes(ev.dir) || ev.impact !== "High" || !["USD", "EUR"].includes(ev.country)) return;
+    if (now - ev.time > 30 * 6e4 || now < ev.time) return;
+    const sc = SCEN.find((x) => x.re.test(ev.name || "") || x.re.test(ev.title)) || null;
+    const raw = releaseEffects(sc, ev.country, ev.dir);
+    Object.entries(REL_MKTS).forEach(([key, cfg]) => {
+      if (_relLogged.has(ev.key + "|" + key)) return;
+      const e = raw.find((x) => x.market === cfg.m[0]);
+      if (!e) return;
+      const s = (ev.since || []).find((x) => x.label === REACT[cfg.react].label);
+      let dir = e.dir, how = "rule", price = s ? s.from : null;
+      if (key === "EURUSD" && e.ccy === "USD" && (dir === "up" || dir === "down")) dir = dir === "up" ? "down" : "up";
+      if (dir !== "up" && dir !== "down") {
+        if (!s || Math.abs(s.change) < cfg.min) return;
+        dir = s.change > 0 ? "up" : "down"; how = "react"; price = s.now;
+      }
+      rows.push({ event_key: String(ev.key).slice(0, 200), title: String(ev.name || ev.title).slice(0, 160), kind: sc ? sc.title : "Economic data", country: ev.country, released_at: new Date(ev.time).toISOString(), actual: String(ev.actual).slice(0, 30), forecast: String(ev.forecast || "").slice(0, 30), surprise: ev.dir, market: key, dir, how, price });
+    });
+  });
+  return rows;
+}
+async function logRelCalls(out) {
+  const rows = relCallsToLog(out);
+  if (!rows.length) return "none";
+  await sb("open_relcalls?on_conflict=event_key,market", { method: "POST", body: rows, prefer: "resolution=ignore-duplicates,return=minimal" });
+  rows.forEach((r) => _relLogged.add(r.event_key + "|" + r.market));
+  return "logged " + rows.length;
+}
+async function buildRelScore() {
+  const since = new Date(Date.now() - 90 * 864e5).toISOString();
+  let rows;
+  try { rows = await sb(`open_relcalls?select=event_key,title,kind,country,released_at,actual,forecast,surprise,market,dir,how,price,called_at&released_at=gte.${since}&order=released_at.desc&limit=600`); }
+  catch (e) { return { ready: false, error: String(e.message || e).slice(0, 120) }; }
+  const keys = Object.keys(REL_MKTS);
+  const [c5, c15] = await Promise.all([
+    settle(Object.fromEntries(keys.map((k) => [k, yahooChart(CALL_MKTS[k].sym, { interval: "5m", range: "1mo" })]))),
+    settle(Object.fromEntries(keys.map((k) => [k, yahooChart(CALL_MKTS[k].sym, { interval: "15m", range: "3mo" })])))
+  ]);
+  const tally = () => ({ right: 0, wrong: 0, flat: 0, pending: 0 });
+  const sum = { m15: tally(), hour: tally(), close: tally() }, byRule = {}, byHow = { rule: tally(), react: tally() };
+  const calls = rows.map((r) => {
+    const c = CALL_MKTS[r.market]; if (!c) return null;
+    const from = r.how === "rule" ? Date.parse(r.released_at) : Date.parse(r.called_at);
+    const b5 = c5.res[r.market] && c5.res[r.market].bars, b15 = c15.res[r.market] && c15.res[r.market].bars;
+    const m15 = grade(b5, from, (s) => s + 15 * 6e4, { ...c, flat: c.flat / 3 }, r.dir, 5 * 6e4);
+    const hour = grade(b15, from, (s) => s + 36e5, { ...c, flat: c.flat / 2 }, r.dir);
+    const close = grade(b15, from, (s) => closeAfter(s), c, r.dir);
+    sum.m15[m15.result]++; sum.hour[hour.result]++; sum.close[close.result]++;
+    byHow[r.how] && byHow[r.how][hour.result]++;
+    if (r.how === "rule") (byRule[r.kind + "|" + r.market] = byRule[r.kind + "|" + r.market] || tally())[hour.result]++;
+    return { ...r, time: Date.parse(r.released_at), m15, hour, close };
+  }).filter(Boolean);
+  return { ready: true, days: 90, total: calls.length, summary: sum, byHow, byRule, calls: calls.slice(0, 40), updated: Date.now() };
+}
+
+// ---------- Automatic adjustments: the graded results change how the site calls things ----------
+// Only with enough graded results, and they lift on their own once the numbers recover:
+// - a release rule (e.g. inflation report -> NQ) right under 40% of the time over 6+ graded calls is paused;
+//   the site follows the market's first real move instead. Paused rules keep being saved, so they can come back.
+// - a market's high or medium confidence that is right under 50% (Live read: 40+ graded, day bias: 12+) is capped one level down.
+var ADJ = { relMin: 6, relPause: 0.4, relStrong: 0.6, pulseMin: 40, dayMin: 12, confFloor: 0.5 };
+var CONF_ORDER = ["low", "medium", "high"];
+var capConf = (conf, cap) => !conf || !cap ? conf : CONF_ORDER.indexOf(conf) > CONF_ORDER.indexOf(cap) ? cap : conf;
+async function computeAdjust() {
+  const [rel, pulse, day] = await Promise.all([buildRelScore().catch(() => null), buildPulseScore().catch(() => null), buildDayScore().catch(() => null)]);
+  const out = { release: {}, conf: {}, day: {}, list: [], watching: [], updated: Date.now() };
+  const NAME = { NQ: "NQ", BTC: "Bitcoin", EURUSD: "EUR/USD" };
+  if (rel && rel.ready) Object.entries(rel.byRule).forEach(([k, t]) => {
+    const n = t.right + t.wrong, [kind, mk] = k.split("|");
+    if (n < ADJ.relMin) { if (n) out.watching.push({ area: "Release calls", what: `${kind} → ${NAME[mk] || mk}`, why: `${t.right} of ${n} right so far. Needs ${ADJ.relMin} graded calls before anything changes.` }); return; }
+    const rate = t.right / n, status = rate < ADJ.relPause ? "paused" : rate >= ADJ.relStrong ? "strong" : "ok";
+    out.release[k] = { n, right: t.right, rate: +rate.toFixed(2), status };
+    if (status === "paused") out.list.push({ area: "Release calls", what: `${kind} → ${NAME[mk] || mk}: call paused`, why: `Right only ${t.right} of ${n} times an hour after the release. The site follows the market's first real move instead until this improves.` });
+    if (status === "strong") out.list.push({ area: "Release calls", what: `${kind} → ${NAME[mk] || mk}: track record shown`, why: `Right ${t.right} of ${n} times an hour after the release, so the call shows its record.` });
+  });
+  const caps = (src, min, into, area) => {
+    if (!src || !src.ready || !src.byMkConf) return;
+    Object.entries(src.byMkConf).forEach(([mk, bands]) => {
+      let cap = null, why = "";
+      ["high", "medium"].forEach((b) => {
+        const t = bands[b]; if (!t) return;
+        const n = t.right + t.wrong; if (n < min) { if (n && b === "high") out.watching.push({ area, what: `${NAME[mk] || mk}: high confidence`, why: `${t.right} of ${n} right so far. Needs ${min} graded before anything changes.` }); return; }
+        if (t.right / n < ADJ.confFloor) { cap = b === "high" ? "medium" : "low"; why = `${b === "high" ? "High" : "Medium"}-confidence calls were right ${t.right} of ${n} times (${Math.round(t.right / n * 100)}%).`; }
+      });
+      if (cap) { into[mk] = cap; out.list.push({ area, what: `${NAME[mk] || mk}: confidence capped at ${cap}`, why: why + " It lifts again once that improves." }); }
+    });
+  };
+  caps(pulse, ADJ.pulseMin, out.conf, "Live read");
+  caps(day, ADJ.dayMin, out.day, "Day bias");
+  return out;
+}
+// Non-blocking: pages use the last result and refresh it in the background every 30 minutes
+var _adj = { v: null, t: 0, p: null };
+function adjustNow() {
+  if (Date.now() - _adj.t > 30 * 6e4 && !_adj.p) _adj.p = computeAdjust().then((v) => { _adj.v = v; _adj.t = Date.now(); }).catch(() => { _adj.t = Date.now() - 25 * 6e4; }).finally(() => { _adj.p = null; });
+  return _adj.v;
+}
+function adjustEffects(effects, kind) {
+  const A = adjustNow(); if (!A || !effects) return effects;
+  return effects.map((e) => {
+    const mk = e.market === "forex" ? (e.ccy === "USD" || e.ccy === "EUR" ? "EURUSD" : null) : mktKeyOf(e.market);
+    const r = mk && A.release[kind + "|" + mk];
+    if (!r || (e.dir !== "up" && e.dir !== "down")) return e;
+    if (r.status === "paused") return { ...e, held: e.dir, dir: "mixed", paused: true, reason: `The usual call here has been right only ${r.right} of ${r.n} times lately, so the site is following the market's first real move instead.` };
+    if (r.status === "strong") return { ...e, record: `Right ${r.right} of ${r.n} times after past releases like this.` };
+    return e;
+  });
+}
 // ---------- Session bias record: the "Your day" call, logged once at 9:30 New York and graded at the 4 PM close ----------
 var DAY_LOG_MKTS = { futures: "NQ", crypto: "BTC", forex: "EURUSD" };
 async function logDayBias(now, reads) {
@@ -3331,7 +3455,7 @@ async function logDayBias(now, reads) {
   const out = await build11({ p: Object.keys(DAY_LOG_MKTS).join(";") });
   const rows = (out.dayplan || []).filter((d) => DAY_LOG_MKTS[d.market] && d.call !== "range").map((d) => {
     const key = DAY_LOG_MKTS[d.market], r = reads.find((x) => x.key === key);
-    return { day: t.date, market: key, call: d.call, conf: d.conf, score: d.score, price: r && r.price != null ? r.price : null };
+    return { day: t.date, market: key, call: d.call, conf: d.rawConf || d.conf, score: d.score, price: r && r.price != null ? r.price : null };
   }).filter((r) => !have.some((h) => h.market === r.market));
   if (!rows.length) return "nothing to log";
   await sb("open_daybias?on_conflict=day,market", { method: "POST", body: rows, prefer: "resolution=ignore-duplicates,return=minimal" });
@@ -3344,7 +3468,7 @@ async function buildDayScore() {
   catch (e) { return { ready: false, error: String(e.message || e).slice(0, 120) }; }
   const charts = await settle(Object.fromEntries(Object.keys(PULSE_MKTS).map((k) => [k, yahooChart(CALL_MKTS[k].sym, { interval: "15m", range: "3mo" })])));
   const tally = () => ({ right: 0, wrong: 0, flat: 0, pending: 0 });
-  const sum = tally(), byConf = { high: tally(), medium: tally(), low: tally() }, by = {};
+  const sum = tally(), byConf = { high: tally(), medium: tally(), low: tally() }, by = {}, byMkConf = {};
   const closeOf = (start) => { const d = ny(start); return start + (960 - d.mins) * 6e4; };
   const list = rows.map((r) => {
     const c = CALL_MKTS[r.market], bars = charts.res[r.market] && charts.res[r.market].bars;
@@ -3352,9 +3476,11 @@ async function buildDayScore() {
     const g = grade(bars, new Date(r.logged_at).getTime(), closeOf, c, r.call);
     sum[g.result]++; if (byConf[r.conf]) byConf[r.conf][g.result]++;
     (by[r.market] = by[r.market] || tally())[g.result]++;
+    // Saved with the confidence before any cap, so a cap doesn't hide whether that band has recovered
+    const mc = byMkConf[r.market] = byMkConf[r.market] || { high: tally(), medium: tally(), low: tally() }; if (mc[r.conf]) mc[r.conf][g.result]++;
     return { day: r.day, market: r.market, call: r.call, conf: r.conf, close: g };
   }).filter(Boolean);
-  return { ready: true, since, total: list.length, summary: sum, byConf, byMarket: by, days: list.slice(0, 30), updated: Date.now() };
+  return { ready: true, since, total: list.length, summary: sum, byConf, byMarket: by, byMkConf, days: list.slice(0, 30), updated: Date.now() };
 }
 // ---------- plans: who the reader is, what they can use, and payments ----------
 class HttpErr extends Error { constructor(status, msg, extra) { super(msg); this.status = status; this.extra = extra || {}; } }
@@ -3562,6 +3688,8 @@ var ROUTES = {
   world: [() => build13(), 120],
   ticks: [(q) => build15(q), 2],
   results: [(q) => build16(q.date), 5],
+  relscore: [() => buildRelScore(), 300],
+  adjust: [() => memo("adjust", 10 * 6e4, computeAdjust).then((v) => { _adj.v = v; _adj.t = Date.now(); return v; }), 300],
   hist: [(q) => buildHist(String(q.k || "").slice(0, 80)), 3600],
   memedesk: [(q) => build14(q), hasAI() ? 600 : 180],
   explain: [(q) => build12(q), 86400],

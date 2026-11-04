@@ -430,7 +430,7 @@ function relEffects(r) {
 // Turn a release into a plain up/down call. When the rule cuts both ways, follow the market's first real move.
 const REL_REACT = { futures: ['NQ', 3, 'pts'], stocks: ['NQ', 3, 'pts'], options: ['NQ', 3, 'pts'], crypto: ['BTC', 20, '$'], memes: ['BTC', 20, '$'] };
 function relResolve(e, r) {
-  if (e.dir === 'up' || e.dir === 'down' || e.paused) return { ...e, how: 'rule' };
+  if (e.dir === 'up' || e.dir === 'down') return { ...e, how: 'rule' };
   let ref = REL_REACT[e.market], flip = 1;
   if (!ref && e.market === 'forex') { ref = ['EUR/USD', 2, 'pips']; if (/USD|dollar/i.test(e.label)) flip = -1; }
   const s = ref && (r.since || []).find(x => x.label === ref[0]);
@@ -451,15 +451,16 @@ function relVerdict(r) {
   if (r.dir === 'inline') { why.push('Close to what markets expected, so the move usually fades fast.'); return { head: 'Little reaction expected', cls, why: why.join(' '), effs, main }; }
   if (main && (main.dir === 'up' || main.dir === 'down')) {
     head = `${main.market === 'futures' ? 'NQ & ES' : main.label} ${main.dir === 'up' ? '↑ likely up' : '↓ likely down'}`; cls = main.dir;
-    if (main.how === 'rule') { if (r.text) why.push(r.text); if (main.reason) why.push(main.reason); }
+    if (main.how === 'rule') { if (r.text) why.push(r.text); if (main.reason) why.push(main.reason); if (main.record) why.push(main.record); }
+    else if (main.paused) { why.push(main.reason); why.push(`So far, ${relMoveTxt(main.move)} since the release.`); }
     else { const rs = (main.reason || '').replace(/\s*Watch the first reaction\.?/i, '').replace(/\.$/, ''); why.push(`On paper this cuts both ways: ${rs.charAt(0).toLowerCase() + rs.slice(1)}.`); why.push(`When it's a toss-up, the first real move usually decides it, and ${relMoveTxt(main.move)} since the release.`); }
   } else if (main) {
     head = `${main.market === 'futures' ? 'NQ & ES' : main.label}: waiting for the first move`;
-    why.push((main.reason || '').replace(/\s*Watch the first reaction\.?/i, ''), 'The site will call it up or down as soon as the market picks a side, usually within a minute or two.');
+    why.push((main.reason || '').replace(/\s*Watch the first reaction\.?/i, ''), main.paused ? 'It will call it as soon as the market picks a side, usually within a minute or two.' : 'The site will call it up or down as soon as the market picks a side, usually within a minute or two.');
   }
   return { head, cls, why: why.filter(Boolean).join(' '), effs, main };
 }
-const relCallPill = e => `<span class="pill ${e.paused ? 'paused' : e.dir === 'up' ? 'up' : e.dir === 'down' ? 'down' : ''}"><b>${esc(e.label)}</b> ${e.paused ? '⏸ Call paused' : e.dir === 'up' ? '↑ Likely up' : e.dir === 'down' ? '↓ Likely down' : '… Waiting for the first move'}</span>`;
+const relCallPill = e => `<span class="pill ${e.paused && e.how !== 'react' ? 'paused' : e.dir === 'up' ? 'up' : e.dir === 'down' ? 'down' : ''}"><b>${esc(e.label)}</b> ${e.paused && e.how !== 'react' ? '⏸ Call paused' : e.dir === 'up' ? '↑ Likely up' : e.dir === 'down' ? '↓ Likely down' : '… Waiting for the first move'}</span>`;
 function releasedHTML() {
   const now = Date.now(), gone = store.get('relDismissed', []);
   const list = Object.values(results.map).filter(r => r.released && r.actual && now - r.time < 90 * 60e3 && !gone.includes(r.key) && r.impact !== 'Low' && (r.impact === 'High' || forYouEvent(r))).sort((a, b) => b.time - a.time).slice(0, 3);
@@ -766,6 +767,7 @@ function dayPlanHTML(plans) {
     <ul class="dp-why">${p.why.map(w => `<li>${esc(w)}</li>`).join('')}</ul>
     ${p.plans.map(pl => `<div class="dp-plan"><p class="dp-k">Your plan · ${esc(pl.name)}</p><ol>${pl.steps.map(x => `<li>${esc(pl.strategy === 'ict' ? ictWords(x, p.market) : x)}</li>`).join('')}</ol></div>`).join('')}
     ${p.flip ? `<p class="dp-flip">${esc(p.flip)}</p>` : ''}
+    ${p.capped ? `<p class="pl-cap">${esc(p.capped)} <a href="/scorecard">Scorecard</a></p>` : ''}
   </div>`; }).join('')}<p class="dp-note">From today’s news, price and the Live read, for the session you trade. A lean, not a promise, and not financial advice.</p></li>`;
 }
 // The reader's whole session, half hour by half hour: how much it usually moves and what to expect in each stretch
@@ -1135,13 +1137,14 @@ function pulseOrder(reads) {
 const unitAmt = (n, u) => `${n > 0 ? '+' : n < 0 ? '−' : ''}${u === '$' ? '$' : ''}${num(Math.abs(n), u === 'pts' ? (Math.abs(n) >= 100 ? 0 : 1) : 0)}${u === 'pts' ? ' pts' : u === 'pips' ? ' pips' : ''}`;
 function pulseCard(r) {
   const lean = r.lean === 'up' ? '<i class="up">↑</i> Leaning up' : r.lean === 'down' ? '<i class="down">↓</i> Leaning down' : r.closed ? 'Market closed' : r.gate ? 'Waiting for the release' : 'No clear lean';
-  const conf = r.conf ? `<span class="pill ${r.conf === 'medium' ? 'acc' : ''}">${r.conf === 'medium' ? 'Medium' : 'Low'} confidence</span>` : '';
+  const conf = r.conf ? `<span class="pill ${r.conf === 'low' ? '' : 'acc'}"${r.capped ? ` title="${esc(r.capped)}"` : ''}>${r.conf === 'high' ? 'High' : r.conf === 'medium' ? 'Medium' : 'Low'} confidence${r.capped ? ' ⓘ' : ''}</span>` : '';
   const mv = r.move ? `<small class="${r.move.ch60 > 0 ? 'up' : r.move.ch60 < 0 ? 'down' : 'faint'}">${unitAmt(r.move.ch60, r.move.unit)} last hour</small>` : '';
   const why = r.closed && r.reopens ? `Reads restart when it reopens, ${new Date(r.reopens).toLocaleString('en-US', { timeZone: TZ, weekday: 'short', hour: 'numeric', minute: '2-digit' })}.` : r.why;
   return `<article class="pl-card pl-${r.lean}${r.closed ? ' pl-closed' : ''}">
     <div class="pl-top"><b>${esc(r.name)}</b><span class="pl-px">${r.price != null ? num(r.price, PULSE_DP[r.key]) : ''} ${mv}</span></div>
     <div class="pl-lean"><span>${lean}</span>${conf}</div>
     <p class="pl-why">${esc(why)}</p>
+    ${r.capped ? `<p class="pl-cap">${esc(r.capped)} <a href="/scorecard">Scorecard</a></p>` : ''}
     ${r.note ? `<p class="pl-note"><span class="pl-ai">AI check</span>${esc(r.note)}</p>` : ''}
     ${(r.reasons || []).length ? `<ul class="pl-rs">${r.reasons.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}
   </article>`;
@@ -2001,9 +2004,9 @@ function scenHTML(e, r) {
     const x = sc[d], effs = relEffects({ effects: x.effects }).map(f => relResolve(f, { since: [] }));
     const main = effs[0], rest = effs.slice(1).filter((f, i, a) => a.findIndex(g => g.label === f.label) === i);
     const lab = main ? (main.market === 'futures' ? 'NQ & ES' : main.label) : '';
-    const call = !main ? '' : main.dir === 'up' ? `${lab} ↑ likely up` : main.dir === 'down' ? `${lab} ↓ likely down` : `${lab}: either way, watch the first move`;
+    const call = !main ? '' : main.dir === 'up' ? `${lab} ↑ likely up` : main.dir === 'down' ? `${lab} ↓ likely down` : main.paused ? `${lab}: call paused, follow the first move` : `${lab}: either way, watch the first move`;
     const cond = speech || !num ? x.label : `${d === 'up' ? 'Above' : 'Below'} ${e.forecast}: ${x.label.toLowerCase()}`;
-    return `<div class="scen-r"><p class="scen-if">If ${esc(cond.charAt(0).toLowerCase() + cond.slice(1))}</p>${call ? `<p class="scen-call ${main.dir === 'up' || main.dir === 'down' ? main.dir : ''}">${esc(call)}</p>` : ''}<p class="scen-why">${esc(x.text)}${main && main.reason ? ' ' + esc(main.reason) : ''}</p>${rest.length ? `<div class="scen-more">${rest.map(f => `<span class="pill ${f.dir === 'up' ? 'up' : f.dir === 'down' ? 'down' : ''}"><b>${esc(f.label)}</b> ${f.dir === 'up' ? '↑' : f.dir === 'down' ? '↓' : '↕'}</span>`).join('')}</div>` : ''}</div>`;
+    return `<div class="scen-r"><p class="scen-if">If ${esc(cond.charAt(0).toLowerCase() + cond.slice(1))}</p>${call ? `<p class="scen-call ${main.dir === 'up' || main.dir === 'down' ? main.dir : ''}">${esc(call)}</p>` : ''}<p class="scen-why">${esc(x.text)}${main && main.reason ? ' ' + esc(main.reason) : ''}</p>${main && main.record ? `<p class="scen-rec">${esc(main.record)}</p>` : ''}${rest.length ? `<div class="scen-more">${rest.map(f => `<span class="pill ${f.dir === 'up' ? 'up' : f.dir === 'down' ? 'down' : ''}"><b>${esc(f.label)}</b> ${f.dir === 'up' ? '↑' : f.dir === 'down' ? '↓' : '↕'}</span>`).join('')}</div>` : ''}</div>`;
   };
   return `<div class="scen"><p class="hist-cap">How this could move your markets</p><div class="scen-g">${row('up')}${row('down')}</div>${num ? '<p class="scen-note faint">Close to the forecast usually means a small move that fades. The bigger the surprise, the bigger the move.</p>' : ''}</div>`;
 }
@@ -2276,7 +2279,28 @@ function gradeCell(g) {
 PAGES.scorecard = () => {
   layout(`<h1 class="page-h">Scorecard</h1>
     <p class="page-intro">Every “Likely up” and “Likely down” call in the briefing is saved the moment it’s made, with the price at that time. We check it against what price actually did an hour later and at the 4 PM New York close. Nothing is deleted, so the misses stay here too.</p>
-    <div id="scBody">${skel(3)}</div><section class="block"><div class="sec-row"><h2 class="sec">Your day bias, by confidence</h2></div><div id="scDay">${skel(2)}</div></section><section class="block"><div class="sec-row"><h2 class="sec">Live read, every 5 minutes</h2></div><div id="scPulse">${skel(2)}</div></section>`);
+    <div id="scBody">${skel(3)}</div><section class="block"><div class="sec-row"><h2 class="sec">Your day bias, by confidence</h2></div><div id="scDay">${skel(2)}</div></section><section class="block"><div class="sec-row"><h2 class="sec">Live read, every 5 minutes</h2></div><div id="scPulse">${skel(2)}</div></section><section class="block"><div class="sec-row"><h2 class="sec">Release calls</h2></div><div id="scRel">${skel(2)}</div></section><section class="block"><div class="sec-row"><h2 class="sec">Automatic adjustments</h2></div><div id="scAdj">${skel(1)}</div></section>`);
+  fill('scRel', 'the release-call record', api('relscore', 5 * 60e3), d => {
+    if (!d.ready) return `<div class="sc-empty"><p><b>Release-call tracking is being set up.</b></p></div>`;
+    if (!d.total) return `<div class="sc-empty"><p><b>Tracking starts with the next big release.</b> When CPI, jobs, PPI, retail sales or a Fed decision comes out, the site’s call for NQ, Bitcoin and EUR/USD is saved with the price and graded 15 minutes later, an hour later and at the close.</p></div>`;
+    const s = d.summary;
+    return `<div class="sc-tiles sc3">${scoreTile('After 15 minutes', s.m15, 'The first move, often a fake-out')}${scoreTile('After 1 hour', s.hour, 'The main grade for release calls')}${scoreTile('By the close', s.close)}</div>
+      <p class="sc-fine">Last ${d.days} days, ${d.total} calls. Rule calls (the “if above / if below” read, set before the number) are graded from the price at the release. Calls that follow the first move are graded from the price when they were made, so they get no credit for the move they followed.</p>
+      ${Object.keys(d.byRule).length ? `<h2 class="sec">By rule, after 1 hour</h2><div class="sc-mk">${Object.entries(d.byRule).map(([k, t]) => { const [kind, mk] = k.split('|'); return `<div class="sc-mrow"><b>${esc(kind)} → ${esc(CALL_NAME[mk] || mk)}</b><span>${hitRate(t) == null ? '—' : hitRate(t) + '%'} <small>(${t.right + t.wrong} graded)</small></span><span></span></div>`; }).join('')}</div>` : ''}
+      <div class="sc-list" role="table" aria-label="Latest release calls">
+        <div class="sc-row sc-rel sc-head" role="row"><span role="columnheader">Call</span><span role="columnheader">Release</span><span role="columnheader">15 min</span><span role="columnheader">1 hour</span><span role="columnheader">Close</span></div>
+        ${d.calls.map(c => `<div class="sc-row sc-rel" role="row">
+          <span role="cell"><span class="pill ${c.dir}"><b>${esc(c.market === 'EURUSD' ? 'EUR/USD' : c.market)}</b> ${c.dir === 'up' ? '↑ Up' : '↓ Down'}</span><small>${c.how === 'rule' ? 'Rule' : 'Followed first move'}</small></span>
+          <span role="cell" class="sc-story"><b>${esc(c.title)}</b><small>${new Date(c.time).toLocaleDateString('en-US', { timeZone: TZ, month: 'short', day: 'numeric' })}, ${fmtTime(c.time)} · ${esc(c.actual)}${c.forecast ? ` vs ${esc(c.forecast)}` : ''}</small></span>
+          <span role="cell" class="sc-g">${gradeCell(c.m15)}</span><span role="cell" class="sc-g">${gradeCell(c.hour)}</span><span role="cell" class="sc-g">${gradeCell(c.close)}</span></div>`).join('')}
+      </div>${stamp(d)}`;
+  });
+  fill('scAdj', 'the automatic adjustments', api('adjust', 5 * 60e3), d => {
+    const items = d.list || [], watch = d.watching || [];
+    return `<p class="sc-fine">The site changes its own calls when the record says so. A release rule that’s right under 40% of the time (6+ graded calls) is paused, and the site follows the market’s first real move instead. A market whose high or medium confidence is right under half the time (40+ graded Live reads, or 12+ day biases) has its confidence capped one level. Every change lifts by itself once the numbers recover, and paused rules keep being graded so they can come back.</p>
+      ${items.length ? `<div class="adj-list">${items.map(x => `<div class="adj-i"><span class="adj-a">${esc(x.area)}</span><b>${esc(x.what)}</b><p>${esc(x.why)}</p></div>`).join('')}</div>` : `<div class="sc-empty"><p><b>No adjustments right now.</b> Nothing has enough graded results that are bad enough to change.</p></div>`}
+      ${watch.length ? `<p class="sc-fine"><b>Being watched:</b> ${watch.slice(0, 6).map(x => `${esc(x.what)} (${esc(x.why)})`).join(' · ')}</p>` : ''}${stamp(d)}`;
+  });
   fill('scDay', 'the session bias record', api('dayscore', 5 * 60e3), d => {
     if (!d.ready) return `<div class="sc-empty"><p><b>Session bias tracking is being set up.</b></p></div>`;
     const graded = d.summary.right + d.summary.wrong + d.summary.flat;

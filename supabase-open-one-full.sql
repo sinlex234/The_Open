@@ -146,6 +146,34 @@ create policy "open_daybias: add now" on public.open_daybias for insert
     and day = (now() at time zone 'America/New_York')::date);
 grant select, insert on public.open_daybias to anon, authenticated;
 
+-- ---------- Release calls: the site's up/down call after each big release, saved once and graded on the Scorecard ----------
+create table if not exists public.open_relcalls (
+  id          bigint generated always as identity primary key,
+  event_key   text not null,
+  title       text not null,
+  kind        text not null,
+  country     text not null,
+  released_at timestamptz not null,
+  actual      text,
+  forecast    text,
+  surprise    text not null check (surprise in ('up', 'down')),
+  market      text not null check (market in ('NQ', 'BTC', 'EURUSD')),
+  dir         text not null check (dir in ('up', 'down')),
+  how         text not null check (how in ('rule', 'react')),
+  price       double precision,
+  called_at   timestamptz not null default now(),
+  unique (event_key, market)
+);
+alter table public.open_relcalls enable row level security;
+drop policy if exists "open_relcalls: read" on public.open_relcalls;
+create policy "open_relcalls: read" on public.open_relcalls for select using (true);
+drop policy if exists "open_relcalls: add now" on public.open_relcalls;
+-- Only fresh calls: stamped now, for a release in the last 40 minutes (no back-dating)
+create policy "open_relcalls: add now" on public.open_relcalls for insert
+  with check (called_at between now() - interval '1 minute' and now() + interval '1 minute'
+    and released_at between now() - interval '40 minutes' and now() + interval '1 minute');
+grant select, insert on public.open_relcalls to anon, authenticated;
+
 -- ---------- Plans, codes and the AI meter ----------
 create extension if not exists pgcrypto with schema extensions;
 
