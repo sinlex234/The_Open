@@ -3373,7 +3373,7 @@ async function buildRelScore() {
   const keys = Object.keys(REL_MKTS);
   const [c5, c15] = await Promise.all([
     settle(Object.fromEntries(keys.map((k) => [k, yahooChart(CALL_MKTS[k].sym, { interval: "5m", range: "1mo" })]))),
-    settle(Object.fromEntries(keys.map((k) => [k, yahooChart(CALL_MKTS[k].sym, { interval: "15m", range: "3mo" })])))
+    settle(Object.fromEntries(keys.map((k) => [k, yahooChart(CALL_MKTS[k].sym, { interval: "15m", range: "1mo" })])))
   ]);
   const tally = () => ({ right: 0, wrong: 0, flat: 0, pending: 0 });
   const sum = { m15: tally(), hour: tally(), close: tally() }, byRule = {}, byHow = { rule: tally(), react: tally() };
@@ -3479,7 +3479,7 @@ async function rhymeHistory() {
         const row = { ...r, w, theme: r.theme || tag.theme, themeLabel: tag.themeLabel, dirs: { NQ: g.NQ, BTC: g.BTC, EURUSD: g.EURUSD } };
         seen.push(row); rows.push(row);
       });
-    const charts = await settle(Object.fromEntries(RHYME_MKTS.map((k) => [k, yahooChart(CALL_MKTS[k].sym, { interval: "15m", range: "3mo" })])));
+    const charts = await settle(Object.fromEntries(RHYME_MKTS.map((k) => [k, yahooChart(CALL_MKTS[k].sym, { interval: "15m", range: "1mo" })])));
     rows.forEach((r) => {
       r.next = {};
       RHYME_MKTS.forEach((k) => {
@@ -3537,7 +3537,7 @@ async function buildDayScore() {
   let rows;
   try { rows = await sb(`open_daybias?select=day,market,call,conf,score,logged_at&day=gte.${since}&order=day.desc&limit=400`); }
   catch (e) { return { ready: false, error: String(e.message || e).slice(0, 120) }; }
-  const charts = await settle(Object.fromEntries(Object.keys(PULSE_MKTS).map((k) => [k, yahooChart(CALL_MKTS[k].sym, { interval: "15m", range: "3mo" })])));
+  const charts = await settle(Object.fromEntries(Object.keys(PULSE_MKTS).map((k) => [k, yahooChart(CALL_MKTS[k].sym, { interval: "15m", range: "1mo" })])));
   const tally = () => ({ right: 0, wrong: 0, flat: 0, pending: 0 });
   const sum = tally(), byConf = { high: tally(), medium: tally(), low: tally() }, by = {}, byMkConf = {};
   const closeOf = (start) => { const d = ny(start); return start + (960 - d.mins) * 6e4; };
