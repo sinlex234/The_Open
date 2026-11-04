@@ -174,6 +174,29 @@ create policy "open_relcalls: add now" on public.open_relcalls for insert
     and released_at between now() - interval '40 minutes' and now() + interval '1 minute');
 grant select, insert on public.open_relcalls to anon, authenticated;
 
+-- ---------- Headline history for "This rhymes with…": every big story saved once, with its time ----------
+create table if not exists public.open_heads (
+  id           bigint generated always as identity primary key,
+  story_id     text not null unique,
+  headline     text not null,
+  source       text,
+  theme        text,
+  impact       text check (impact in ('high', 'medium')),
+  outlets      int,
+  published_at timestamptz not null,
+  seen_at      timestamptz not null default now()
+);
+alter table public.open_heads enable row level security;
+drop policy if exists "open_heads: read" on public.open_heads;
+create policy "open_heads: read" on public.open_heads for select using (true);
+drop policy if exists "open_heads: add now" on public.open_heads;
+-- Only fresh stories: saved now, published in the last 2 hours (no back-dating)
+create policy "open_heads: add now" on public.open_heads for insert
+  with check (seen_at between now() - interval '1 minute' and now() + interval '1 minute'
+    and published_at between now() - interval '2 hours' and now() + interval '5 minutes');
+grant select, insert on public.open_heads to anon, authenticated;
+create index if not exists open_heads_published on public.open_heads (published_at desc);
+
 -- ---------- Plans, codes and the AI meter ----------
 create extension if not exists pgcrypto with schema extensions;
 

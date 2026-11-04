@@ -545,8 +545,8 @@ function storyItem(i, { why = true, explain = false, fy: showFy = true, mark = n
     ${showWhy ? `<div class="why">${esc(i.why)}</div>` : ''}
     ${fy ? `<div class="fy"><b>For you</b>${esc(fy)}</div>` : ''}
     <div class="meta">${i.breaking ? '<span class="brk">Breaking</span>' : ''}<span class="imp ${esc(i.impact || 'low')}">${i.impact === 'high' ? 'Big story' : i.impact === 'medium' ? 'Notable' : 'Minor'}</span><span>${esc(SECTION_NAMES[i.section] || i.themeLabel || '')}</span><span>${esc(i.source)}${(i.outlets || i.count) > 1 ? ` and ${(i.outlets || i.count) - 1} more` : i.impact === 'high' && i.confirmed === false ? ' only <span class="unconf" title="Only one outlet has this so far">not yet confirmed</span>' : ''}</span><span>${ago(i.time)}</span>${reactTxt(i.reaction)}
-      ${explain ? `<button class="linkbtn wi-x" data-x="${esc(i.id)}" aria-expanded="false">Explain this</button>` : ''}</div>
-    ${explain ? `<div class="wi-explain" id="x-${esc(i.id)}" hidden></div>` : ''}</li>`;
+      ${explain ? `<button class="linkbtn wi-x" data-x="${esc(i.id)}" aria-expanded="false">Explain this</button>` : ''}${rhymeBtn(i)}</div>
+    ${explain ? `<div class="wi-explain" id="x-${esc(i.id)}" hidden></div>` : ''}${rhymeBox(i)}</li>`;
 }
 function eventRow(e, mini = false, showFy = true) {
   const past = e.time < Date.now() - 5 * 60e3, soon = !past && e.time - Date.now() < 60 * 60e3;
@@ -564,6 +564,36 @@ function eventRow(e, mini = false, showFy = true) {
     <div class="body">${body}</div></details>`;
 }
 function qcell(r, label) { return `<div class="qcell"><span><b>${esc(label || r.label || r.short)}</b>${r.name && label ? `<small>${esc(r.name)}</small>` : ''}</span><span class="r">${r.unit === '%' ? num(r.price, 2) + '%' : num(r.price, r.dp)}<br>${chg(r.pct ?? r.changePct)}</span></div>`; }
+
+// ---------- "This rhymes with…": the last times a headline like this showed up, and what price did next ----------
+const RHYME_OF = { futures: 'NQ', stocks: 'NQ', options: 'NQ', crypto: 'BTC', memes: 'BTC', forex: 'EURUSD' };
+const rhymeMks = () => { const k = [...new Set(myMarkets().map(m => RHYME_OF[m]).filter(Boolean))]; return (k.length ? k : ['NQ']).slice(0, 2); };
+const rhymeOk = i => i && i.theme && (i.impact === 'high' || i.impact === 'medium') && !i.noise;
+const rhymeBtn = i => rhymeOk(i) ? `<button class="linkbtn rh-x" data-rh="${esc(i.id)}" data-h="${esc(i.title)}" aria-expanded="false">What happened last time</button>` : '';
+const rhymeBox = i => rhymeOk(i) ? `<div class="rh-box" id="rh-${esc(i.id)}" hidden></div>` : '';
+const RH_NAME = { NQ: 'NQ', BTC: 'Bitcoin', EURUSD: 'EUR/USD' };
+function rhymeMove(v, unit) { const sign = v > 0 ? '+' : v < 0 ? '−' : ''; const a = Math.abs(v); return unit === '$' ? `${sign}$${num(a, 0)}` : unit === 'pips' ? `${sign}${num(a, 0)} pips` : `${sign}${num(a, a >= 100 ? 0 : 1)} pts`; }
+function rhymeHTML(d) {
+  const mk = Object.entries(d.markets || {});
+  const blocks = mk.map(([k, x]) => {
+    if (x.n < 4) return `<div class="rh-m"><p class="rh-h">${esc(RH_NAME[k])}</p><p class="rh-thin">Only ${x.n} similar headline${x.n === 1 ? '' : 's'} so far. This fills in as the site saves more history.</p></div>`;
+    const lean = x.flat * 2 >= x.n ? '' : x.down >= 3 && x.down >= x.up * 2 ? 'down' : x.up >= 3 && x.up >= x.down * 2 ? 'up' : '';
+    const head = x.flat * 2 >= x.n ? `${RH_NAME[k]} barely moved ${x.flat} of ${x.n} times` : lean ? `${RH_NAME[k]} ${lean === 'down' ? 'fell' : 'rose'} ${lean === 'down' ? x.down : x.up} of ${x.n} times` : `${RH_NAME[k]} went both ways: up ${x.up}, down ${x.down} of ${x.n}`;
+    return `<div class="rh-m"><p class="rh-h ${lean}">${esc(head)} <span>in the next hour</span></p>
+      <p class="rh-sub">Typical move ${esc(rhymeMove(x.median, x.unit))}${x.flat ? ` · ${x.flat} barely moved` : ''}</p>
+      <ul class="rh-list">${x.examples.map(e => `<li><span class="rh-d">${new Date(e.time).toLocaleDateString('en-US', { timeZone: TZ, month: 'short', day: 'numeric' })}</span><span class="rh-t">${esc(e.headline)} <small>${esc(e.source || '')}</small></span><span class="rh-v ${e.way === 'up' ? 'up' : e.way === 'down' ? 'down' : ''}">${esc(rhymeMove(e.move, x.unit))}</span></li>`).join('')}</ul></div>`;
+  }).join('');
+  return `<p class="hist-cap">This rhymes with…</p>${blocks}<p class="rh-foot">Past headlines on the same topic${d.theme ? ` (${esc(d.theme.toLowerCase())})` : ''} read the same way, from the last ${d.days} days. What happened before, not a promise. Small samples can mislead.</p>`;
+}
+document.addEventListener('click', ev => {
+  const b = ev.target.closest('.rh-x'); if (!b) return;
+  ev.preventDefault();
+  const box = document.getElementById('rh-' + b.dataset.rh); if (!box) return;
+  if (!box.hidden) { box.hidden = true; b.textContent = 'What happened last time'; b.setAttribute('aria-expanded', 'false'); return; }
+  box.hidden = false; b.textContent = 'Hide'; b.setAttribute('aria-expanded', 'true');
+  box.innerHTML = skel(2);
+  api('rhyme?' + new URLSearchParams({ id: b.dataset.rh, h: b.dataset.h, mk: rhymeMks().join(',') }).toString(), 15 * 60e3).then(d => { box.innerHTML = rhymeHTML(d); }).catch(e => { box.innerHTML = errBox('past headlines', e.message); });
+});
 
 // Explain-this panels (written by AI when available)
 const explainOpen = new Set();
@@ -1329,7 +1359,7 @@ function nrChips(i) { const d = i.dirs || {}; return nrMarkets().filter(k => d[k
 // Top stories first (one lead, two beside it), then everything else by time. Each row: time, headline, one quiet line.
 function nrMeta(i, explain) {
   const src = `${esc(i.source)}${(i.outlets || i.count) > 1 ? ` +${(i.outlets || i.count) - 1}` : i.confirmed === false && i.impact === 'high' ? ' only' : ''}`;
-  return `<p class="nr-meta">${i.breaking ? '<span class="nr-brk">Breaking</span>' : ''}${nrChips(i)}<span>${src}</span><span>${esc(SECTION_NAMES[i.section] || i.themeLabel || '')}</span>${reactTxt(i.reaction)}${explain ? `<button class="linkbtn wi-x" data-x="${esc(i.id)}" aria-expanded="false">Explain this</button>` : ''}${airBtn(i.title, true)}</p>${explain ? `<div class="wi-explain" id="x-${esc(i.id)}" hidden></div>` : ''}`;
+  return `<p class="nr-meta">${i.breaking ? '<span class="nr-brk">Breaking</span>' : ''}${nrChips(i)}<span>${src}</span><span>${esc(SECTION_NAMES[i.section] || i.themeLabel || '')}</span>${reactTxt(i.reaction)}${explain ? `<button class="linkbtn wi-x" data-x="${esc(i.id)}" aria-expanded="false">Explain this</button>` : ''}${rhymeBtn(i)}${airBtn(i.title, true)}</p>${explain ? `<div class="wi-explain" id="x-${esc(i.id)}" hidden></div>` : ''}${rhymeBox(i)}`;
 }
 function newsroomHTML(items, ranked, mineFirst = true, cap = 10) {
   if (!items.length) return '<p class="empty">No stories match those filters right now.</p>';

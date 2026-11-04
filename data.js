@@ -1321,6 +1321,7 @@ async function build8(section = "all") {
     h.noise = NOISE_RE.test(h.title) || (!MEGA.test(h.title) && (g.r.skip === "a single company's results" || (!!g.r.skip && h.impact !== "high")));
   });
   items = items.slice(0, 80);
+  if (section === "all") await logHeads(items).catch(() => {});
   const keys = [...new Set(items.map(reactKey))];
   const charts = await settle(Object.fromEntries(keys.map((k) => [k, yahooChart(REACT[k].sym, { interval: "5m", range: "2d" })])));
   items.forEach((h) => {
@@ -3444,6 +3445,76 @@ function adjustEffects(effects, kind) {
     return e;
   });
 }
+
+// ---------- "This rhymes with…": past headlines like this one, and what NQ / Bitcoin / EUR/USD did in the next hour ----------
+// History = every big headline the site has saved (open_heads) plus every headline it made a call on (open_calls).
+// Matching: same topic, and either the same read for that market or clearly similar wording.
+var RHYME_MKTS = ["NQ", "BTC", "EURUSD"];
+var _headsLogged = new Set();
+async function logHeads(items) {
+  const now = Date.now();
+  const rows = items.filter((h) => (h.impact === "high" || h.impact === "medium") && h.theme && !h.noise && h.time && now - h.time < 90 * 6e4 && now - h.time > -6e4 && !_headsLogged.has(h.id))
+    .slice(0, 25).map((h) => ({ story_id: String(h.id).slice(0, 120), headline: String(h.title).slice(0, 300), source: String(h.source || "").slice(0, 120), theme: h.theme, impact: h.impact, outlets: h.outlets || 1, published_at: new Date(h.time).toISOString() }));
+  if (!rows.length) return "none";
+  await sb("open_heads?on_conflict=story_id", { method: "POST", body: rows, prefer: "resolution=ignore-duplicates,return=minimal" });
+  rows.forEach((r) => _headsLogged.add(r.story_id));
+  return "logged " + rows.length;
+}
+async function rhymeHistory() {
+  return memo("rhymeHist", 15 * 6e4, async () => {
+    const since = new Date(Date.now() - 60 * 864e5).toISOString();
+    const [heads, calls] = await Promise.all([
+      sb(`open_heads?select=story_id,headline,source,theme,published_at&published_at=gte.${since}&order=published_at.desc&limit=3000`).catch(() => []),
+      sb(`open_calls?select=story_id,headline,source,called_at&called_at=gte.${since}&order=called_at.desc&limit=2000`).catch(() => [])
+    ]);
+    const rows = [], seen = [];
+    heads.map((r) => ({ id: r.story_id, title: r.headline, source: r.source, theme: r.theme, t: Date.parse(r.published_at) }))
+      .concat(calls.map((r) => ({ id: r.story_id, title: r.headline, source: r.source, theme: null, t: Date.parse(r.called_at) })))
+      .forEach((r) => {
+        if (!r.title || !r.t) return;
+        const w = norm(r.title);
+        // the same story saved twice (or by both tables) counts once
+        if (seen.some((x) => Math.abs(x.t - r.t) < 6 * 36e5 && similar(x.w, w) >= 0.6)) return;
+        const tag = tagHeadline({ title: r.title, summary: "" }), g = headlineDirs(r.title);
+        const row = { ...r, w, theme: r.theme || tag.theme, themeLabel: tag.themeLabel, dirs: { NQ: g.NQ, BTC: g.BTC, EURUSD: g.EURUSD } };
+        seen.push(row); rows.push(row);
+      });
+    const charts = await settle(Object.fromEntries(RHYME_MKTS.map((k) => [k, yahooChart(CALL_MKTS[k].sym, { interval: "15m", range: "3mo" })])));
+    rows.forEach((r) => {
+      r.next = {};
+      RHYME_MKTS.forEach((k) => {
+        const c = CALL_MKTS[k], bars = charts.res[k] && charts.res[k].bars;
+        const g = grade(bars, r.t, (x) => x + 36e5, { ...c, flat: c.flat / 2 }, "up");
+        if (g.result !== "pending") r.next[k] = { move: g.moved, pct: g.pct, way: g.result === "right" ? "up" : g.result === "wrong" ? "down" : "flat", unit: c.unit };
+      });
+    });
+    return rows;
+  });
+}
+async function buildRhyme(q) {
+  const id = String(q.id || "").slice(0, 120), mks = String(q.mk || "NQ").split(",").filter((m) => RHYME_MKTS.includes(m)).slice(0, 2);
+  let title = String(q.h || "").slice(0, 300);
+  let target = null;
+  try { const w = await memo("w8all", 6e4, () => build8("all")); target = (w.items || []).find((x) => x.id === id) || null; } catch {}
+  if (target) title = target.title;
+  if (!title) throw new Error("No headline given");
+  const tag = target || tagHeadline({ title, summary: "" }), g = headlineDirs(title), tw = norm(title), tt = target && target.time || Date.now();
+  const hist = await rhymeHistory();
+  const out = {};
+  mks.forEach((mk) => {
+    const dir = g[mk] || 0;
+    const cands = hist.filter((r) => r.id !== id && r.next[mk] && !(Math.abs(r.t - tt) < 48 * 36e5 && similar(r.w, tw) >= 0.6)).map((r) => {
+      const sim = similar(r.w, tw), sameTheme = !!tag.theme && r.theme === tag.theme, sameDir = !!dir && r.dirs[mk] === dir;
+      const ok = sameTheme ? (sameDir || sim >= 0.34 || (!dir && !r.dirs[mk] && sim >= 0.2)) : sim >= 0.5;
+      return ok ? { r, rank: sim + (sameDir ? 0.4 : 0) + (sameTheme ? 0.2 : 0) } : null;
+    }).filter(Boolean).sort((a, b) => b.rank - a.rank).slice(0, 12).map((x) => x.r);
+    const n = cands.length, up = cands.filter((r) => r.next[mk].way === "up").length, down = cands.filter((r) => r.next[mk].way === "down").length;
+    const moves = cands.map((r) => r.next[mk].move).sort((a, b) => a - b), med = n ? moves[Math.floor(n / 2)] : null;
+    out[mk] = { n, up, down, flat: n - up - down, median: med, unit: CALL_MKTS[mk].unit, read: dir > 0 ? "up" : dir < 0 ? "down" : null,
+      examples: cands.slice(0, 5).map((r) => ({ headline: r.title, source: r.source, time: r.t, move: r.next[mk].move, way: r.next[mk].way })) };
+  });
+  return { title, theme: tag.themeLabel || null, markets: out, history: hist.length, days: 60, updated: Date.now() };
+}
 // ---------- Session bias record: the "Your day" call, logged once at 9:30 New York and graded at the 4 PM close ----------
 var DAY_LOG_MKTS = { futures: "NQ", crypto: "BTC", forex: "EURUSD" };
 async function logDayBias(now, reads) {
@@ -3690,6 +3761,7 @@ var ROUTES = {
   results: [(q) => build16(q.date), 5],
   relscore: [() => buildRelScore(), 300],
   adjust: [() => memo("adjust", 10 * 6e4, computeAdjust).then((v) => { _adj.v = v; _adj.t = Date.now(); return v; }), 300],
+  rhyme: [(q) => buildRhyme(q), 600],
   hist: [(q) => buildHist(String(q.k || "").slice(0, 80)), 3600],
   memedesk: [(q) => build14(q), hasAI() ? 600 : 180],
   explain: [(q) => build12(q), 86400],
