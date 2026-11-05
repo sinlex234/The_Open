@@ -3568,7 +3568,7 @@ async function buildThreads() {
   const now = Date.now();
   const charts = await settle(Object.fromEntries(["NQ", "BTC", "EURUSD"].map((k) => [k, yahooChart(CALL_MKTS[k].sym, { interval: "15m", range: "1mo" })])));
   const out = findThreads(pool).map((th) => {
-    const m = th.members, last = m[0], first = m[m.length - 1];
+    const m = th.members, last = m[0], run = m.filter((h) => now - h.t < 72 * 36e5), first = run.length >= 3 ? run[run.length - 1] : m[m.length - 1];
     const themeDef = THEMES.find((x) => x.id === th.theme), mk = TH_MK[(themeDef && themeDef.markets || [])[0]] || "NQ";
     const recent3h = m.filter((h) => now - h.t < 3 * 36e5).length, recent24 = m.filter((h) => now - h.t < 24 * 36e5).length;
     const lastMoves = m.filter((h) => h.next && h.next[mk]).slice(0, 4).map((h) => h.next[mk].way);
@@ -3577,7 +3577,7 @@ async function buildThreads() {
     else if (!recent24) { status = "cooling"; statusTxt = `Cooling: nothing new since ${new Date(last.t).toLocaleDateString("en-US", { timeZone: "America/New_York", weekday: "short" })}`; }
     if (lastMoves.length >= 4 && lastMoves.every((w) => w === "flat")) { status = status === "hot" ? "hot" : "priced"; statusTxt += `. The last 4 headlines barely moved ${mk === "EURUSD" ? "EUR/USD" : mk === "BTC" ? "Bitcoin" : "NQ"}: likely priced in`; }
     const c = CALL_MKTS[mk], bars = charts.res[mk] && charts.res[mk].bars || [];
-    const p0 = priceAt(bars, first.t), p1 = bars.length ? bars[bars.length - 1].c : null;
+    const p0 = bars.length && first.t >= bars[0].t ? priceAt(bars, first.t) : null, p1 = bars.length ? bars[bars.length - 1].c : null;
     const since = p0 != null && p1 != null ? { mk, change: c.pip ? Math.round((p1 - p0) / c.pip) : +(p1 - p0).toFixed(c.dp), unit: c.unit, pct: +((p1 - p0) / p0 * 100).toFixed(2) } : null;
     const title = TH_TITLE[th.keys[0]] || th.keys.slice(0, 2).map(cap1).join(" and ");
     const id = th.keys[0];
@@ -3591,20 +3591,20 @@ async function buildThread(id) {
   const th = findThreads(pool).find((t) => t.keys[0] === id);
   if (!th) return { id, missing: true };
   const themeDef = THEMES.find((x) => x.id === th.theme), mk = TH_MK[(themeDef && themeDef.markets || [])[0]] || "NQ";
-  const m = th.members.slice(0, 40), first = th.members[th.members.length - 1];
+  const now = Date.now(), m = th.members.slice(0, 40), run = th.members.filter((h) => now - h.t < 72 * 36e5), first = run.length >= 3 ? run[run.length - 1] : th.members[th.members.length - 1];
   const c = CALL_MKTS[mk], ch = await yahooChart(c.sym, { interval: "15m", range: "1mo" }).catch(() => null);
   const bars = (ch && ch.bars || []).filter((b) => b.t >= first.t - 6 * 36e5);
   const step = Math.max(1, Math.ceil(bars.length / 160));
   const series = bars.filter((_, i) => i % step === 0 || i === bars.length - 1).map((b) => [b.t, +b.c.toFixed(c.dp)]);
   const items = m.map((h) => ({ id: h.id, title: h.title, source: h.source, link: h.link || null, t: h.t, next: h.next && h.next[mk] || null }));
-  const days = new Set(items.map((x) => new Date(x.t).toDateString())).size;
-  const p0 = priceAt(bars, first.t), p1 = bars.length ? bars[bars.length - 1].c : null;
+  const days = Math.max(1, Math.ceil((th.members[0].t - th.members[th.members.length - 1].t) / 864e5));
+  const p0 = bars.length && first.t >= bars[0].t ? priceAt(bars, first.t) : null, p1 = bars.length ? bars[bars.length - 1].c : null;
   const name = mk === "EURUSD" ? "EUR/USD" : mk === "BTC" ? "Bitcoin" : "NQ";
   const moved = items.filter((x) => x.next && x.next.way !== "flat").length, graded = items.filter((x) => x.next).length;
   const summary = [
-    `${th.members.length} headlines over ${days} day${days === 1 ? "" : "s"}. It started with “${first.title}” (${first.source}).`,
+    `${th.members.length} headlines over ${days} day${days === 1 ? "" : "s"}. This round started with “${first.title}” (${first.source}).`,
     `Latest: “${m[0].title}” (${m[0].source}).`,
-    p0 != null && p1 != null ? `${name} is ${p1 >= p0 ? "up" : "down"} ${c.pip ? Math.abs(Math.round((p1 - p0) / c.pip)) + " pips" : c.unit === "$" ? "$" + Math.abs(Math.round(p1 - p0)).toLocaleString("en-US") : Math.abs(p1 - p0).toFixed(1) + " pts"} since the story began.` : "",
+    p0 != null && p1 != null ? `${name} is ${p1 >= p0 ? "up" : "down"} ${c.pip ? Math.abs(Math.round((p1 - p0) / c.pip)) + " pips" : c.unit === "$" ? "$" + Math.abs(Math.round(p1 - p0)).toLocaleString("en-US") : Math.abs(p1 - p0).toFixed(1) + " pts"} since this round began.` : "",
     graded >= 3 ? `${moved} of ${graded} headlines moved ${name} noticeably in the hour after.` : ""
   ].filter(Boolean).join(" ");
   return { id, title: TH_TITLE[th.keys[0]] || th.keys.slice(0, 2).map(cap1).join(" and "), kicker: themeDef ? themeDef.label : th.theme, mk, name, unit: c.unit, dp: c.dp, summary, items, series, updated: Date.now() };

@@ -2910,7 +2910,7 @@ function thToggle(id) {
   store.set('thFollow', f.some(x => x.id === id) ? f.filter(x => x.id !== id) : [...f, { id, title: t ? t.title : id, last: t ? t.last : Date.now() }].slice(-12));
   document.querySelectorAll(`[data-thf="${CSS.escape(id)}"]`).forEach(b => { const on = thFollowing(id); b.classList.toggle('on', on); b.textContent = on ? '★ Following' : '☆ Follow'; b.setAttribute('aria-pressed', on); });
 }
-const thMoveTxt = x => x ? `${x.mk === 'EURUSD' ? 'EUR/USD' : x.mk === 'BTC' ? 'Bitcoin' : 'NQ'} ${rhymeMove(x.change, x.unit)} since it began` : '';
+const thMoveTxt = x => x ? `${x.mk === 'EURUSD' ? 'EUR/USD' : x.mk === 'BTC' ? 'Bitcoin' : 'NQ'} ${rhymeMove(x.change, x.unit)} since this round began` : '';
 async function loadThreads() {
   try { const d = await api('threads', 5 * 60e3); TH.list = d.threads || []; TH.byStory = {}; TH.list.forEach(t => (t.live || []).forEach(id => { if (!TH.byStory[id]) TH.byStory[id] = t; })); TH.loaded = true; } catch {}
   renderThreadStrip(); markThreads();
