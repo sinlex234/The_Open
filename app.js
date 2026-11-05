@@ -811,6 +811,36 @@ function ictPhase(ph, call, mk) {
   return ph[2];
 }
 const ICT_PHASE = [[570, 600, ''], [600, 660, ''], [660, 720, 'Moves slow down into lunch'], [480, 510, 'Before the data: often a fake move'], [510, 540, 'Data reaction'], [540, 570, 'Pre-open positioning'], [720, 810, 'Lunch: usually quiet'], [810, 870, 'Afternoon session starts'], [870, 960, 'Into the close'], [120, 180, 'London open: Asia’s range often gets run'], [180, 300, 'London move']];
+// Highlight the half hour you're in; once the session is over, show what happened and what the plan would have done
+const nyNowMins = () => { const p = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: 'numeric', hourCycle: 'h23', weekday: 'short' }).formatToParts(new Date()); const g = k => (p.find(x => x.type === k) || {}).value; return { m: +g('hour') * 60 + +g('minute'), dow: g('weekday') }; };
+function dpNow(el) {
+  if (!el || !el.isConnected) return;
+  const from = +el.dataset.from, to = +el.dataset.to, { m, dow } = nyNowMins(), wk = dow === 'Sat' || dow === 'Sun';
+  const crypto = el.dataset.mk === 'crypto' || el.dataset.mk === 'memes';
+  const inSess = (!wk || crypto) && m >= from && m < to;
+  el.querySelectorAll('.dp-tl li').forEach(li => { const a = +li.dataset.s, b = +li.dataset.e; li.classList.toggle('now', inSess && m >= a && m < b); li.classList.toggle('done', inSess && m >= b); });
+  const st = el.querySelector('.dp-state'), cur = el.querySelector('.dp-tl li.now');
+  const left = (a) => { const d = (a - m + 1440) % 1440; return d >= 60 ? `${Math.floor(d / 60)}h ${d % 60}m` : `${d} min`; };
+  if (st) st.textContent = inSess ? `· Now: ${cur ? cur.querySelector('.dp-tt').childNodes[0].textContent : ''}` : (!wk || crypto) && m < from ? `· Starts in ${left(from)}` : '· Off market';
+  el.classList.toggle('off', !inSess);
+  const rc = el.querySelector('.dp-recap');
+  if (!inSess && rc && !rc.dataset.done) {
+    rc.dataset.done = 1; rc.hidden = false; rc.innerHTML = skel(2);
+    const strat = el.dataset.ict === '1' ? 1 : 0;
+    api('recap?' + new URLSearchParams({ m: el.dataset.tk, from, to, call: el.dataset.call, ict: strat }).toString(), 10 * 60e3).then(r => {
+      if (!r.ready) { rc.innerHTML = `<p class="muted small">${esc(r.why || 'No finished session yet.')}</p>`; return; }
+      const day = r.today ? 'Today’s session' : new Date(r.date + 'T12:00:00Z').toLocaleDateString('en-US', { timeZone: 'UTC', weekday: 'long' }) + '’s session';
+      rc.innerHTML = `<p class="dp-k">Off market · ${esc(day)} recap</p>
+        <p class="rc-v ${r.result === 'right' ? 'up' : r.result === 'wrong' ? 'down' : ''}">${esc(r.verdict)}</p>
+        <p class="rc-s">${esc(r.summary.join(' '))}</p>
+        <p class="dp-k">What the plan would have done</p>
+        ${r.plan.map(x => `<p class="rc-p">${esc(el.dataset.ict === '1' ? ictWords(x, el.dataset.mk) : x)}</p>`).join('')}
+        ${r.ai ? `<p class="rc-ai"><span class="pl-ai">AI review</span>${esc(r.ai)}</p>` : ''}
+        <p class="dp-tfoot">From 5-minute prices that can lag up to 15 minutes. Hindsight, for learning, not a promise about the next session.</p>`;
+    }).catch(() => { rc.innerHTML = ''; rc.hidden = true; });
+  }
+}
+setInterval(() => document.querySelectorAll('.dp-when[data-done]').forEach(dpNow), 30e3);
 function fillDayWhen() {
   document.querySelectorAll('.dp-when[data-tk]:not([data-done])').forEach(el => {
     el.dataset.done = '1';
@@ -834,9 +864,10 @@ function fillDayWhen() {
         const r = ranked.indexOf(x);
         return r <= 1 ? 'Still busy: follow-through or a pullback' : x.typical >= mx * 0.6 ? 'Moving, but less than the open' : 'Usually quiet';
       };
-      el.innerHTML = `<span class="dp-k">When to expect it · your session</span>
-        <ol class="dp-tl">${inS.map(x => `<li class="${x === best ? 'best' : ''}"><span class="dp-tt">${minsTxt(x.start)}–${minsTxt(x.end)}</span><span class="dp-bar"><i style="width:${Math.round((x.typical || 0) / mx * 100)}%"></i></span><span class="dp-sz">${x.typical ? `~${unit}${num(x.typical, 0)}${u2}` : ''}</span><span class="dp-tx">${esc(label(x))}</span></li>`).join('')}</ol>
-        <span class="dp-tfoot">Typical size of each half hour over the last month. Times are New York time.</span>`;
+      el.innerHTML = `<span class="dp-k">When to expect it · your session <b class="dp-state"></b></span>
+        <ol class="dp-tl">${inS.map(x => `<li class="${x === best ? 'best' : ''}" data-s="${x.start}" data-e="${x.end}"><span class="dp-tt">${minsTxt(x.start)}–${minsTxt(x.end)}${x === best ? '<em class="dp-likely">Most likely</em>' : ''}</span><span class="dp-bar"><i style="width:${Math.round((x.typical || 0) / mx * 100)}%"></i></span><span class="dp-sz">${x.typical ? `~${unit}${num(x.typical, 0)}${u2}` : ''}</span><span class="dp-tx">${esc(label(x))}</span></li>`).join('')}</ol>
+        <span class="dp-tfoot">Typical size of each half hour over the last month. Times are New York time.</span><div class="dp-recap" hidden></div>`;
+      dpNow(el);
     }).catch(() => { const wt = el.querySelector('.dp-wt'); if (wt) wt.textContent = `The first hour of your session, ${minsTxt(from)}–${minsTxt(from + 60)} ET, is usually the most active.`; });
   });
 }
@@ -2951,13 +2982,28 @@ async function openThread(id) {
     b.innerHTML = `<p class="th-kick">${esc(d.kicker)}</p>
       <div class="th-head"><h2 class="lsr-h">${esc(d.title)}</h2><button type="button" class="btn-ghost sm th-fol${on ? ' on' : ''}" data-thf="${esc(id)}" aria-pressed="${on}">${on ? '★ Following' : '☆ Follow'}</button></div>
       <p class="th-sum">${esc(d.summary)}</p>
+      ${thLeanHTML(d)}
+      <div class="th-ai"><button type="button" class="ai-btn" id="thAiBtn">${SPARK}AI read on this story</button><div id="thAiOut"></div></div>
       ${thChart(d)}
       <p class="hist-cap">Timeline</p>
       <ol class="th-tl">${d.items.map(x => `<li><span class="th-when">${new Date(x.t).toLocaleDateString('en-US', { timeZone: TZ, month: 'short', day: 'numeric' })}<small>${fmtTime(x.t)}</small></span><span class="th-it">${x.link ? `<a href="${esc(x.link)}" target="_blank" rel="noopener">${esc(x.title)}</a>` : esc(x.title)}<small>${esc(x.source || '')}</small></span><span class="th-mv ${x.next ? (x.next.way === 'up' ? 'up' : x.next.way === 'down' ? 'down' : '') : ''}">${x.next ? esc(rhymeMove(x.next.move, x.next.unit)) : ''}</span></li>`).join('')}</ol>
       <p class="rh-foot">Grouped automatically from the headlines the site has saved. The number on the right is how ${esc(d.name)} moved in the hour after each headline. Follow a story to get an alert when a new headline lands.</p>`;
+    const ab = $('#thAiBtn'); if (ab) ab.onclick = async () => {
+      const out = $('#thAiOut'); ab.disabled = true; out.innerHTML = skel(2);
+      try { const x = await postAI('threadai', { id, markets: airMarkets() }); out.innerHTML = `${x.stage ? `<p class="th-stage">Stage: <b>${esc(x.stage)}</b></p>` : ''}${airResultHTML(x, d.title)}`; }
+      catch (e) { out.innerHTML = upsellHTML(e.why, /switched on/.test(e.message) ? 'AI reads aren’t switched on yet. The story read above is from the site’s rules.' : e.message); }
+      ab.disabled = false;
+    };
     // remember that the reader has seen the latest chapter
     const f = thFollow(); const me2 = f.find(x => x.id === id); if (me2 && d.items[0]) { me2.last = Math.max(me2.last || 0, d.items[0].t); store.set('thFollow', f); }
   } catch (e) { const b = $('#thBody'); if (b) b.innerHTML = errBox('this story', e.message); }
+}
+function thLeanHTML(d) {
+  const L = d.lean || {}, mks = [...new Set([d.mk, ...rhymeMks()])].slice(0, 2);
+  const rows = mks.map(k => { const x = L[k]; if (!x) return ''; const nm = RH_NAME[k];
+    const head = x.dir === 'up' ? `${nm} ↑ leaning up` : x.dir === 'down' ? `${nm} ↓ leaning down` : `${nm}: no clear lean`;
+    return `<div class="th-lean-r"><span class="pill ${x.dir || ''}"><b>${esc(head)}</b></span><span class="br">${x.up} of the last ${x.n} headlines read up, ${x.down} read down${d.mk === k && d.items.length ? '' : ''}.</span></div>`; }).join('');
+  return rows ? `<div class="th-lean"><p class="hist-cap">Story read</p>${rows}<p class="rh-foot">From the site’s headline reader, newest headlines counting most. A lean, not a promise.</p></div>` : '';
 }
 function thChart(d) {
   const pts = d.series || []; if (pts.length < 5) return '';

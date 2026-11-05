@@ -3607,7 +3607,115 @@ async function buildThread(id) {
     p0 != null && p1 != null ? `${name} is ${p1 >= p0 ? "up" : "down"} ${c.pip ? Math.abs(Math.round((p1 - p0) / c.pip)) + " pips" : c.unit === "$" ? "$" + Math.abs(Math.round(p1 - p0)).toLocaleString("en-US") : Math.abs(p1 - p0).toFixed(1) + " pts"} since this round began.` : "",
     graded >= 3 ? `${moved} of ${graded} headlines moved ${name} noticeably in the hour after.` : ""
   ].filter(Boolean).join(" ");
-  return { id, title: TH_TITLE[th.keys[0]] || th.keys.slice(0, 2).map(cap1).join(" and "), kicker: themeDef ? themeDef.label : th.theme, mk, name, unit: c.unit, dp: c.dp, summary, items, series, updated: Date.now() };
+  return { lean: storyLean(th.members), id, title: TH_TITLE[th.keys[0]] || th.keys.slice(0, 2).map(cap1).join(" and "), kicker: themeDef ? themeDef.label : th.theme, mk, name, unit: c.unit, dp: c.dp, summary, items, series, updated: Date.now() };
+}
+
+// ---------- Session recap: once your trading window is over, what happened and what the plan would have done ----------
+var RECAP_SYM = { NQ: { sym: "NQ=F", dp: 2, unit: "pts" }, ES: { sym: "ES=F", dp: 2, unit: "pts" }, BTC: { sym: "BTC-USD", dp: 0, unit: "$" }, EURUSD: { sym: "EURUSD=X", dp: 5, unit: "pips", pip: 1e-4 } };
+async function buildRecap(q) {
+  const key = RECAP_SYM[q.m] ? q.m : "NQ", C = RECAP_SYM[key];
+  const from = Math.max(0, Math.min(1439, +q.from || 570)), to = Math.max(from + 15, Math.min(1440, +q.to || 690));
+  const ict = q.ict === "1", now = Date.now(), n = ny(now);
+  const ch = await yahooChart(C.sym, { interval: "5m", range: "5d" });
+  const bars = (ch && ch.bars || []).map((b) => ({ ...b, d: ny(b.t).date, m: ny(b.t).mins }));
+  // the latest session that has finished (today if it's over, otherwise the last trading day before)
+  const dates = [...new Set(bars.map((b) => b.d))].sort();
+  let D = null;
+  for (let i = dates.length - 1; i >= 0; i--) { const d = dates[i]; if (d === n.date && n.mins < to) continue; if (bars.some((b) => b.d === d && b.m >= from && b.m < to)) { D = d; break; } }
+  if (!D) return { ready: false, why: "No finished session in the price history yet." };
+  const sess = bars.filter((b) => b.d === D && b.m >= from && b.m < to);
+  const prevD = dates[dates.indexOf(D) - 1];
+  const prevRth = bars.filter((b) => b.d === prevD && b.m >= 570 && b.m < 960);
+  const overnight = bars.filter((b) => (b.d === prevD && b.m >= 1080) || (b.d === D && b.m < from));
+  const fmt = (v) => C.pip ? v.toFixed(4) : v.toLocaleString("en-US", { maximumFractionDigits: C.dp === 0 ? 0 : 2 });
+  const amt = (d) => C.pip ? Math.round(Math.abs(d) / C.pip) + " pips" : C.unit === "$" ? "$" + Math.round(Math.abs(d)).toLocaleString("en-US") : Math.abs(d).toFixed(Math.abs(d) >= 100 ? 0 : 1) + " pts";
+  const tm = (t) => fmtT2(t).replace(/ ET$/, "");
+  const O = sess[0].o, Cl = sess[sess.length - 1].c;
+  let H = sess[0], L = sess[0]; sess.forEach((b) => { if (b.h > H.h) H = b; if (b.l < L.l) L = b; });
+  const refs = [];
+  if (overnight.length) { refs.push({ name: "the overnight high", side: "high", v: Math.max(...overnight.map((b) => b.h)) }, { name: "the overnight low", side: "low", v: Math.min(...overnight.map((b) => b.l)) }); }
+  if (prevRth.length) { refs.push({ name: "yesterday’s high", side: "high", v: Math.max(...prevRth.map((b) => b.h)) }, { name: "yesterday’s low", side: "low", v: Math.min(...prevRth.map((b) => b.l)) }); }
+  // the logged bias for that day, else the one on the page
+  let call = null, conf = null, logged = false;
+  try { const r = await sb(`open_daybias?select=call,conf&day=eq.${D}&market=eq.${key === "ES" ? "NQ" : key}`); if (r && r[0]) { call = r[0].call; conf = r[0].conf; logged = true; } } catch {}
+  const net = Cl - O, range = H.h - L.l, pct = net / O * 100, flat = Math.abs(pct) < (key === "BTC" ? 0.3 : key === "EURUSD" ? 0.05 : 0.1);
+  // No saved bias for that day: describe the session in hindsight instead of grading a call that wasn't made
+  const hind = !call && !flat;
+  if (hind) call = net > 0 ? "up" : "down";
+  const result = !call ? null : hind ? "hindsight" : flat ? "flat" : (net > 0) === (call === "up") ? "right" : "wrong";
+  // first liquidity grab against the bias, then the move with it
+  const swept = (side) => refs.filter((r) => r.side === side).map((r) => { const b = sess.find((x) => side === "high" ? x.h > r.v : x.l < r.v); return b ? { ...r, at: b } : null; }).filter(Boolean).sort((a, b) => a.at.t - b.at.t)[0] || null;
+  const sweepHigh = swept("high"), sweepLow = swept("low");
+  const lines = [], plan = [];
+  const nm = key === "EURUSD" ? "EUR/USD" : key === "BTC" ? "Bitcoin" : key;
+  lines.push(`${nm} ${net >= 0 ? "rose" : "fell"} ${amt(net)} in the session (${minsTxtS(from)}–${minsTxtS(to)} ET), with a ${amt(range)} range from high to low.`);
+  lines.push(`It opened at ${fmt(O)}, ${H.t < L.t ? `made its high of ${fmt(H.h)} at ${tm(H.t)}, then its low of ${fmt(L.l)} at ${tm(L.t)}` : `made its low of ${fmt(L.l)} at ${tm(L.t)}, then its high of ${fmt(H.h)} at ${tm(H.t)}`}, and finished at ${fmt(Cl)}.`);
+  const quiet = range < (key === "BTC" ? O * 0.006 : key === "EURUSD" ? O * 0.0015 : O * 0.0035);
+  let verdict = "";
+  if (!call) verdict = "There was no saved bias for this session, and price barely moved.";
+  else if (hind) verdict = `There was no saved bias for this session. In hindsight it was ${call === "up" ? "an up" : "a down"} session.`;
+  else verdict = `The bias was ${call}${conf ? ` (${conf} confidence)` : ""}, and ${result === "right" ? "it was right" : result === "wrong" ? "it was wrong" : "price barely moved, so it gets no grade"}.`;
+  if (quiet) plan.push(`Quiet session: only ${amt(range)} from high to low. Sitting out was the right call; there wasn’t enough room for a good trade.`);
+  else if (call === "down") {
+    const s = sweepHigh && sweepHigh.at.t < L.t ? sweepHigh : null;
+    if (result === "wrong") plan.push(`The bias was wrong. ${sweepHigh ? `Price ran above ${sweepHigh.name} (${fmt(sweepHigh.v)}) at ${tm(sweepHigh.at.t)} and kept going instead of reversing.` : "Price kept pushing higher."} The plan said to step back if price held above the level, so no short was the right answer.`);
+    else if (ict && s) { const risk = s.at.h - s.v, reward = s.v - L.l; plan.push(`ICT play: the run above ${s.name} (${fmt(s.v)}) at ${tm(s.at.t)} was the buy-side liquidity grab. A short once price broke back below ${fmt(s.v)}, with the stop above the high of ${fmt(s.at.h)}, had room to the low at ${fmt(L.l)}: about ${amt(reward)} for ${amt(risk)} of risk${risk > 0 ? ` (${(reward / Math.max(risk, 1e-9)).toFixed(1)}R)` : ""}.`); }
+    else plan.push(`${hind ? "The session’s main move" : "Best move with the bias"}: from the high of ${fmt(H.h)} at ${tm(H.t)} down to ${fmt(L.l)} at ${tm(L.t)}, about ${amt(H.h - L.l)}. ${H.t - sess[0].t > 20 * 6e4 ? "Waiting for the opening run up to finish before shorting caught most of it." : "The drop started right at the open."}`);
+  } else if (call === "up") {
+    const s = sweepLow && sweepLow.at.t < H.t ? sweepLow : null;
+    if (result === "wrong") plan.push(`The bias was wrong. ${sweepLow ? `Price broke below ${sweepLow.name} (${fmt(sweepLow.v)}) at ${tm(sweepLow.at.t)} and kept falling instead of reversing.` : "Price kept sliding."} The plan said to step back if price held below the level, so no long was the right answer.`);
+    else if (ict && s) { const risk = s.v - s.at.l, reward = H.h - s.v; plan.push(`ICT play: the run below ${s.name} (${fmt(s.v)}) at ${tm(s.at.t)} was the sell-side liquidity grab. A long once price reclaimed ${fmt(s.v)}, with the stop below the low of ${fmt(s.at.l)}, had room to the high at ${fmt(H.h)}: about ${amt(reward)} for ${amt(risk)} of risk${risk > 0 ? ` (${(reward / Math.max(risk, 1e-9)).toFixed(1)}R)` : ""}.`); }
+    else plan.push(`${hind ? "The session’s main move" : "Best move with the bias"}: from the low of ${fmt(L.l)} at ${tm(L.t)} up to ${fmt(H.h)} at ${tm(H.t)}, about ${amt(H.h - L.l)}. ${L.t - sess[0].t > 20 * 6e4 ? "Waiting for the opening dip to finish before buying caught most of it." : "The push started right at the open."}`);
+  } else plan.push(`With no clear bias, the cleaner choice was to wait for a level to break and hold, or sit out.`);
+  let ai = null;
+  if (hasAI()) {
+    try {
+      const facts = { market: nm, session: `${minsTxtS(from)}-${minsTxtS(to)} ET`, date: D, open: fmt(O), high: fmt(H.h), high_time: tm(H.t), low: fmt(L.l), low_time: tm(L.t), close: fmt(Cl), bias: call, bias_result: result, levels: refs.map((r) => `${r.name} ${fmt(r.v)}`), strategy: ict ? "ICT" : "general", rules_plan: plan.join(" ") };
+      const r = await memo(`recap:${key}:${D}:${from}:${to}:${ict}`, 6 * 36e5, () => askClaude({ maxTokens: 400, system: VOICE + "\nYou are a calm trading coach reviewing one finished session. Use ONLY the numbers given. Never invent prices or times. No advice to trade real money.", user: `Facts:\n${JSON.stringify(facts)}\n\nReturn ONLY JSON: {"note":"3 short sentences: what the session did, whether the plan worked, and the one lesson for next time"}` }));
+      // fact check: every number the AI writes must be one of the numbers we gave it
+      const factTxt = JSON.stringify(facts).replace(/,(?=\d{3})/g, ""), nums = String(r && r.note || "").match(/\d[\d,.:]*\d|\d/g) || [];
+      if (r && r.note && nums.every((x) => factTxt.includes(x.replace(/,/g, "").replace(/[.:]$/, "")))) ai = String(r.note).slice(0, 500);
+    } catch {}
+  }
+  return { ready: true, market: key, date: D, today: D === n.date, from, to, open: O, high: H.h, low: L.l, close: Cl, net: C.pip ? Math.round(net / C.pip) : +net.toFixed(C.dp), unit: C.unit, call, conf, logged, result, summary: lines, verdict, plan, ai, updated: now };
+}
+var minsTxtS = (m) => { const h = Math.floor(m / 60) % 24, mm = m % 60; return `${(h % 12) || 12}${mm ? ":" + String(mm).padStart(2, "0") : ""} ${h >= 12 ? "PM" : "AM"}`; };
+// ---------- Story read: which way a developing story leans for each market (rules; AI read on top when credits are on) ----------
+function storyLean(members, sinceByMk) {
+  const out = {};
+  ["NQ", "BTC", "EURUSD"].forEach((k) => {
+    let sc = 0, w = 0, up = 0, down = 0;
+    members.slice(0, 12).forEach((h, i) => { const d = headlineDirs(h.title)[k]; const wt = 1 / (1 + i * 0.25); if (d > 0) { up++; sc += wt; } else if (d < 0) { down++; sc -= wt; } w += wt; });
+    const r = w ? sc / w : 0, dir = r >= 0.15 ? "up" : r <= -0.15 ? "down" : null;
+    out[k] = { dir, up, down, n: Math.min(12, members.length) };
+  });
+  return out;
+}
+async function threadAI(req) {
+  const tok = bearer(req);
+  if (!tok) throw new HttpErr(401, "Sign in to use AI reads.", { why: "signin" });
+  if (!hasAI()) throw new HttpErr(503, "AI reads aren’t switched on yet.");
+  const b = await readBody(req);
+  const id = String(b.id || "").slice(0, 80);
+  const mk = [...new Set((Array.isArray(b.markets) ? b.markets : []).map(String).filter((x) => AIR_MKTS[x]))].slice(0, 3);
+  if (!mk.length) mk.push("NQ");
+  const th = await buildThread(id);
+  if (!th || th.missing) throw new HttpErr(404, "That story isn’t being tracked any more.");
+  const use = await meter(tok, 1, "free");
+  const heads = th.items.slice(0, 15).map((x) => `- ${new Date(x.t).toISOString().slice(0, 16)} ${x.title} (${x.source})`).join("\n");
+  const res = await memo("tai:" + id + "|" + mk.join(",") + "|" + (th.items[0] && th.items[0].t), 20 * 6e4, () => askClaude({
+    system: VOICE + `
+You read a developing news story (a list of headlines, newest first) and say where it is heading and what it most likely means for each named market over the next day.
+- "dir": "up", "down" or "unclear"; "conf": "high", "medium" or "low"; "why": one sentence, max 26 words, only what the headlines support.
+- "stage": one short phrase: "just starting", "building", "peaking", "fading" or "priced in".
+- "take": two sentences: what the story is really about now, and what would change it.
+Reply with JSON only: {"reads":[{"m":"NQ","dir":"down","conf":"medium","why":"..."}],"stage":"building","take":"..."}`,
+    user: `Story: ${th.title}\nSummary: ${th.summary}\nHeadlines:\n${heads}\nMarkets: ${mk.map((k) => k + " = " + AIR_MKTS[k]).join("; ")}`,
+    maxTokens: 600
+  }));
+  const reads = ((res && res.reads) || []).filter((r) => mk.includes(r.m) && /^(up|down|unclear)$/.test(r.dir) && r.why).map((r) => ({ m: r.m, label: AIR_MKTS[r.m].replace(/ \(.*/, ""), dir: r.dir, conf: /^(high|medium|low)$/.test(r.conf) ? r.conf : "low", why: String(r.why).slice(0, 220) }));
+  if (!reads.length) throw new HttpErr(502, "The AI didn’t give a usable answer. Try again in a minute.");
+  return { reads, stage: res.stage ? String(res.stage).slice(0, 30) : "", take: res.take ? String(res.take).slice(0, 320) : "", used: use.used, limit: use.limit, tier: use.tier };
 }
 // ---------- Session bias record: the "Your day" call, logged once at 9:30 New York and graded at the 4 PM close ----------
 var DAY_LOG_MKTS = { futures: "NQ", crypto: "BTC", forex: "EURUSD" };
@@ -3816,7 +3924,7 @@ async function stripeHook(req) {
     .then(async (r) => { if (!r.ok) throw new HttpErr(502, "Couldn’t save the plan: " + (await r.text()).slice(0, 120)); });
   return { ok: true };
 }
-var POST_ROUTES = { airead: aiRead, aideep: aiDeep, checkout, portal, stripe: stripeHook };
+var POST_ROUTES = { threadai: threadAI, airead: aiRead, aideep: aiDeep, checkout, portal, stripe: stripeHook };
 // Routes whose answer depends on the reader's plan
 var PLAN_ROUTES = new Set(["desk", "brief", "explain", "memedesk"]);
 // Read-only audit of every logged call: what drove it and how it turned out (for tuning the call engine)
@@ -3857,6 +3965,7 @@ var ROUTES = {
   adjust: [() => memo("adjust", 10 * 6e4, computeAdjust).then((v) => { _adj.v = v; _adj.t = Date.now(); return v; }), 300],
   rhyme: [(q) => buildRhyme(q), 600],
   threads: [() => buildThreads(), 300],
+  recap: [(q) => buildRecap(q), 300],
   thread: [(q) => buildThread(String(q.id || "").slice(0, 80)), 300],
   hist: [(q) => buildHist(String(q.k || "").slice(0, 80)), 3600],
   memedesk: [(q) => build14(q), hasAI() ? 600 : 180],
