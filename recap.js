@@ -100,10 +100,12 @@ function refLevels(bars, start, kind) {
 }
 
 // Walk a trade forward through the session, stop checked before target in every bar (the cautious assumption)
-function walk(sess, i0, side, entry, stop) {
+function walk(sess, i0, side, entry, stop, target) {
   const risk = Math.abs(entry - stop);
   if (!(risk > 0)) return null;
-  const tgt = side === "long" ? entry + 2 * risk : entry - 2 * risk;
+  // the plan's own target when it gives one (the opposite liquidity), else 2R
+  const tgt = target != null && (side === "long" ? target - entry : entry - target) >= risk ? target : side === "long" ? entry + 2 * risk : entry - 2 * risk;
+  const tR = Math.abs(tgt - entry) / risk;
   let best = 0;
   for (let i = i0 + 1; i < sess.length; i++) {
     const b = sess[i];
@@ -111,7 +113,7 @@ function walk(sess, i0, side, entry, stop) {
     if (adverse) return { exit: "stop", r: -1, at: b.t, best: +best.toFixed(2), risk, target: tgt };
     const fav = side === "long" ? (b.h - entry) / risk : (entry - b.l) / risk;
     best = Math.max(best, fav);
-    if ((side === "long" ? b.h >= tgt : b.l <= tgt)) return { exit: "target", r: 2, at: b.t, best: 2, risk, target: tgt };
+    if ((side === "long" ? b.h >= tgt : b.l <= tgt)) return { exit: "target", r: +tR.toFixed(1), at: b.t, best: +tR.toFixed(1), risk, target: tgt };
   }
   const last = sess[sess.length - 1].c;
   const r = (side === "long" ? last - entry : entry - last) / risk;
@@ -120,6 +122,8 @@ function walk(sess, i0, side, entry, stop) {
 
 function setups(kind, ctx) {
   const { sess, refs, buf, events } = ctx, out = [];
+  // the plan's target: the nearest liquidity on the other side (a high for longs, a low for shorts)
+  const oppTarget = (side, entry) => { const c = refs.filter((r) => side === "short" ? r.side === "low" && r.v < entry : r.side === "high" && r.v > entry).sort((a, b) => side === "short" ? b.v - a.v : a.v - b.v)[0]; return c ? { v: c.v, name: c.name } : null; };
   const O = sess[0].o;
   if (kind === "sweep") {
     refs.forEach((r) => {
@@ -131,7 +135,7 @@ function setups(kind, ctx) {
       for (let j = i; j < Math.min(sess.length, i + 7); j++) {
         if (short ? sess[j].c < r.v : sess[j].c > r.v) {
           const ext = short ? Math.max(...sess.slice(i, j + 1).map((b) => b.h)) : Math.min(...sess.slice(i, j + 1).map((b) => b.l));
-          out.push({ side: short ? "short" : "long", i: j, entry: sess[j].c, stop: short ? ext + buf : ext - buf, why: `price ran ${short ? "above" : "below"} ${r.name} (${ctx.fmt(r.v)}) at ${ctx.tm(sess[i].t)}, then closed back ${short ? "below" : "above"} it`, level: r });
+          out.push({ side: short ? "short" : "long", i: j, entry: sess[j].c, stop: short ? ext + buf : ext - buf, tgt: oppTarget(short ? "short" : "long", sess[j].c), why: `price ran ${short ? "above" : "below"} ${r.name} (${ctx.fmt(r.v)}) at ${ctx.tm(sess[i].t)}, then closed back ${short ? "below" : "above"} it`, level: r });
           break;
         }
       }
@@ -145,7 +149,7 @@ function setups(kind, ctx) {
       for (let j = i; j < Math.min(sess.length, i + 4); j++) {
         if (short ? sess[j].c < r.v - buf : sess[j].c > r.v + buf) {
           const ext = short ? Math.max(...sess.slice(i, j + 1).map((b) => b.h)) : Math.min(...sess.slice(i, j + 1).map((b) => b.l));
-          out.push({ side: short ? "short" : "long", i: j, entry: sess[j].c, stop: short ? ext + buf : ext - buf, why: `price tested ${r.name} (${ctx.fmt(r.v)}) at ${ctx.tm(sess[i].t)} and was pushed back`, level: r });
+          out.push({ side: short ? "short" : "long", i: j, entry: sess[j].c, stop: short ? ext + buf : ext - buf, tgt: oppTarget(short ? "short" : "long", sess[j].c), why: `price tested ${r.name} (${ctx.fmt(r.v)}) at ${ctx.tm(sess[i].t)} and was pushed back`, level: r });
           break;
         }
       }
@@ -249,9 +253,11 @@ function analyze({ instrument, bars, from, to, now, bias, strategies, events }) 
       const against = want ? all.find((x) => x.side !== want) : null;
       return { strategy: sid, name, result: "none", text: `No valid entry: ${label} never set up${want ? ` in the bias direction` : ""}.${against ? ` The only setup went the other way (${against.why}), against the bias, so the rules said stay out.` : ""} ${quiet ? "It was also a quieter session than usual. " : ""}No trade was the right answer.`.replace(/\s+/g, " ").trim() };
     }
-    const w = walk(sess, s.i, s.side, s.entry, s.stop);
+    const w = walk(sess, s.i, s.side, s.entry, s.stop, s.tgt ? s.tgt.v : null);
+    const usedPlanTgt = w && s.tgt && Math.abs(w.target - s.tgt.v) < 1e-9;
     if (!w) return { strategy: sid, name, result: "none", text: "The setup had no room for a stop, so no trade." };
-    const outcome = w.exit === "target" ? `It reached the 2R target (${fmt(w.target)}) at ${tm(w.at)}.` : w.exit === "stop" ? `It was stopped out at ${tm(w.at)} for a 1R loss${w.best >= 0.5 ? ` (after getting as far as ${w.best.toFixed(1)}R in profit)` : ""}.` : `Neither the stop nor the 2R target was hit, so it closed at the session end for ${w.r >= 0 ? "+" : ""}${w.r.toFixed(1)}R.`;
+    const tgtName = usedPlanTgt ? `the plan’s target, ${s.tgt.name} (${fmt(w.target)}, ${(Math.abs(w.target - s.entry) / w.risk).toFixed(1)}R)` : `the 2R target (${fmt(w.target)})`;
+    const outcome = w.exit === "target" ? `It reached ${tgtName} at ${tm(w.at)}.` : w.exit === "stop" ? `It was stopped out at ${tm(w.at)} for a 1R loss${w.best >= 0.5 ? ` (after getting as far as ${w.best.toFixed(1)}R in profit)` : ""}.` : `Neither the stop nor ${usedPlanTgt ? "the plan’s target" : "the 2R target"} was hit, so it closed at the session end for ${w.r >= 0 ? "+" : ""}${w.r.toFixed(1)}R.`;
     const text = `${s.side === "long" ? "Long" : "Short"} at ${fmt(s.entry)} after ${s.why}, with the stop at ${fmt(s.stop)} (${amt(w.risk)} of risk, past the extreme plus a buffer). ${outcome}${recipe === "vwap" ? ctx.vwapNote || "" : ""}${recipe === "level" && sid === "orderflow" ? " The footprint itself isn’t visible here; this is the level reaction an order-flow read would have confirmed or rejected." : ""}${!want ? " There was no saved bias, so this is simply the first setup either way." : ""}`;
     return { strategy: sid, name, result: w.exit === "target" || w.r > 0 ? "win" : w.r < 0 ? "loss" : "flat", r: w.r, text };
   });

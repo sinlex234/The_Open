@@ -854,7 +854,7 @@ setInterval(() => document.querySelectorAll('.dp-when[data-done]').forEach(dpNow
 // Weekend: the last session's recap for each market the reader trades (their own session window)
 function weekendRecapHTML() {
   if (isLearning()) return '';
-  const mks = myMarkets().filter(m => PULSE_KEY[m] && m !== 'stocks').slice(0, 2);
+  const mks = myMarkets().filter(m => PULSE_KEY[m] && m !== 'stocks' && m !== 'memes').slice(0, 2);
   return mks.map(m => { const ss = daySession(m), st = stratsFor(m).join(',');
     return `<li class="dayplan wk-recap"><div class="dp"><div class="dp-top"><span class="dp-mk">${esc({ futures: 'Futures', options: 'Options', forex: 'Forex', crypto: 'Crypto', memes: 'Memecoins' }[m] || m)} · ${esc(ss.label)}, ${minsTxt(ss.from)}–${minsTxt(ss.to)} ET</span></div>
       <div class="dp-when off" data-wk="1" data-tk="${PULSE_KEY[m]}" data-from="${ss.from}" data-to="${ss.to}" data-st="${esc(st)}" data-ict="${st.split(',').includes('ict') ? 1 : 0}" data-mk="${m}"><div class="dp-recap"></div></div></div></li>`; }).join('');
@@ -1956,7 +1956,9 @@ PAGES.memes = () => {
       ['next', 'What’s next', fb.next], ['play', 'Your game plan', fb.play],
       ['for', 'What it means for you', '<ul class="fyl" id="mFor"></ul><p class="small faint" id="mIntro" style="margin-top:14px"></p>'],
       ['majors', 'Established names', '<div class="tab-links"><button class="linkbtn" id="thToggle" type="button"></button></div><div class="mgrid" id="mMajors"></div>'],
-      ['hot', 'Getting attention', '<p class="small faint" style="margin:0 0 14px">“Promoted” tokens are ones someone paid to put in front of buyers on DexScreener. That’s attention, not quality.</p><div class="mgrid" id="mHot"></div>']]) })}`)) chartPicker('mChart', 'mChartPick', [{ id: 'Bitcoin', tv: 'BINANCE:BTCUSDT' }, { id: 'Solana', tv: 'BINANCE:SOLUSDT' }, { id: 'Dogecoin', tv: 'BINANCE:DOGEUSDT' }, { id: 'Pepe', tv: 'BINANCE:PEPEUSDT' }]);
+      ['hot', 'Getting attention', '<p class="small faint" style="margin:0 0 14px">“Promoted” tokens are ones someone paid to put in front of buyers on DexScreener. That’s attention, not quality.</p><div class="mgrid" id="mHot"></div>']]) })}`)) chartPicker('mChart', 'mChartPick', [{ id: 'Dogecoin', tv: 'BINANCE:DOGEUSDT' }, { id: 'Pepe', tv: 'BINANCE:PEPEUSDT' }, { id: 'Bonk', tv: 'BINANCE:BONKUSDT' }, { id: 'Dogwifhat', tv: 'BINANCE:WIFUSDT' }]);
+  // The Live read only covers Bitcoin, NQ and EUR/USD, so it isn't shown on the memecoin page
+  { const pb = $('#pulseBlock'); if (pb) pb.remove(); }
   const chains = myAssets().map(a => a.chain).filter(Boolean);
   const tg = $('#thToggle'); if (tg) { tg.textContent = store.get('thesisOpen', true) ? 'Collapse all theses' : 'Expand all theses'; tg.onclick = () => { const v = !store.get('thesisOpen', true); store.set('thesisOpen', v); main.querySelectorAll('.th-wrap').forEach(x => x.open = v); tg.textContent = v ? 'Collapse all theses' : 'Expand all theses'; }; }
   const d = api('memes');
@@ -3041,6 +3043,20 @@ document.addEventListener('click', ev => {
   ev.preventDefault(); openThread(b.dataset.th);
 });
 document.addEventListener('keydown', ev => { const o = $('#thModal'); if (ev.key === 'Escape' && o && !o.hidden) { o.hidden = true; o.innerHTML = ''; document.body.classList.remove('room-open'); } });
+
+// ---------- Rows that scroll sideways (top menu, timeframes, story cards) show a fade on the side that has more ----------
+const HSCROLL = '.nav, .tfbar, .tn-strip, .th-row';
+function markScrollers(root = document) {
+  root.querySelectorAll(HSCROLL).forEach(el => {
+    const upd = () => { const more = el.scrollWidth - el.clientWidth > 2; el.classList.toggle('more-r', more && el.scrollLeft + el.clientWidth < el.scrollWidth - 2); el.classList.toggle('more-l', more && el.scrollLeft > 2); };
+    if (!el.dataset.hs) { el.dataset.hs = 1; el.addEventListener('scroll', upd, { passive: true }); }
+    upd();
+  });
+  // keep the current page's menu item in view on small screens
+  const on = document.querySelector('.nav [aria-current="page"], .nav .on'); if (on && on.scrollIntoView && window.innerWidth < 700) { const nav = on.closest('.nav'); if (nav) nav.scrollLeft = Math.max(0, on.offsetLeft - nav.clientWidth / 2 + on.offsetWidth / 2); }
+}
+addEventListener('resize', () => markScrollers());
+new MutationObserver(() => { clearTimeout(markScrollers.t); markScrollers.t = setTimeout(markScrollers, 150); }).observe(document.documentElement, { childList: true, subtree: true });
 
 // ---------- start ----------
 let calendarCache = null;

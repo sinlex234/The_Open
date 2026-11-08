@@ -599,8 +599,6 @@ body.locked .mast,body.locked .strip,body.locked main,body.locked .foot{visibili
   .tok .stats{grid-template-columns:1fr 1fr}
   table.t .hide-sm{display:none}
   .acct-menu,.alerts-panel{right:1rem;top:3.375rem}
-  .chips{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;padding-bottom:2px}
-  .chips::-webkit-scrollbar{display:none}
   .chip{flex:none}
 }
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
@@ -1087,8 +1085,6 @@ table.t,.mytable,.wm-g table{max-width:100%}
 }
 @media (max-width:640px){
   .front2>.now{grid-template-columns:1fr}
-  .tabbar{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;margin-left:-16px;margin-right:-16px;padding:0 1rem}
-  .tabbar .chip{flex:none}
 }
 .now .ssc-pills{display:grid;gap:2px}
 .now .ssc-pills .pill{display:flex;justify-content:space-between;border:none;background:none;padding:0.25rem 0;border-radius:0;font:500 0.7812rem var(--mono);color:var(--ink-3)}
@@ -1118,9 +1114,6 @@ table.t,.mytable,.wm-g table{max-width:100%}
 .t-prices .sec{margin-bottom:0.5rem}
 .t-left .more-tabs{margin-top:0}
 .t-left .outlook{grid-template-columns:repeat(auto-fill,minmax(15rem,1fr))}
-.t-left .tabbar{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}
-.t-left .tabbar::-webkit-scrollbar{display:none}
-.t-left .tabbar .chip{flex:none}
 .t-news .closed{padding:1.5rem 1.5rem 1.25rem}
 /* the start-here guide, compact so the news and chart stay on the first screen */
 .guide{display:grid;grid-template-columns:minmax(11rem,15rem) minmax(0,1fr);gap:0.75rem 1.5rem;align-items:center;padding:0.875rem 3rem 0.875rem 1.25rem;margin-bottom:1.5rem}
@@ -1790,3 +1783,11 @@ body.room-open{overflow:hidden}
 .th-lean-r .br{font-size:.8125rem;color:var(--ink-3)}
 .th-ai{margin:0 0 1rem}
 .th-stage{margin:.5rem 0 0;font-size:.8125rem;color:var(--ink-2)}
+
+/* Every button row wraps onto a new line instead of running off the edge (checked by tests/layout.check.mjs) */
+.chips,.tabbar{flex-wrap:wrap;overflow:visible;min-width:0;max-width:100%}
+.chip{max-width:100%;white-space:normal;text-align:center}
+img,svg,video,canvas,iframe,table{max-width:100%}
+.nav.more-r,.tfbar.more-r,.tn-strip.more-r,.th-row.more-r{-webkit-mask-image:linear-gradient(to right,#000 calc(100% - 2.5rem),transparent);mask-image:linear-gradient(to right,#000 calc(100% - 2.5rem),transparent)}
+.nav.more-l,.tfbar.more-l,.tn-strip.more-l,.th-row.more-l{-webkit-mask-image:linear-gradient(to left,#000 calc(100% - 2.5rem),transparent);mask-image:linear-gradient(to left,#000 calc(100% - 2.5rem),transparent)}
+.nav.more-l.more-r,.tfbar.more-l.more-r,.tn-strip.more-l.more-r,.th-row.more-l.more-r{-webkit-mask-image:linear-gradient(to right,transparent,#000 2.5rem,#000 calc(100% - 2.5rem),transparent);mask-image:linear-gradient(to right,transparent,#000 2.5rem,#000 calc(100% - 2.5rem),transparent)}

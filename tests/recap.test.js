@@ -130,3 +130,15 @@ test("on a weekend, the recap is Friday's session (no weekend bars for futures)"
   const r = R.analyze({ instrument: "NQ", bars: b, from: 570, to: 690, now: R.nyToMs("2026-11-07", 960), strategies: ["ict"] });
   assert.equal(r.date, "2026-11-06");
 });
+
+test("the recap follows the strategy's plan: ICT long after a sell-side sweep, aiming for the opposite liquidity", () => {
+  // dips under yesterday's/overnight lows at 9:35, closes back above, then rallies through the highs
+  const path = (k) => k === 0 ? 24990 : k === 1 ? 24972 : k === 2 ? 24990 : 24990 + (k - 2) * 12;
+  const b = session(path);
+  const r = R.analyze({ instrument: "NQ", bars: b, from: 570, to: 690, now: NOW, bias: { call: "up", at: R.nyToMs("2026-11-04", 560) }, strategies: ["ict"] });
+  const t = r.plans[0].text;
+  assert.match(t, /^Long at/);
+  assert.match(t, /ran below/);
+  assert.match(t, /plan’s target/);
+  assert.doesNotMatch(t, /best move/i);
+});

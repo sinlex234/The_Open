@@ -21,4 +21,6 @@ index.html, app.js, app.css, me.js, glossary.js, config.js, data.js, vercel.json
 
 - `recap.js` holds the session recap rules as plain functions. `tests/recap.test.js` has one test for each mistake that has happened or could: a bias saved after the session started, ES borrowing NQ's bias, a gap at the open counted as a liquidity grab, stops placed exactly at the high, exact-top/bottom "best moves", a fixed "quiet" threshold, stock-market hours used for forex and crypto, and anything after the session changing the result.
 - Run them with `node --test tests/*.test.js`. They run automatically on every push to GitHub (the `tests` workflow); a red X on a commit means something broke.
+- `sections.js` decides which stories belong on each section page (memecoin page: memecoin stories only; crypto page: crypto only). `tests/sections.test.js` checks it with real headlines that once slipped through.
+- `tests/layout.check.mjs` opens every page at 360, 390, 768, 1024, 1366 and 1920 pixels wide with sample data (`tests/harness`) and fails if the page scrolls sideways, a button or tab is cut off, or content is clipped. Rows that are meant to scroll sideways (top menu, timeframes, story cards) must show a fade on the side that has more. Button rows wrap onto a new line instead of running off the edge.
 - New rules get a new test in the same change.

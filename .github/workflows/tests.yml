@@ -1,9 +1,9 @@
 # Runs the site's automated checks on every push and pull request.
-# A red X on a commit in GitHub means a rule broke; the email from GitHub says which test failed.
+# A red X on a commit in GitHub means a rule broke; the email from GitHub says which check failed.
 name: tests
 on: [push, pull_request]
 jobs:
-  test:
+  rules:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -11,6 +11,17 @@ jobs:
         with:
           node-version: 22
       - name: Syntax check
-        run: node --check data.js && node --check recap.js && node --check app.js
-      - name: Session recap rules
+        run: node --check data.js && node --check recap.js && node --check sections.js && node --check app.js
+      - name: Session recap and section rules
         run: node --test tests/*.test.js
+  layout:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install a test browser
+        run: npm i --no-save playwright@1.56.0 && npx playwright install --with-deps chromium
+      - name: Every page fits phones, tablets, laptops and big screens
+        run: node tests/layout.check.mjs

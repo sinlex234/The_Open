@@ -2279,11 +2279,15 @@ function decideBy(h, upcoming, m) {
   // 5) Older story during trading hours: the first reaction has happened
   return { kind: "priced", label: "already: the first reaction happens within minutes", time: t + 10 * 6e4 };
 }
+// What counts as on-topic for each section page lives in sections.js (checked by tests/sections.test.js)
+var { ON_TOPIC } = require("./sections.js");
 function briefingFor(stories, prof, upcoming, focus, px) {
   const mk = prof.map((x) => x.m);
   const rel = (h) => mk.some((m) => relevantFor(h, m) || (h.markets || []).includes(m));
   let pool = stories.filter((h) => h.theme && !NOISE_RE.test(h.title));
   if (focus) pool = pool.filter((h) => relevantFor(h, focus) || (h.markets || []).includes(focus));
+  // A section page shows that section's news only: no Bitcoin analysis on the memecoin page, no gold on the crypto page
+  if (focus && ON_TOPIC[focus]) pool = pool.filter(ON_TOPIC[focus]);
   const DIRECT = { memes: ["memes", "crypto"], crypto: ["crypto", "memes"], forex: ["dollar", "rates", "gold", "inflation", "jobs"], futures: ["earnings", "ai", "rates", "inflation", "jobs"], stocks: ["earnings", "ai", "rates", "growth"], options: ["options", "earnings", "rates"] };
   const direct = (h) => (focus ? [focus] : mk).some((m) => (DIRECT[m] || []).includes(h.theme));
   const clear = (h) => effectsFor(h, prof).some((e) => e.dir !== "mixed");
@@ -2628,7 +2632,8 @@ Pick the 4-6 most important stories, world events first. effects should only lis
   prof.filter((x) => x.m !== "learning").forEach((x) => { states[x.m] = marketState(x.m, pick, out.briefing, outlook); });
   out.next = (focus ? [focus] : Object.keys(states)).map((m) => nextFor(states[m] || marketState(m, pick, out.briefing, outlook)));
   out.playbook = playbookFor(prof, states);
-  out.dayplan = await dayPlanFor(prof, states, res.cal && res.cal.events || [], now).catch(() => []);
+  // Memecoins have no single chart to plan a session around, so they get no Bitcoin stand-in
+  out.dayplan = await dayPlanFor(prof.filter((x) => x.m !== "memes"), states, res.cal && res.cal.events || [], now).catch(() => []);
   if (!out.glance) {
     const top = stories.find((h) => h.why) || stories[0], o = outlook[0];
     out.glance = {
@@ -3538,7 +3543,7 @@ async function threadPool() {
   return pool.sort((a, b) => b.t - a.t);
 }
 // Words too broad to name a story on their own (they're the topic, not the story)
-var TH_BROAD = new Set("drives drive driven driving leads lead leading turns turn moves move says report february march april june july august september october november december steady hold holds held following follows post posts amid toward towards across within without another other ahead behind latest concerns concern worries worry fears fear victory sweep pressure pressures center centers financial data wobbles wobble outlook rally rallies soar soars tumble tumbles sink sinks plunge plunges selloff rout boost boosts lifts weighs weigh hopes hope bets bet focus parse watch strong weak big small top best worst oil crude energy earnings beat beats misses miss results profit revenue tech chip chips chipmaker semiconductor crypto bitcoin cryptocurrency inflation gold dollar yield yields treasury treasuries bond bonds economy economic growth fed rate rates hike hikes cutting policy central bank banks trump president government wall street nasdaq dow equity equities index indexes trade jobs labor unemployment consumer prices outlook forecast guidance demand supply sales spending investors value valuation financialjuice reuters bloomberg cnbc".split(" "));
+var TH_BROAD = new Set("january drives drive driven driving leads lead leading turns turn moves move says report february march april june july august september october november december steady hold holds held following follows post posts amid toward towards across within without another other ahead behind latest concerns concern worries worry fears fear victory sweep pressure pressures center centers financial data wobbles wobble outlook rally rallies soar soars tumble tumbles sink sinks plunge plunges selloff rout boost boosts lifts weighs weigh hopes hope bets bet focus parse watch strong weak big small top best worst oil crude energy earnings beat beats misses miss results profit revenue tech chip chips chipmaker semiconductor crypto bitcoin cryptocurrency inflation gold dollar yield yields treasury treasuries bond bonds economy economic growth fed rate rates hike hikes cutting policy central bank banks trump president government wall street nasdaq dow equity equities index indexes trade jobs labor unemployment consumer prices outlook forecast guidance demand supply sales spending investors value valuation financialjuice reuters bloomberg cnbc".split(" "));
 function findThreads(pool) {
   const N = pool.length, freq = {};
   pool.forEach((h) => h.words.forEach((w) => { freq[w] = (freq[w] || 0) + 1; }));
