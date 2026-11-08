@@ -1,4 +1,4 @@
-// Layout check: every page, at phone, tablet, laptop and big-monitor widths, must fit the screen.
+// Layout check: every page, at phone, tablet, laptop and big-monitor widths, must load without script errors and fit the screen.
 // Fails if the page scrolls sideways, if a button or tab is cut off, or if content is clipped by a box
 // that doesn't show it can scroll. Uses sample data (tests/harness), so it needs no network.
 // Run: node tests/layout.check.mjs   (needs Playwright: npm i -D playwright && npx playwright install chromium)
@@ -33,8 +33,15 @@ try {
     await ctx.addInitScript(seed);
     await ctx.route("**/*", (r) => r.request().url().includes("supabase-js") ? r.fulfill({ body: MOCK, contentType: "application/javascript" }) : r.request().url().startsWith(BASE) ? r.continue() : r.abort());
     const pg = await ctx.newPage();
+    let errs = [];
+    // any script error fails the check: a script that doesn't load leaves a blank page that "fits" any screen
+    pg.on("pageerror", (e) => errs.push(String(e.message || e).slice(0, 160)));
     for (const p of PAGES) {
+      errs = [];
       await pg.goto(BASE + p); await pg.waitForTimeout(4500);
+      [...new Set(errs)].forEach((e) => problems.push(`${p} at ${w}px: script error: ${e}`));
+      const text = await pg.evaluate(() => (document.querySelector("main") || document.body).innerText.trim().length);
+      if (text < 200) problems.push(`${p} at ${w}px: page is nearly empty (${text} characters), so something didn't load`);
       // open every tab so hidden panels get checked too
       const found = await pg.evaluate(({ SCROLLERS }) => {
         const out = [], vw = innerWidth;

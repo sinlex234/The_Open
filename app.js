@@ -3,7 +3,7 @@ import {
   initMe, me, myMarkets, myAssets, isBeginner, isLearning, depth, hasStrat, levelTrader, intraday, stratsFor, followUps,
   forYouEvent, forYouHeadline, forYouStrength, relevance, greeting, windowStatus, startAlerts, openAlerts, editSetup,
   profileQuery, marketLabel, myStruggles, isProp, newsRestricted, notify,
-  userTZ, plan, isPaid, authToken, rpc, loadPlan, signedIn, mySessions as mySessionsC, followUps, sbClient, setProfileLocal, hasProfile, SESSIONS as SESSIONS_C,
+  userTZ, plan, isPaid, authToken, rpc, loadPlan, signedIn, mySessions as mySessionsC, sbClient, setProfileLocal, hasProfile, SESSIONS as SESSIONS_C,
 } from './me.js';
 import { GLOSSARY } from './glossary.js';
 import { SUPABASE_URL, SUPABASE_KEY } from './config.js';
