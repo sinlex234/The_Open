@@ -5,10 +5,11 @@
 // 1. A bias only counts if it was saved before the session (or within its first 15 minutes), and it is
 //    graded from the price when it was saved, never from earlier.
 // 2. Opening beyond a level is a gap, not a liquidity grab. A sweep needs price to start on one side and run through.
-// 3. Entries happen on a confirming candle's close, stops sit past the extreme plus a buffer, and the trade is
-//    walked forward bar by bar (stop checked first) to a 2R target or the session end. No exact-top/bottom fills.
+// 3. Entries happen where the plan says (a candle close or a limit at the plan's zone), stops sit past the extreme plus
+//    a buffer, and the trade is walked forward candle by candle (stop checked first) to the plan's target, its exit
+//    rule, or the session end. No exact-top/bottom fills.
 // 4. "Quiet" is measured against this window's own recent sessions, not a fixed percentage.
-// 5. Markets that trade around the clock (forex, crypto) use the prior 24 hours, not stock-market hours.
+// 5. Each strategy is replayed with the exact steps and levels its day plan gave (see replay()), never "the best move".
 // 6. Only bars inside the session are used for the trade; nothing after the session can change the result.
 "use strict";
 
@@ -48,15 +49,43 @@ const INSTR = {
   SOL: { sym: "SOL-USD", name: "Solana", dp: 2, unit: "$", kind: "crypto" }
 };
 
-// Which recipe each strategy gets. Strategies that aren't about one session get a plain description.
-const RECIPE = {
-  ict: "sweep", pa: "level", sd: "level", orderflow: "level", ind: "vwap", news: "news", trend: "breakout", momentum: "breakout",
-  swing: "breakout", perps: "breakout", zero: "breakout", buy: "breakout", unsure: "breakout", ta: "level", charts: "breakout",
-  sell: "range", spreads: "range", earnings: "none", hedge: "none", hold: "none", index: "none", value: "none", growth: "none",
-  dividends: "none", onchain: "none", defi: "none", narratives: "none", launches: "none", trending: "none", kols: "none", wallets: "none",
-  carry: "none", fundamentals: "none", algo: "breakout"
+// Every strategy the setup questions offer, and how its session is replayed. Each replay follows the exact
+// steps the day plan gave that strategy (stratPlan in data.js), using the same levels the plan named.
+const STRATS = {
+  // futures, forex, crypto, stocks
+  ict: { name: "ICT", replay: "ict" }, pa: { name: "Price action", replay: "pa" }, ta: { name: "Chart analysis", replay: "pa" },
+  sd: { name: "Supply and demand", replay: "sd" }, orderflow: { name: "Order flow", replay: "orderflow" },
+  ind: { name: "Indicators", replay: "trend" }, trend: { name: "Trend following and breakouts", replay: "trend" },
+  momentum: { name: "Momentum and breakouts", replay: "momentum" }, news: { name: "Trading the news", replay: "news" },
+  algo: { name: "Automated", replay: "daytype" }, unsure: { name: "Still finding my strategy", replay: "lean" },
+  swing: { name: "Swing trading", replay: "lean" }, perps: { name: "Leverage and perps", replay: "momentum" },
+  // options
+  buy: { name: "Buying calls and puts", replay: "momentum" }, zero: { name: "Same-day options (0DTE)", replay: "momentum" },
+  sell: { name: "Selling premium", replay: "range" }, spreads: { name: "Spreads", replay: "range" },
+  earnings: { name: "Earnings", replay: "none" }, hedge: { name: "Hedging", replay: "none" },
+  // not about one session
+  index: { name: "Index funds", replay: "none" }, value: { name: "Value investing", replay: "none" }, growth: { name: "Growth investing", replay: "none" },
+  dividends: { name: "Dividends", replay: "none" }, fundamentals: { name: "Fundamentals and central banks", replay: "none" }, carry: { name: "Carry trades", replay: "none" },
+  hold: { name: "Buy and hold", replay: "none" }, narratives: { name: "Sector rotation", replay: "none" }, onchain: { name: "On-chain data", replay: "none" }, defi: { name: "DeFi and yield", replay: "none" },
+  launches: { name: "New launches", replay: "none" }, trending: { name: "Trending coins", replay: "none" }, kols: { name: "Influencer calls", replay: "none" }, wallets: { name: "Copy-trading wallets", replay: "none" }, charts: { name: "Chart setups", replay: "pa" }
 };
-const STRAT_NAME = { ict: "ICT", pa: "Price action", sd: "Supply and demand", orderflow: "Order flow", ind: "Indicators (VWAP)", news: "Trading the news", trend: "Trend and breakouts", momentum: "Momentum and breakouts", swing: "Swing trading", perps: "Leverage and perps", zero: "Same-day options", buy: "Buying calls and puts", unsure: "Opening-range breakout", ta: "Chart analysis", charts: "Chart setups", sell: "Selling premium", spreads: "Spreads", algo: "Automated" };
+const RECIPE = Object.fromEntries(Object.entries(STRATS).map(([k, v]) => [k, v.replay]));
+const NOT_SESSION = {
+  index: "Index-fund investing is about years, not one session. Nothing to enter or exit here.",
+  value: "Value investing is about buying good companies cheap over months. One session doesn’t change that.",
+  growth: "Growth investing plays out over quarters and years, so there’s no session entry to review.",
+  dividends: "Dividend investing is about the income over years. One session doesn’t matter.",
+  fundamentals: "Fundamentals and central-bank trades play out over days and weeks, so one session isn’t the test. What matters is whether the policy story changed.",
+  carry: "Carry trades earn the interest-rate difference over weeks. A single session only matters if it moved hard against the position.",
+  hold: "Buying and holding is about the long run, so there’s nothing to enter or exit in one session.",
+  narratives: "Sector rotation plays out over days and weeks, not one session.",
+  onchain: "On-chain signals work on a days-to-weeks timescale, so one session isn’t the test.",
+  defi: "DeFi and yield are about earning over time, not one session’s price.",
+  earnings: "Earnings trades depend on one company’s report, not the session’s index move.",
+  hedge: "Hedges protect a portfolio; the session only matters if it tested your protection.",
+  launches: "New-launch trading runs on token data, not one market’s session.", trending: "Trending-coin trades run on token data, not one market’s session.",
+  kols: "Influencer-call trades run on token data, not one market’s session.", wallets: "Copy-trading runs on wallet activity, not one market’s session."
+};
 
 // Which session to review: the latest one that has fully finished and has enough bars.
 // Works for sessions that cross midnight (e.g. Asia 7 PM to 1 AM).
@@ -75,121 +104,221 @@ function pickSession(bars, from, to, now) {
   return null;
 }
 
-function refLevels(bars, start, kind) {
+// The levels the day plan names, rebuilt exactly as the plan saw them at the session start (nothing after it).
+// Same candidates as dayLevels() in data.js: yesterday, Asia, London, today so far, this week, the midnight open.
+function planLevels(bars, start, kind) {
   const before = bars.filter((b) => b.t < start);
-  const hi = (a) => Math.max(...a.map((b) => b.h)), lo = (a) => Math.min(...a.map((b) => b.l));
-  const refs = [];
-  if (kind === "fut") {
-    const p = nyParts(start);
-    // the last regular stock-market session (9:30 AM to 4 PM) that finished before this one started
-    let prev = null;
-    for (let i = 0; i < 6 && !prev; i++) {
-      const d = addDays(p.date, -i), a = nyToMs(d, 570), z = nyToMs(d, 960);
-      if (z > start) continue;
-      const r = before.filter((b) => b.t >= a && b.t < z);
-      if (r.length >= 20) prev = { a, z, r };
-    }
-    if (prev) refs.push({ name: "yesterday’s high", side: "high", v: hi(prev.r) }, { name: "yesterday’s low", side: "low", v: lo(prev.r) });
-    const on = before.filter((b) => b.t >= (prev ? prev.z : start - 16 * 36e5) && b.t < start);
-    if (on.length >= 6) refs.push({ name: "the overnight high", side: "high", v: hi(on) }, { name: "the overnight low", side: "low", v: lo(on) });
-  } else {
-    const day = before.filter((b) => b.t >= start - 864e5);
-    if (day.length >= 20) refs.push({ name: "the prior 24-hour high", side: "high", v: hi(day) }, { name: "the prior 24-hour low", side: "low", v: lo(day) });
-  }
-  return refs;
+  if (before.length < 20) return { above: [], below: [], price: null };
+  const roll = kind === "fut" ? 18 * 60 : kind === "fx" ? 17 * 60 : 0; // when the trading day starts, New York time
+  const dayKey = (t) => { const p = nyParts(t); return roll && p.mins >= roll ? addDays(p.date, 1) : p.date; };
+  const today = dayKey(start - 1), keyed = before.map((b) => ({ ...b, k: dayKey(b.t), n: nyParts(b.t) }));
+  const days = [...new Set(keyed.map((b) => b.k))].sort();
+  const hi = (a) => a.length ? Math.max(...a.map((b) => b.h)) : null, lo = (a) => a.length ? Math.min(...a.map((b) => b.l)) : null;
+  const tb = keyed.filter((b) => b.k === today), prevKey = days.filter((d) => d < today).pop(), pb = keyed.filter((b) => b.k === prevKey);
+  const asia = roll ? tb.filter((b) => b.n.mins >= 1200 || b.n.mins < 60) : pb.filter((b) => b.n.mins >= 1200);
+  const london = tb.filter((b) => b.n.mins >= 120 && b.n.mins < 300);
+  const wk = (d) => { const x = new Date(d + "T12:00:00Z"); x.setUTCDate(x.getUTCDate() - ((x.getUTCDay() + 6) % 7)); return x.toISOString().slice(0, 10); };
+  const week = keyed.filter((b) => wk(b.k) === wk(today));
+  const mid = tb.find((b) => b.n.mins < 30);
+  const c = [["Yesterday’s high", hi(pb)], ["Yesterday’s low", lo(pb)], ["Asia high", hi(asia)], ["Asia low", lo(asia)], ["London high", hi(london)], ["London low", lo(london)],
+    ["Today’s high", hi(tb)], ["Today’s low", lo(tb)], ["This week’s high", hi(week)], ["This week’s low", lo(week)], ["Midnight open", mid ? mid.o : null]].filter(([, v]) => v != null && isFinite(v));
+  const px = before[before.length - 1].c, gap = Math.abs(px) * 0.0004;
+  const uniq = (arr) => arr.filter((x, i) => !arr.slice(0, i).some((y) => Math.abs(y.v - x.v) < gap));
+  const above = uniq(c.filter(([, v]) => v > px + gap).map(([name, v]) => ({ name, v })).sort((a, b) => a.v - b.v)).slice(0, 3);
+  const below = uniq(c.filter(([, v]) => v < px - gap).map(([name, v]) => ({ name, v })).sort((a, b) => b.v - a.v)).slice(0, 3);
+  // like farLevels(): skip levels hugging price
+  const far = (arr) => { const f = arr.filter((x) => Math.abs(x.v - px) / px > 0.0015); return f.length ? f : arr; };
+  return { above: far(above), below: far(below), price: px };
 }
+const lvlName = (x) => x ? (/^(Asia|London)/.test(x.name) ? "the " + x.name : x.name.charAt(0).toLowerCase() + x.name.slice(1)) : "the nearest level";
 
-// Walk a trade forward through the session, stop checked before target in every bar (the cautious assumption)
-function walk(sess, i0, side, entry, stop, target) {
+// Walk a filled trade forward, stop checked before target in every candle (the cautious assumption).
+// targets: the plan's targets in order; the first one at least 1R away is the exit, else 2R.
+// opts.noTarget: no fixed target (trend trades); opts.exitIf: the plan's own exit rule.
+function walk(sess, i0, side, entry, stop, targets, opts = {}) {
   const risk = Math.abs(entry - stop);
   if (!(risk > 0)) return null;
-  // the plan's own target when it gives one (the opposite liquidity), else 2R
-  const tgt = target != null && (side === "long" ? target - entry : entry - target) >= risk ? target : side === "long" ? entry + 2 * risk : entry - 2 * risk;
-  const tR = Math.abs(tgt - entry) / risk;
+  const long = side === "long";
+  const cand = (targets || []).filter((t) => t && (long ? t.v - entry : entry - t.v) >= risk);
+  const tgt = opts.noTarget ? null : cand[0] ? cand[0] : { v: long ? entry + 2 * risk : entry - 2 * risk, name: null };
   let best = 0;
   for (let i = i0 + 1; i < sess.length; i++) {
     const b = sess[i];
-    const adverse = side === "long" ? b.l <= stop : b.h >= stop;
-    if (adverse) return { exit: "stop", r: -1, at: b.t, best: +best.toFixed(2), risk, target: tgt };
-    const fav = side === "long" ? (b.h - entry) / risk : (entry - b.l) / risk;
-    best = Math.max(best, fav);
-    if ((side === "long" ? b.h >= tgt : b.l <= tgt)) return { exit: "target", r: +tR.toFixed(1), at: b.t, best: +tR.toFixed(1), risk, target: tgt };
+    if (long ? b.l <= stop : b.h >= stop) return { exit: "stop", r: -1, at: b.t, best: +best.toFixed(2), risk, target: tgt };
+    best = Math.max(best, long ? (b.h - entry) / risk : (entry - b.l) / risk);
+    if (tgt && (long ? b.h >= tgt.v : b.l <= tgt.v)) return { exit: "target", r: +(Math.abs(tgt.v - entry) / risk).toFixed(1), at: b.t, best: +best.toFixed(2), risk, target: tgt };
+    if (opts.exitIf && opts.exitIf(b)) { const r = (long ? b.c - entry : entry - b.c) / risk; return { exit: "rule", r: +r.toFixed(2), at: b.t, best: +best.toFixed(2), risk, target: tgt, price: b.c }; }
   }
-  const last = sess[sess.length - 1].c;
-  const r = (side === "long" ? last - entry : entry - last) / risk;
-  return { exit: "end", r: +r.toFixed(2), at: sess[sess.length - 1].t, best: +best.toFixed(2), risk, target: tgt };
+  const last = sess[sess.length - 1].c, r = (long ? last - entry : entry - last) / risk;
+  return { exit: "end", r: +r.toFixed(2), at: sess[sess.length - 1].t, best: +best.toFixed(2), risk, target: tgt, price: last };
 }
 
-function setups(kind, ctx) {
-  const { sess, refs, buf, events } = ctx, out = [];
-  // the plan's target: the nearest liquidity on the other side (a high for longs, a low for shorts)
-  const oppTarget = (side, entry) => { const c = refs.filter((r) => side === "short" ? r.side === "low" && r.v < entry : r.side === "high" && r.v > entry).sort((a, b) => side === "short" ? b.v - a.v : a.v - b.v)[0]; return c ? { v: c.v, name: c.name } : null; };
-  const O = sess[0].o;
-  if (kind === "sweep") {
-    refs.forEach((r) => {
-      const short = r.side === "high";
-      // must START on the near side: opening beyond the level is a gap, not a sweep
-      if (short ? O >= r.v : O <= r.v) return;
-      const i = sess.findIndex((b) => short ? b.h > r.v : b.l < r.v);
-      if (i < 0) return;
-      for (let j = i; j < Math.min(sess.length, i + 7); j++) {
-        if (short ? sess[j].c < r.v : sess[j].c > r.v) {
-          const ext = short ? Math.max(...sess.slice(i, j + 1).map((b) => b.h)) : Math.min(...sess.slice(i, j + 1).map((b) => b.l));
-          out.push({ side: short ? "short" : "long", i: j, entry: sess[j].c, stop: short ? ext + buf : ext - buf, tgt: oppTarget(short ? "short" : "long", sess[j].c), why: `price ran ${short ? "above" : "below"} ${r.name} (${ctx.fmt(r.v)}) at ${ctx.tm(sess[i].t)}, then closed back ${short ? "below" : "above"} it`, level: r });
-          break;
+// ---------- the replays, one per strategy, each following its plan's own steps ----------
+function replay(kind, X) {
+  const { sess, call, A, B, buf, fmt, tm, events, fu, avgBody, avgVol } = X;
+  const up = call === "up", dn = call === "down";
+  const a1 = A[0], a2 = A[1], b1 = B[0], b2 = B[1];
+  const none = (plan, why) => ({ plan, entered: false, text: why });
+  const fill = (plan, side, i, entry, stop, targets, how, opts) => { const w = walk(sess, i, side, entry, stop, targets, opts); return w ? { plan, entered: true, side, i, entry, stop, how, w } : none(plan, "The setup had no room for a stop, so no trade."); };
+
+  if (kind === "ict") {
+    const one = (dir) => {
+      const long = dir === "up", L1 = long ? b1 : a1, L2 = long ? b2 : a2, T = long ? A : B;
+      if (!L1) return none("", "The plan had no level to watch on that side, so there was no setup.");
+      const plan = `${long ? "Long" : "Short"} bias: expect a quick run ${long ? "below" : "above"} ${lvlName(L1)} (${fmt(L1.v)}) to grab ${long ? "sell" : "buy"}-side liquidity, then displacement ${long ? "up" : "down"} and a fair value gap to enter on the pullback.${T[0] ? ` Target ${lvlName(T[0])} (${fmt(T[0].v)})${T[1] ? `, then ${lvlName(T[1])}` : ""}.` : ""}`;
+      const gapped = long ? sess[0].o < L1.v : sess[0].o > L1.v;
+      const i = gapped ? 0 : sess.findIndex((b) => long ? b.l < L1.v : b.h > L1.v);
+      if (i < 0) return none(plan, `Price never ran ${long ? "below" : "above"} ${lvlName(L1)}, so the liquidity grab the plan waited for didn’t happen. No trade was the right answer.`);
+      // the plan's wrong-way line: if price keeps going and closes through the next level, step back
+      const bust = L2 ? sess.findIndex((b, k) => k >= i && (long ? b.c < L2.v : b.c > L2.v)) : -1;
+      // displacement: a strong candle the other way that leaves a fair value gap (candle 1 and candle 3 don't overlap)
+      let k = -1;
+      for (let j = Math.max(i + 1, 2); j < Math.min(sess.length, i + 14); j++) {
+        const c1 = sess[j - 2], c2 = sess[j - 1], c3 = sess[j];
+        const strong = Math.abs(c2.c - c2.o) >= avgBody * 1.2 && (long ? c2.c > c2.o : c2.c < c2.o);
+        if (strong && (long ? c3.l > c1.h : c3.h < c1.l)) { k = j; break; }
+      }
+      if (bust >= 0 && (k < 0 || bust < k)) return none(plan, `The sweep came at ${tm(sess[i].t)}, but price kept going and closed ${long ? "below" : "above"} ${lvlName(L2)} (${fmt(L2.v)}) at ${tm(sess[bust].t)} instead of reversing. The plan said that means the bias is wrong: step back. No trade was the right answer.`);
+      if (k < 0) return none(plan, `${gapped ? `Price opened ${long ? "below" : "above"} ${lvlName(L1)}, so the liquidity was taken at the open` : `Price ran ${long ? "below" : "above"} ${lvlName(L1)} at ${tm(sess[i].t)}`}, but there was no clean displacement ${long ? "up" : "down"} leaving a fair value gap. Without that confirmation the plan says no entry.`);
+      const c1 = sess[k - 2], c3 = sess[k];
+      const ext = long ? Math.min(...sess.slice(i, k + 1).map((b) => b.l)) : Math.max(...sess.slice(i, k + 1).map((b) => b.h));
+      // entry model from the reader's ICT answers: fair value gap (default), order block, or OTE
+      let entry, model;
+      if (fu.includes("ote") && !fu.includes("fvg")) {
+        const legEnd = long ? Math.max(...sess.slice(i, k + 1).map((b) => b.h)) : Math.min(...sess.slice(i, k + 1).map((b) => b.l));
+        entry = long ? legEnd - (legEnd - ext) * 0.705 : legEnd + (ext - legEnd) * 0.705; model = "the 70.5% optimal trade entry of the displacement leg";
+      } else if (fu.includes("ob") && !fu.includes("fvg")) {
+        const ob = [...sess.slice(i, k)].reverse().find((b) => long ? b.c < b.o : b.c > b.o) || sess[k - 2];
+        entry = long ? ob.h : ob.l; model = `the order block (the last ${long ? "down" : "up"} candle before the move, at ${fmt(entry)})`;
+      } else {
+        entry = long ? c3.l : c3.h; model = `the fair value gap (${fmt(long ? c1.h : c3.h)}–${fmt(long ? c3.l : c1.l)})`;
+      }
+      const sbOnly = fu.includes("sb") && !fu.includes("fvg") && !fu.includes("ob") && !fu.includes("ote");
+      const stop = long ? ext - buf : ext + buf;
+      for (let j = k + 1; j < sess.length; j++) {
+        const b = sess[j];
+        if (long ? b.l <= stop : b.h >= stop) return none(plan, `Displacement ${long ? "up" : "down"} came at ${tm(c3.t)}, but price went back through the sweep ${long ? "low" : "high"} before pulling back to ${model}, so there was no fill.`);
+        if (sbOnly) { const m = nyParts(b.t).mins; if (m < 600 || m >= 660) continue; }
+        if (long ? b.l <= entry : b.h >= entry) {
+          const px = long ? Math.min(entry, b.o) : Math.max(entry, b.o);
+          return fill(plan, long ? "long" : "short", j, px, stop, T, `price ${gapped ? `opened ${long ? "below" : "above"}` : `ran ${long ? "below" : "above"}`} ${lvlName(L1)} (${fmt(L1.v)})${gapped ? "" : ` at ${tm(sess[i].t)}`}, displaced ${long ? "up" : "down"} at ${tm(c3.t)}, and pulled back into ${model} at ${tm(b.t)}`);
         }
       }
-    });
-  } else if (kind === "level") {
-    refs.forEach((r) => {
-      const short = r.side === "high";
-      if (short ? O >= r.v : O <= r.v) return;
-      const i = sess.findIndex((b) => short ? b.h >= r.v - buf * 0.5 : b.l <= r.v + buf * 0.5);
-      if (i < 0) return;
-      for (let j = i; j < Math.min(sess.length, i + 4); j++) {
-        if (short ? sess[j].c < r.v - buf : sess[j].c > r.v + buf) {
-          const ext = short ? Math.max(...sess.slice(i, j + 1).map((b) => b.h)) : Math.min(...sess.slice(i, j + 1).map((b) => b.l));
-          out.push({ side: short ? "short" : "long", i: j, entry: sess[j].c, stop: short ? ext + buf : ext - buf, tgt: oppTarget(short ? "short" : "long", sess[j].c), why: `price tested ${r.name} (${ctx.fmt(r.v)}) at ${ctx.tm(sess[i].t)} and was pushed back`, level: r });
-          break;
-        }
-      }
-    });
-  } else if (kind === "breakout") {
-    const n = Math.min(6, Math.floor(sess.length / 3));
-    if (n >= 2) {
-      const orh = Math.max(...sess.slice(0, n).map((b) => b.h)), orl = Math.min(...sess.slice(0, n).map((b) => b.l)), mid = (orh + orl) / 2;
-      const iu = sess.findIndex((b, k) => k >= n && b.c > orh), idn = sess.findIndex((b, k) => k >= n && b.c < orl);
-      if (iu >= 0) out.push({ side: "long", i: iu, entry: sess[iu].c, stop: mid - buf, why: `price closed above the opening range high (${ctx.fmt(orh)}) at ${ctx.tm(sess[iu].t)}` });
-      if (idn >= 0) out.push({ side: "short", i: idn, entry: sess[idn].c, stop: mid + buf, why: `price closed below the opening range low (${ctx.fmt(orl)}) at ${ctx.tm(sess[idn].t)}` });
-    }
-  } else if (kind === "vwap") {
-    let pv = 0, vv = 0;
-    const hasVol = sess.some((b) => b.v > 0);
-    const vw = sess.map((b, k) => { const w = hasVol ? (b.v || 0) : 1; pv += (b.h + b.l + b.c) / 3 * w; vv += w; return vv ? pv / vv : b.c; });
-    ctx.vwapNote = hasVol ? "" : " (this feed has no volume here, so it uses the session’s average price instead of true VWAP)";
-    let upDone = false, dnDone = false;
-    for (let k = 3; k < sess.length; k++) {
-      const b = sess[k], w = vw[k - 1];
-      if (!upDone && sess[k - 1].c > w && b.l <= w && b.c > w) { out.push({ side: "long", i: k, entry: b.c, stop: b.l - buf, why: `price pulled back to VWAP (${ctx.fmt(w)}) at ${ctx.tm(b.t)} and held above it` }); upDone = true; }
-      if (!dnDone && sess[k - 1].c < w && b.h >= w && b.c < w) { out.push({ side: "short", i: k, entry: b.c, stop: b.h + buf, why: `price bounced up to VWAP (${ctx.fmt(w)}) at ${ctx.tm(b.t)} and was rejected` }); dnDone = true; }
-      if (upDone && dnDone) break;
-    }
-  } else if (kind === "news") {
-    (events || []).forEach((e) => {
-      const k = sess.findIndex((b) => b.t <= e.time && b.t + 3e5 > e.time);
-      if (k < 0 || k + 1 >= sess.length) return;
-      const d = sess[k + 1].c - sess[k].o;
-      if (!d) return;
-      const side = d > 0 ? "long" : "short", seg = sess.slice(k, k + 2);
-      const ext = side === "long" ? Math.min(...seg.map((b) => b.l)) : Math.max(...seg.map((b) => b.h));
-      out.push({ side, i: k + 1, entry: sess[k + 1].c, stop: side === "long" ? ext - buf : ext + buf, why: `${e.name} came out at ${ctx.tm(e.time)} and the first 5 to 10 minutes went ${d > 0 ? "up" : "down"}` });
-    });
+      return none(plan, `The sweep and displacement came (${tm(sess[i].t)}, ${tm(c3.t)}), but price never pulled back to ${model}${sbOnly ? " inside the Silver Bullet hour (10–11 AM)" : ""}, so there was no fill. Chasing it would have broken the plan.`);
+    };
+    if (up || dn) return one(up ? "up" : "down");
+    // no bias: wait for one side to be swept and trade the displacement the other way
+    const plan = `No bias: both ${lvlName(a1)} and ${lvlName(b1)} in play. Wait for one side to get swept, then trade the displacement the other way. If both get swept, stand aside.`;
+    const sU = a1 ? sess.findIndex((b) => b.h > a1.v) : -1, sD = b1 ? sess.findIndex((b) => b.l < b1.v) : -1;
+    if (sU < 0 && sD < 0) return none(plan, "Neither side was swept, so there was nothing to trade.");
+    const r = one(sD >= 0 && (sU < 0 || sD < sU) ? "up" : "down");
+    // both sides swept before the entry: the plan says stand aside
+    if (r.entered && sU >= 0 && sD >= 0 && Math.max(sU, sD) <= r.i) return none(plan, `Both sides were swept (${tm(sess[Math.min(sU, sD)].t)} and ${tm(sess[Math.max(sU, sD)].t)}) before any entry, so the day had no direction. The plan says stand aside.`);
+    return { ...r, plan };
   }
-  return out.sort((a, b) => a.i - b.i);
+
+  if (kind === "pa" || kind === "sd" || kind === "lean") {
+    const zone = kind === "sd" ? Math.max(buf * 2, avgBody * 1.5) : buf;
+    const one = (long) => {
+      const L = long ? b1 : a1, O = long ? a1 : b1, T = long ? A : B;
+      if (!L) return none("", "The plan had no level on that side, so there was no setup.");
+      const plan = kind === "sd" ? `${long ? "Demand" : "Supply"} near ${lvlName(L)} (${fmt(L.v)}) is the zone most likely to hold; favour fresh zones, a third test is weak.${T[0] ? ` Target ${lvlName(T[0])}.` : ""}`
+        : kind === "lean" ? `Lean ${long ? "long while price holds above" : "short while price holds below"} ${lvlName(L)} (${fmt(L.v)}).`
+        : `${long ? "Buy pullbacks that hold above" : "Sell rallies that fail under"} ${lvlName(L)} (${fmt(L.v)})${O ? `, or a clean break ${long ? "above" : "below"} ${lvlName(O)} toward ${lvlName(T[1] || T[0])}` : ""}. Don’t chase breaks the other way.`;
+      let tests = 0, inZone = false;
+      for (let j = 0; j < sess.length - 1; j++) {
+        const b = sess[j], n = sess[j + 1];
+        // the idea is dead once price closes through the level twice in a row
+        if (j > 0 && (long ? b.c < L.v - zone && sess[j - 1].c < L.v - zone : b.c > L.v + zone && sess[j - 1].c > L.v + zone)) return none(plan, `Price closed ${long ? "below" : "above"} ${lvlName(L)} and stayed there from ${tm(sess[j - 1].t)}, so the level didn’t hold. The plan said not to chase that break. No trade was the right answer.`);
+        const touch = long ? b.l <= L.v + zone : b.h >= L.v - zone;
+        if (touch && !inZone) tests++;
+        inZone = touch;
+        if (touch) {
+          if (kind === "sd" && tests >= 3) return none(plan, `By ${tm(b.t)} price had come back to the zone a third time. A third test is weak, so the plan says skip it.`);
+          // confirmation: this candle closes back on the right side and the next candle follows through
+          if (long ? b.c > L.v && n.c > b.c : b.c < L.v && n.c < b.c) {
+            const ext = long ? Math.min(b.l, n.l) : Math.max(b.h, n.h);
+            return fill(plan, long ? "long" : "short", j + 1, n.c, long ? Math.min(ext, L.v - zone) - buf : Math.max(ext, L.v + zone) + buf, T, `price ${kind === "sd" ? "came into the zone at" : long ? "pulled back to" : "rallied up to"} ${lvlName(L)} (${fmt(L.v)}) at ${tm(b.t)} and ${long ? "held" : "was rejected"}, with the next candle confirming`);
+          }
+        }
+        // price action: the clean break-and-retest of the far level
+        if (kind === "pa" && O && (long ? b.c > O.v + buf : b.c < O.v - buf)) {
+          for (let q = j + 1; q < sess.length - 1; q++) {
+            const r = sess[q];
+            if (long ? r.c < O.v - buf : r.c > O.v + buf) break;
+            if (long ? r.l <= O.v + buf && r.c > O.v : r.h >= O.v - buf && r.c < O.v) return fill(plan, long ? "long" : "short", q, r.c, long ? Math.min(r.l, O.v) - buf : Math.max(r.h, O.v) + buf, T.slice(1), `price broke ${long ? "above" : "below"} ${lvlName(O)} (${fmt(O.v)}) at ${tm(b.t)} and the retest held at ${tm(r.t)}`);
+          }
+        }
+      }
+      return none(plan, `Price never came back to ${lvlName(L)} for a ${kind === "sd" ? "zone test" : "pullback that held"}${kind === "pa" && O ? `, and there was no clean break-and-retest of ${lvlName(O)}` : ""}, so there was no entry. Chasing would have broken the plan.`);
+    };
+    if (up || dn) return one(up);
+    const plan = `No bias: expect a range between ${lvlName(b1)} and ${lvlName(a1)}. Fade the edges; only trust a break that closes outside and holds on the retest.`;
+    const pick = [one(true), one(false)].filter((x) => x.entered).sort((x, y) => x.i - y.i)[0];
+    return pick ? { ...pick, plan } : none(plan, "Neither edge of the range gave a clean rejection, so there was no trade.");
+  }
+
+  if (kind === "orderflow") {
+    const long = !dn, L = long ? b1 : a1;
+    const plan = up || dn ? `Watch for ${long ? "sellers" : "buyers"} getting absorbed near ${lvlName(L)}${L ? ` (${fmt(L.v)})` : ""}: that confirms the ${long ? "up" : "down"} day.` : `Watch which side gets absorbed at ${lvlName(a1)} or ${lvlName(b1)} to pick the direction.`;
+    if (!avgVol) return none(plan, "The price feed has no volume for this market, so absorption can’t be judged from here. Your footprint or DOM is the only way to review this one.");
+    let best = null;
+    (up ? [true] : dn ? [false] : [true, false]).forEach((lg) => {
+      const lev = lg ? b1 : a1; if (!lev) return;
+      const j = sess.findIndex((b, k) => k < sess.length - 1 && (lg ? b.l <= lev.v + buf : b.h >= lev.v - buf) && b.v >= avgVol * 1.5 && (lg ? (b.c - b.l) >= (b.h - b.l) * 0.6 : (b.h - b.c) >= (b.h - b.l) * 0.6) && (lg ? sess[k + 1].c > b.c : sess[k + 1].c < b.c));
+      if (j >= 0 && (!best || j < best.j)) best = { j, lg, lev };
+    });
+    if (!best) return none(plan, `No sign of absorption: no heavy-volume candle at ${lvlName(L)} that refused to ${long ? "fall" : "rise"} and then turned. Without it the plan says no trade. (Judged from volume and price; your footprint shows it more precisely.)`);
+    const b = sess[best.j], n = sess[best.j + 1];
+    return fill(plan, best.lg ? "long" : "short", best.j + 1, n.c, best.lg ? b.l - buf : b.h + buf, best.lg ? A : B, `a heavy-volume candle at ${lvlName(best.lev)} (${fmt(best.lev.v)}) at ${tm(b.t)} closed near its ${best.lg ? "high" : "low"} (absorption, judged from volume and price) and the next candle followed through`);
+  }
+
+  if (kind === "trend") {
+    if (!up && !dn) return none("No trend to follow today: sitting out is a valid choice.", "There was no bias, so the plan was to sit out. That’s what the rules said.");
+    const long = up, L = long ? b1 : a1, O = long ? a1 : b1;
+    const plan = `Only take ${long ? "longs while price holds above" : "shorts while price holds below"} ${lvlName(L)}${L ? ` (${fmt(L.v)})` : ""}; add on a break ${long ? "above" : "below"} ${lvlName(O)}${O ? ` (${fmt(O.v)})` : ""}.`;
+    if (!O) return none(plan, "The plan had no break level, so there was no entry.");
+    const lost = L ? sess.findIndex((b) => long ? b.c < L.v : b.c > L.v) : -1;
+    const j = sess.findIndex((b) => long ? b.c > O.v : b.c < O.v);
+    if (j < 0) return none(plan, `Price never broke ${long ? "above" : "below"} ${lvlName(O)}, so there was no trend entry. No trade was the right answer.`);
+    if (lost >= 0 && lost < j) return none(plan, `Price closed ${long ? "below" : "above"} ${lvlName(L)} at ${tm(sess[lost].t)} before any break, so the trend condition failed. The plan said no ${long ? "longs" : "shorts"}.`);
+    const sw = sess.slice(Math.max(0, j - 6), j + 1), stop = long ? Math.min(...sw.map((b) => b.l)) - buf : Math.max(...sw.map((b) => b.h)) + buf;
+    return fill(plan, long ? "long" : "short", j, sess[j].c, stop, null, `price closed ${long ? "above" : "below"} ${lvlName(O)} (${fmt(O.v)}) at ${tm(sess[j].t)} while holding ${long ? "above" : "below"} ${lvlName(L)}`, { noTarget: true, exitIf: L ? (b) => long ? b.c < L.v : b.c > L.v : null });
+  }
+
+  if (kind === "momentum") {
+    if (!up && !dn) {
+      const j = a1 ? sess.findIndex((b) => b.c > a1.v) : -1, k = b1 ? sess.findIndex((b) => b.c < b1.v) : -1;
+      return none(`Little momentum expected until one edge breaks: ${lvlName(a1)} or ${lvlName(b1)}.`, j < 0 && k < 0 ? "Neither edge broke, so there was no momentum trade." : "An edge broke, but with no bias the plan didn’t pick a side in advance, so no trade.");
+    }
+    const long = up, O = long ? a1 : b1, T = long ? A.slice(1) : B.slice(1);
+    const plan = `The strongest move should come on a break of ${lvlName(O)}${O ? ` (${fmt(O.v)})` : ""}. If it can’t ${long ? "clear" : "break"} it by late morning, momentum is fading.`;
+    if (!O) return none(plan, "The plan had no break level, so there was no entry.");
+    const deadline = sess[0].t + 120 * 6e4;
+    const j = sess.findIndex((b) => b.t < deadline && (long ? b.c > O.v : b.c < O.v));
+    if (j < 0) return none(plan, `Price didn’t ${long ? "clear" : "break"} ${lvlName(O)} within the first two hours, so momentum faded, as the plan warned. No trade was the right answer.`);
+    const b = sess[j];
+    return fill(plan, long ? "long" : "short", j, b.c, long ? b.l - buf : b.h + buf, T, `price ${long ? "cleared" : "broke"} ${lvlName(O)} (${fmt(O.v)}) on a closing basis at ${tm(b.t)}`);
+  }
+
+  if (kind === "news") {
+    const ev = events[0];
+    if (!ev) return none("No big release today, so news comes from headlines, not the calendar.", "No big scheduled news landed in this session, so there was nothing to trade from the calendar. Sitting out was right.");
+    const plan = `${ev.name} at ${tm(ev.time)} was the event. Let the first spike settle for 5 to 15 minutes, then trade the move that holds, not the spike.${up || dn ? ` A ${up ? "soft" : "hot"} number fits the ${call} call; the opposite cancels it.` : ""}`;
+    const k = sess.findIndex((b) => b.t <= ev.time && b.t + 3e5 > ev.time);
+    if (k < 0 || k + 3 >= sess.length) return none(plan, "The release fell at the edge of the session, so there wasn’t time to trade the reaction inside it.");
+    const spike = sess.slice(k, k + 3), sh = Math.max(...spike.map((b) => b.h)), sl = Math.min(...spike.map((b) => b.l)), c15 = sess[k + 3];
+    const held = c15.c > sh - (sh - sl) * 0.25 ? "up" : c15.c < sl + (sh - sl) * 0.25 ? "down" : null;
+    if (!held) return none(plan, `After 15 minutes price was back in the middle of the spike range (${fmt(sl)}–${fmt(sh)}), so no move held. No trade was the right answer.`);
+    if ((up || dn) && held !== call) return none(plan, `The move that held after the release was ${held}, against the ${call} call, so the number cancelled the plan. No trade was the right answer.`);
+    const long = held === "up";
+    return fill(plan, long ? "long" : "short", k + 3, c15.c, long ? sl - buf : sh + buf, long ? A : B, `${ev.name} came out at ${tm(ev.time)}, the spike settled, and price was still holding near the ${long ? "top" : "bottom"} of the spike range 15 minutes later`);
+  }
+  return none("", "");
 }
 
 // The whole analysis. Inputs are plain data so it can be tested without the network.
-function analyze({ instrument, bars, from, to, now, bias, strategies, events }) {
+function analyze({ instrument, bars, from, to, now, bias, strategies, events, followUps }) {
   const I = INSTR[instrument] || INSTR.NQ;
   bars = (bars || []).filter((b) => b && isFinite(b.o) && isFinite(b.h) && isFinite(b.l) && isFinite(b.c)).sort((a, b) => a.t - b.t);
   const S = pickSession(bars, from, to, now);
@@ -201,67 +330,59 @@ function analyze({ instrument, bars, from, to, now, bias, strategies, events }) 
   const O = sess[0].o, C = sess[sess.length - 1].c;
   let H = sess[0], L = sess[0]; sess.forEach((b) => { if (b.h > H.h) H = b; if (b.l < L.l) L = b; });
   const range = H.h - L.l, net = C - O;
-  // buffer past a level: a tenth of a typical 5-minute candle's size, at least a few ticks
   const avgBar = sess.reduce((x, b) => x + (b.h - b.l), 0) / sess.length;
+  const avgBody = sess.reduce((x, b) => x + Math.abs(b.c - b.o), 0) / sess.length;
+  const vols = sess.map((b) => b.v || 0), avgVol = vols.some((v) => v > 0) ? vols.reduce((x, y) => x + y, 0) / vols.length : 0;
   const tick = I.pip ? I.pip : I.dp >= 2 ? 0.25 : 1;
   const buf = Math.max(avgBar * 0.25, tick * 4);
-  // typical size of this same window over the previous sessions in the data
   const len = end - start, ranges = [];
   for (let i = 1; i <= 6; i++) { const a = start - i * 864e5, r = bars.filter((b) => b.t >= a && b.t < a + len); if (r.length >= sess.length * 0.6) ranges.push(Math.max(...r.map((b) => b.h)) - Math.min(...r.map((b) => b.l))); }
   ranges.sort((a, b) => a - b);
   const typical = ranges.length >= 2 ? ranges[Math.floor(ranges.length / 2)] : null;
   const quiet = typical ? range < typical * 0.5 : false;
-  const refs = refLevels(bars, start, I.kind);
+  const lv = planLevels(bars, start, I.kind);
 
-  // the saved bias counts only if it existed by the session's first 15 minutes (and well before the end)
-  let call = null, conf = null, biasNote = "", graded = null;
-  // a list of saved biases is fine: use the one that belongs to this session
+  // the saved bias counts only if it existed by the session's first 15 minutes, and is graded from the price when it was saved
+  let call = null, conf = null, graded = null, biasLate = false;
   if (Array.isArray(bias)) bias = bias.filter((x) => x && x.at >= start - 20 * 36e5 && x.at < end).sort((a, b) => a.at - b.at)[0] || null;
   if (bias && /^(up|down)$/.test(bias.call) && bias.at <= start + 15 * 6e4 && bias.at < end - 30 * 6e4 && bias.at >= start - 20 * 36e5) {
     call = bias.call; conf = bias.conf || null;
     const b0 = sess.find((b) => b.t + 3e5 > bias.at) || sess[0];
     const p0 = b0.t < bias.at ? b0.c : b0.o, mv = C - p0, flatPct = I.kind === "crypto" ? 0.3 : I.kind === "fx" ? 0.05 : 0.1;
     graded = Math.abs(mv / p0 * 100) < flatPct ? "flat" : (mv > 0) === (call === "up") ? "right" : "wrong";
-  } else if (bias && bias.call) biasNote = I.bias ? "The site’s saved bias came after this session started, so it isn’t graded here." : "";
+  } else if (bias && bias.call) biasLate = true;
   const verdict = call ? `The bias was ${call}${conf ? ` (${conf} confidence)` : ""}, and ${graded === "right" ? "it was right" : graded === "wrong" ? "it was wrong" : "price barely moved after it, so it gets no grade"}.`
-    : `There was no saved bias for ${I.name} in this session${biasNote ? ` (${biasNote.charAt(0).toLowerCase() + biasNote.slice(1, -1)})` : ""}, so this shows what the rules would have done either way.`;
-
+    : `There was no saved bias for ${I.name} in this session${biasLate ? " (the site’s bias came after it started, so it isn’t used)" : ""}, so each plan is replayed the way it reads with no bias.`;
   const summary = [
     `${I.name} ${net >= 0 ? "rose" : "fell"} ${amt(net)} in the session, with a ${amt(range)} range from high to low${typical ? ` (a typical session here moves about ${amt(typical)})` : ""}.`,
     `It opened at ${fmt(O)}, ${H.t <= L.t ? `made its high of ${fmt(H.h)} at ${tm(H.t)}, then its low of ${fmt(L.l)} at ${tm(L.t)}` : `made its low of ${fmt(L.l)} at ${tm(L.t)}, then its high of ${fmt(H.h)} at ${tm(H.t)}`}, and finished at ${fmt(C)}.`
   ];
-  // gaps at the open, said plainly so they aren't mistaken for sweeps
-  refs.forEach((r) => { if (r.side === "high" ? O > r.v : O < r.v) summary.push(`It opened ${r.side === "high" ? "above" : "below"} ${r.name} (${fmt(r.v)}), a gap rather than a liquidity grab.`); });
-
-  const ctx = { sess, refs, buf, events: (events || []).filter((e) => e.time >= start && e.time < end), fmt, tm };
-  const want = call === "up" ? "long" : call === "down" ? "short" : null;
-  const strats = [...new Set((strategies && strategies.length ? strategies : ["unsure"]).filter((s) => RECIPE[s]))].slice(0, 3);
+  const X = { sess, call, A: lv.above, B: lv.below, buf, fmt, tm, avgBody, avgVol, events: (events || []).filter((e) => e.time >= start && e.time < end), fu: [] };
+  const strats = [...new Set((strategies && strategies.length ? strategies : ["unsure"]).filter((s) => STRATS[s]))].slice(0, 3);
   const plans = strats.map((sid) => {
-    const recipe = RECIPE[sid], name = STRAT_NAME[sid] || sid;
-    if (recipe === "none") return { strategy: sid, name, text: "This strategy isn’t about one session, so there’s no entry to review. The summary above is what the session did." };
-    if (recipe === "range") {
+    const def = STRATS[sid], name = def.name;
+    if (def.replay === "none") return { strategy: sid, name, text: NOT_SESSION[sid] || "This strategy isn’t about one session, so there’s no entry to review." };
+    if (def.replay === "range") {
       if (!typical) return { strategy: sid, name, text: "Not enough recent sessions to compare this one against yet." };
       const ratio = range / typical;
-      return { strategy: sid, name, text: ratio < 0.8 ? `A good session for premium sellers: price stayed inside a smaller range than usual (${amt(range)} vs about ${amt(typical)}).` : ratio > 1.3 ? `A tough session for premium sellers: the range (${amt(range)}) was well past the usual ${amt(typical)}, so short options near the money would have been under pressure.` : `An ordinary-sized session (${amt(range)} vs about ${amt(typical)}): no special edge either way for premium sellers.` };
+      return { strategy: sid, name, text: ratio < 0.8 ? `A good session for premium sellers: price stayed inside a smaller range than usual (${amt(range)} vs about ${amt(typical)}).` : ratio > 1.3 ? `A tough session for premium sellers: the range (${amt(range)}) was well past the usual ${amt(typical)}, so short options near the money were under pressure.` : `An ordinary-sized session (${amt(range)} vs about ${amt(typical)}): no special edge either way for premium sellers.` };
     }
-    if (recipe === "news" && !ctx.events.length) return { strategy: sid, name, text: "No big scheduled news landed in this session, so news traders had nothing to trade. Sitting out was right." };
-    const all = setups(recipe, ctx);
-    const cand = all.filter((s) => !want || s.side === want);
-    const s = cand[0];
-    const label = { sweep: "the ICT setup (a run past a high or low, then a close back through it)", level: "a clean test-and-reject of a key level", breakout: "a close outside the opening range (first 30 minutes)", vwap: "a pullback to VWAP that held", news: "a trade in the direction of the first reaction to the news" }[recipe];
-    if (!s) {
-      const against = want ? all.find((x) => x.side !== want) : null;
-      return { strategy: sid, name, result: "none", text: `No valid entry: ${label} never set up${want ? ` in the bias direction` : ""}.${against ? ` The only setup went the other way (${against.why}), against the bias, so the rules said stay out.` : ""} ${quiet ? "It was also a quieter session than usual. " : ""}No trade was the right answer.`.replace(/\s+/g, " ").trim() };
+    if (def.replay === "daytype") {
+      const pos = range ? (C - L.l) / range : 0.5, trendDay = (pos > 0.8 || pos < 0.2) && (!typical || range > typical * 0.9);
+      return { strategy: sid, name, text: trendDay ? `A trend session: it finished near its ${pos > 0.5 ? "high" : "low"} after a ${amt(range)} range. Trend-following bots had the edge; mean-reversion bots fought the move.` : `A two-way session: it finished in the middle of its ${amt(range)} range. Mean-reversion bots had the edge; breakout bots likely got chopped.` };
     }
-    const w = walk(sess, s.i, s.side, s.entry, s.stop, s.tgt ? s.tgt.v : null);
-    const usedPlanTgt = w && s.tgt && Math.abs(w.target - s.tgt.v) < 1e-9;
-    if (!w) return { strategy: sid, name, result: "none", text: "The setup had no room for a stop, so no trade." };
-    const tgtName = usedPlanTgt ? `the plan’s target, ${s.tgt.name} (${fmt(w.target)}, ${(Math.abs(w.target - s.entry) / w.risk).toFixed(1)}R)` : `the 2R target (${fmt(w.target)})`;
-    const outcome = w.exit === "target" ? `It reached ${tgtName} at ${tm(w.at)}.` : w.exit === "stop" ? `It was stopped out at ${tm(w.at)} for a 1R loss${w.best >= 0.5 ? ` (after getting as far as ${w.best.toFixed(1)}R in profit)` : ""}.` : `Neither the stop nor ${usedPlanTgt ? "the plan’s target" : "the 2R target"} was hit, so it closed at the session end for ${w.r >= 0 ? "+" : ""}${w.r.toFixed(1)}R.`;
-    const text = `${s.side === "long" ? "Long" : "Short"} at ${fmt(s.entry)} after ${s.why}, with the stop at ${fmt(s.stop)} (${amt(w.risk)} of risk, past the extreme plus a buffer). ${outcome}${recipe === "vwap" ? ctx.vwapNote || "" : ""}${recipe === "level" && sid === "orderflow" ? " The footprint itself isn’t visible here; this is the level reaction an order-flow read would have confirmed or rejected." : ""}${!want ? " There was no saved bias, so this is simply the first setup either way." : ""}`;
-    return { strategy: sid, name, result: w.exit === "target" || w.r > 0 ? "win" : w.r < 0 ? "loss" : "flat", r: w.r, text };
+    const r = replay(def.replay, { ...X, fu: (followUps && followUps[sid]) || [] });
+    if (!r.entered) return { strategy: sid, name, plan: r.plan, result: "none", text: r.text + (quiet && !/quiet/i.test(r.text) ? ` It was also a quieter session than usual (${amt(range)} vs about ${amt(typical)}).` : "") };
+    const w = r.w, tg = w.target;
+    const tgtTxt = tg && tg.name ? `the plan’s target, ${lvlName(tg)} (${fmt(tg.v)}, ${(Math.abs(tg.v - r.entry) / w.risk).toFixed(1)}R)` : tg ? `a 2R target (${fmt(tg.v)})` : "";
+    const outcome = w.exit === "target" ? `It reached ${tgtTxt} at ${tm(w.at)}.`
+      : w.exit === "stop" ? `It was stopped out at ${tm(w.at)} for a 1R loss${w.best >= 0.5 ? ` (after getting as far as ${w.best.toFixed(1)}R in profit)` : ""}.`
+      : w.exit === "rule" ? `The plan’s exit rule closed it at ${fmt(w.price)} at ${tm(w.at)} for ${w.r >= 0 ? "+" : ""}${w.r.toFixed(1)}R.`
+      : `${tg ? `Neither the stop nor ${tgtTxt} was hit, so it` : "It"} closed at the session end for ${w.r >= 0 ? "+" : ""}${w.r.toFixed(1)}R.`;
+    const text = `${r.side === "long" ? "Long" : "Short"} at ${fmt(r.entry)} after ${r.how}. Stop at ${fmt(r.stop)} (${amt(w.risk)} of risk, past the extreme plus a buffer). ${outcome}`;
+    return { strategy: sid, name, plan: r.plan, result: w.r > 0 ? "win" : w.r < 0 ? "loss" : "flat", r: w.r, text };
   });
-  return { ready: true, instrument, name: I.name, date, start, end, open: O, high: H.h, low: L.l, close: C, range, typical, quiet, call, conf, result: graded, verdict, summary, plans, refs: refs.map((r) => ({ name: r.name, v: r.v })) };
+  return { ready: true, instrument, name: I.name, date, start, end, open: O, high: H.h, low: L.l, close: C, range, typical, quiet, call, conf, result: graded, verdict, summary, plans, levels: { above: lv.above, below: lv.below } };
 }
 
-module.exports = { analyze, pickSession, refLevels, walk, setups, nyToMs, nyParts, INSTR, RECIPE };
+module.exports = { analyze, pickSession, planLevels, walk, replay, nyToMs, nyParts, INSTR, RECIPE, STRATS };

@@ -1,6 +1,6 @@
 // The Open One: front end. Plain JavaScript modules, no build step.
 import {
-  initMe, me, myMarkets, myAssets, isBeginner, isLearning, depth, hasStrat, levelTrader, intraday, stratsFor,
+  initMe, me, myMarkets, myAssets, isBeginner, isLearning, depth, hasStrat, levelTrader, intraday, stratsFor, followUps,
   forYouEvent, forYouHeadline, forYouStrength, relevance, greeting, windowStatus, startAlerts, openAlerts, editSetup,
   profileQuery, marketLabel, myStruggles, isProp, newsRestricted, notify,
   userTZ, plan, isPaid, authToken, rpc, loadPlan, signedIn, mySessions as mySessionsC, followUps, sbClient, setProfileLocal, hasProfile, SESSIONS as SESSIONS_C,
@@ -836,17 +836,18 @@ function recapInstruments(el) {
 function loadRecap(el, rc, inst) {
   const list = recapInstruments(el), from = +el.dataset.from, to = +el.dataset.to;
   rc.innerHTML = skel(2);
-  api('recap?' + new URLSearchParams({ i: inst, from, to, st: el.dataset.st || '' }).toString(), 10 * 60e3).then(r => {
+  const fu = (el.dataset.st || '').split(',').filter(Boolean).map(sid => { const a = followUps(el.dataset.mk, sid); return a.length ? `${sid}:${a.join('.')}` : ''; }).filter(Boolean).join(';');
+  api('recap?' + new URLSearchParams({ i: inst, from, to, st: el.dataset.st || '', fu }).toString(), 10 * 60e3).then(r => {
     if (!r.ready) { rc.innerHTML = `<p class="muted small">${esc(r.why || 'No finished session yet.')}</p>`; return; }
     const day = r.today ? 'Today’s session' : new Date(r.date + 'T12:00:00Z').toLocaleDateString('en-US', { timeZone: 'UTC', weekday: 'long' }) + '’s session';
     const tabs = list.length > 1 ? `<div class="chips tight rc-tabs">${list.map(x => `<button type="button" class="chip" data-rci="${esc(x)}" aria-pressed="${x === inst}">${esc(x === 'XAUUSD' ? 'Gold' : x.length === 6 ? x.slice(0, 3) + '/' + x.slice(3) : x)}</button>`).join('')}</div>` : '';
     rc.innerHTML = `<p class="dp-k">Off market · ${esc(day)} recap</p>${tabs}
       <p class="rc-v ${r.result === 'right' ? 'up' : r.result === 'wrong' ? 'down' : ''}">${esc(r.verdict)}</p>
       <p class="rc-s">${esc(r.summary.join(' '))}</p>
-      <p class="dp-k">What your plan’s rules would have done</p>
-      ${r.plans.map(x => `<div class="rc-p ${x.result || ''}"><b>${esc(x.name)}</b><p>${esc(x.strategy === 'ict' ? ictWords(x.text, el.dataset.mk) : x.text)}</p></div>`).join('')}
+      <p class="dp-k">Your plan, replayed</p>
+      ${r.plans.map(x => `<div class="rc-p ${x.result || ''}"><b>${esc(x.name)}</b>${x.plan ? `<p class="rc-plan"><span>Your plan said:</span> ${esc(x.strategy === 'ict' ? ictWords(x.plan, el.dataset.mk) : x.plan)}</p>` : ''}<p><span class="rc-what">What the rules would have done:</span> ${esc(x.strategy === 'ict' ? ictWords(x.text, el.dataset.mk) : x.text)}</p></div>`).join('')}
       ${r.ai ? `<p class="rc-ai"><span class="pl-ai">AI review</span>${esc(r.ai)}</p>` : ''}
-      <p class="dp-tfoot">Entries on a candle’s close, stops past the extreme plus a buffer, walked forward candle by candle to a 2R target or the session end. From 5-minute prices that can lag up to 15 minutes. For learning, not a promise about the next session.</p>`;
+      <p class="dp-tfoot">Each plan is replayed with the same levels it named before the session: entries where the plan says, stops past the extreme plus a buffer, walked forward candle by candle to the plan’s target, its exit rule or the session end. From 5-minute prices that can lag up to 15 minutes. For learning, not a promise about the next session.</p>`;
     rc.querySelectorAll('[data-rci]').forEach(b => b.onclick = () => loadRecap(el, rc, b.dataset.rci));
   }).catch(() => { rc.innerHTML = ''; rc.hidden = true; });
 }

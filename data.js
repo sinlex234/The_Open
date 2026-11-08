@@ -3628,13 +3628,15 @@ async function buildRecap(q) {
   if (I.bias) { try { biases = (await sb(`open_daybias?select=call,conf,logged_at&market=eq.${I.bias}&day=gte.${new Date(now - 9 * 864e5).toISOString().slice(0, 10)}&order=day.desc&limit=10`)).map((r) => ({ call: r.call, conf: r.conf, at: Date.parse(r.logged_at) })); } catch {} }
   const ccy = I.kind === "fx" ? [I.name.slice(0, 3), I.name.slice(4, 7)] : ["USD"];
   const events = (cal && cal.events || []).filter((e) => e.impact === "High" && ccy.includes(e.country) && !e.allDay).map((e) => ({ time: e.time, name: e.name || e.title }));
-  const r = RECAP.analyze({ instrument: inst, bars: ch && ch.bars || [], from, to, now, bias: biases, strategies, events });
+  // the reader's follow-up answers per strategy (e.g. ICT: fair value gaps vs order blocks), "ict:fvg.ob;pa:sr"
+  const followUps = Object.fromEntries(String(q.fu || "").split(";").map((x) => x.split(":")).filter((x) => RECAP.STRATS[x[0]] && x[1]).map(([k, v]) => [k, v.split(".").filter((y) => /^[a-z0-9]{1,12}$/.test(y)).slice(0, 12)]));
+  const r = RECAP.analyze({ instrument: inst, bars: ch && ch.bars || [], from, to, now, bias: biases, strategies, events, followUps });
   if (!r.ready) return r;
   r.today = r.date === ny(now).date;
   r.ai = null;
   if (hasAI()) {
     try {
-      const facts = { market: r.name, session: `${minsTxtS(from)}-${minsTxtS(to)} ET`, date: r.date, open: r.open, high: r.high, low: r.low, close: r.close, bias: r.call, bias_result: r.result, summary: r.summary, plans: r.plans.map((p) => p.name + ": " + p.text) };
+      const facts = { market: r.name, session: `${minsTxtS(from)}-${minsTxtS(to)} ET`, date: r.date, open: r.open, high: r.high, low: r.low, close: r.close, bias: r.call, bias_result: r.result, summary: r.summary, plans: r.plans.map((p) => p.name + ": plan: " + (p.plan || "") + " What happened: " + p.text) };
       const out = await memo(`recap:${inst}:${r.date}:${from}:${to}:${strategies.join(",")}`, 6 * 36e5, () => askClaude({ maxTokens: 400, system: VOICE + "\nYou are a calm trading coach reviewing one finished session. Use ONLY the facts given. Never invent prices, times or results. No advice to trade real money.", user: `Facts:\n${JSON.stringify(facts)}\n\nReturn ONLY JSON: {"note":"3 short sentences: what the session did, whether the plan worked, and the one lesson for next time"}` }));
       // fact check: every number the AI writes must appear in the facts we gave it
       const factTxt = JSON.stringify(facts).replace(/,(?=\d{3})/g, ""), nums = String(out && out.note || "").match(/\d[\d,.:]*\d|\d/g) || [];

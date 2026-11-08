@@ -1791,3 +1791,5 @@ img,svg,video,canvas,iframe,table{max-width:100%}
 .nav.more-r,.tfbar.more-r,.tn-strip.more-r,.th-row.more-r{-webkit-mask-image:linear-gradient(to right,#000 calc(100% - 2.5rem),transparent);mask-image:linear-gradient(to right,#000 calc(100% - 2.5rem),transparent)}
 .nav.more-l,.tfbar.more-l,.tn-strip.more-l,.th-row.more-l{-webkit-mask-image:linear-gradient(to left,#000 calc(100% - 2.5rem),transparent);mask-image:linear-gradient(to left,#000 calc(100% - 2.5rem),transparent)}
 .nav.more-l.more-r,.tfbar.more-l.more-r,.tn-strip.more-l.more-r,.th-row.more-l.more-r{-webkit-mask-image:linear-gradient(to right,transparent,#000 2.5rem,#000 calc(100% - 2.5rem),transparent);mask-image:linear-gradient(to right,transparent,#000 2.5rem,#000 calc(100% - 2.5rem),transparent)}
+.rc-plan{color:var(--ink-2)!important}
+.rc-plan span,.rc-what{font-weight:600;color:var(--ink-3)}
