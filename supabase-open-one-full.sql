@@ -174,6 +174,42 @@ create policy "open_relcalls: add now" on public.open_relcalls for insert
     and released_at between now() - interval '40 minutes' and now() + interval '1 minute');
 grant select, insert on public.open_relcalls to anon, authenticated;
 
+-- ---------- Crowd vs the bot: readers call up or down before a big release; graded like the site's release calls ----------
+create table if not exists public.open_crowd (
+  id          bigint generated always as identity primary key,
+  event_key   text not null,
+  title       text not null,
+  country     text not null check (country in ('USD', 'EUR')),
+  released_at timestamptz not null,
+  market      text not null check (market in ('NQ', 'BTC', 'EURUSD')),
+  dir         text not null check (dir in ('up', 'down')),
+  user_id     uuid not null default auth.uid() references auth.users (id) on delete cascade,
+  voted_at    timestamptz not null default now(),
+  unique (event_key, market, user_id)
+);
+alter table public.open_crowd enable row level security;
+-- Readers see only their own calls; everyone sees the totals through open_crowd_tally
+drop policy if exists "open_crowd: own" on public.open_crowd;
+create policy "open_crowd: own" on public.open_crowd for select to authenticated using (auth.uid() = user_id);
+-- Calls only before the release (up to 3 days ahead), stamped now, as yourself
+drop policy if exists "open_crowd: call" on public.open_crowd;
+create policy "open_crowd: call" on public.open_crowd for insert to authenticated
+  with check (auth.uid() = user_id and voted_at between now() - interval '1 minute' and now() + interval '1 minute'
+    and released_at > now() and released_at < now() + interval '3 days');
+-- Changing your mind is allowed until the number comes out
+drop policy if exists "open_crowd: change" on public.open_crowd;
+create policy "open_crowd: change" on public.open_crowd for update to authenticated
+  using (auth.uid() = user_id and released_at > now())
+  with check (auth.uid() = user_id and released_at > now());
+grant select, insert on public.open_crowd to authenticated;
+grant update (dir) on public.open_crowd to authenticated;
+-- Totals only (no names or ids), readable by everyone
+create or replace view public.open_crowd_tally as
+  select event_key, market, max(title) as title, max(country) as country, max(released_at) as released_at,
+    count(*) filter (where dir = 'up')::int as up, count(*) filter (where dir = 'down')::int as down
+  from public.open_crowd group by event_key, market;
+grant select on public.open_crowd_tally to anon, authenticated;
+
 -- ---------- Headline history for "This rhymes with…": every big story saved once, with its time ----------
 create table if not exists public.open_heads (
   id           bigint generated always as identity primary key,

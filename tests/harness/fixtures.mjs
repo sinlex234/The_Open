@@ -117,6 +117,16 @@ globalThis.fetch = async (url, opts) => {
     const hs = ['Democrats win House and Senate majorities in midterms', 'Stocks rally as midterm results point to divided government', 'Chip stocks slip as election results hit data-center optimism', 'Dollar dips as traders weigh Democrats sweep in Congress', 'Binance hack: users withdraw $3.6bn after biggest-ever crypto hack', 'Binance resumes withdrawals after hack', 'Bitcoin slips as Binance hack rattles crypto traders', 'Regulators probe Binance after hack', 'Treasury yields jump after hotter-than-expected producer prices', 'Stocks slide as hot inflation data dims rate-cut hopes', 'Yields climb as CPI comes in hotter than forecast', 'Nasdaq futures fall after inflation surprise', 'Producer prices rise more than expected in September', 'Dollar jumps as consumer prices beat forecasts', 'Wall Street drops as inflation stays sticky', 'Inflation cools more than expected, stocks rally', 'Stocks rise as softer inflation boosts rate-cut bets', 'Oil jumps 3% as Middle East tensions flare', 'Oil prices surge after attack on tanker', 'Crude jumps as OPEC+ agrees to extend output cuts', 'Oil climbs 2% on supply worries after OPEC meeting', 'Brent rallies as Saudi Arabia signals deeper cuts', 'Oil surges as OPEC+ surprises with bigger cut', 'Trump threatens new tariffs on China, futures slide', 'Stocks fall as Trump announces fresh tariffs', 'Fed’s Powell says rate cuts still likely this year', 'Bitcoin climbs as ETF inflows return', 'Nvidia rallies as AI chip demand stays strong', 'Jobless claims rise more than expected'];
     return ok(hs.map((h, i) => ({ story_id: 'h' + i, headline: h, source: ['Reuters', 'CNBC', 'Bloomberg', 'MarketWatch'][i % 4], theme: null, published_at: new Date(now - (i < 8 ? 1 + i * 2.5 : 30 + i * 37) * H).toISOString() })).concat(globalThis.__heads || []));
   }
+  if (u.includes('supabase.co/rest/v1/open_crowd_tally')) {
+    // readers' totals for the same releases the site called (see open_relcalls below)
+    const H = 36e5, now = Date.now(), hs = [200, 150, 100, 60, 30, 5], t = ['CPI m/m', 'Non-Farm Employment Change', 'PPI m/m', 'Retail Sales m/m', 'CPI m/m', 'Unemployment Claims'];
+    const v = [[14, 5], [3, 9], [6, 6], [2, 1], [11, 4], [8, 7]];
+    return ok(hs.map((h, i) => ({ event_key: 'USD|' + t[i] + '|' + i, market: 'NQ', title: t[i], country: 'USD', released_at: new Date(Math.floor((now - h * H) / 3e5) * 3e5).toISOString(), up: v[i][0], down: v[i][1] })));
+  }
+  if (u.includes('supabase.co/rest/v1/open_crowd')) {
+    const H = 36e5, now = Date.now(), rt = (h) => new Date(Math.floor((now - h * H) / 3e5) * 3e5).toISOString();
+    return ok([{ event_key: 'USD|CPI m/m|0', title: 'CPI m/m', market: 'NQ', dir: 'up', released_at: rt(200) }, { event_key: 'USD|Non-Farm Employment Change|1', title: 'Non-Farm Employment Change', market: 'NQ', dir: 'up', released_at: rt(150) }, { event_key: 'USD|CPI m/m|4', title: 'CPI m/m', market: 'NQ', dir: 'up', released_at: rt(30) }]);
+  }
   if (u.includes('supabase.co/rest/v1/open_relcalls')) {
     if (opts && opts.method === 'POST') { globalThis.__rel = (globalThis.__rel || []).concat(JSON.parse(opts.body)); return new Response('', { status: 201 }); }
     const H = 36e5, now = Date.now(), out = [];

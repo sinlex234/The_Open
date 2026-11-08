@@ -3053,7 +3053,25 @@ async function build16(date) {
   }
   await addMeters(out, now, isToday).catch(() => null);
   const relLog = isToday ? await logRelCalls(out).catch((e) => "not logged: " + String(e.message || e).slice(0, 80)) : "not today";
+  await addCrowd(out).catch(() => null);
   return { relLog, events: out, matched: out.filter((x) => x.actual).length, updated: now };
+}
+// The site's saved call and the readers' totals on each big USD/EUR release (Crowd vs the bot)
+async function addCrowd(out) {
+  const hi = out.filter((x) => x.impact === "High" && (x.country === "USD" || x.country === "EUR"));
+  if (!hi.length) return;
+  const keys = hi.map((x) => x.key), list = encodeURIComponent(keys.map((k) => '"' + String(k).replace(/"/g, "") + '"').join(","));
+  const rel = hi.filter((x) => x.released).map((x) => x.key);
+  const [bots, tal] = await Promise.all([
+    rel.length ? memo("cbot:" + rel.join("~").slice(0, 400), 30e3, () => sb(`open_relcalls?select=event_key,market,dir,how&event_key=in.(${encodeURIComponent(rel.map((k) => '"' + String(k).replace(/"/g, "") + '"').join(","))})`)).catch(() => []) : [],
+    memo("ctal:" + keys.join("~").slice(0, 400), 20e3, () => sb(`open_crowd_tally?select=event_key,market,up,down&event_key=in.(${list})`)).catch(() => [])
+  ]);
+  hi.forEach((x) => {
+    const b = (bots || []).filter((r) => r.event_key === x.key), t = (tal || []).filter((r) => r.event_key === x.key);
+    if (b.length) x.bot = Object.fromEntries(b.map((r) => [r.market, { dir: r.dir, how: r.how }]));
+    // totals are only sent once the number is out; before that, readers see them after making their own call
+    if (t.length && x.released) x.crowd = Object.fromEntries(t.map((r) => [r.market, { up: r.up, down: r.down }]));
+  });
 }
 
 // api/_lib/router.js
@@ -3434,6 +3452,44 @@ async function buildRelScore() {
   return { ready: true, days: 90, total: calls.length, summary: sum, byHow, byRule, calls: calls.slice(0, 40), updated: Date.now() };
 }
 
+// ---------- Crowd vs the bot (rules in crowd.js): readers call before the number, the site after; same 1-hour grade ----------
+async function crowdOutcome() {
+  const keys = Object.keys(CALL_MKTS);
+  const c15 = await memo("crowd15", 5 * 6e4, () => settle(Object.fromEntries(keys.map((k) => [k, yahooChart(CALL_MKTS[k].sym, { interval: "15m", range: "1mo" })]))));
+  // grade of an "up" call: from the price at the release to an hour later
+  return (mk, time) => { const c = CALL_MKTS[mk], b = c15.res[mk] && c15.res[mk].bars; return c ? grade(b, time, (s) => s + 36e5, { ...c, flat: c.flat / 2 }, "up") : { result: "pending" }; };
+}
+async function buildCrowdScore() {
+  const since = new Date(Date.now() - 90 * 864e5).toISOString();
+  let tallies, bots;
+  try {
+    [tallies, bots] = await Promise.all([
+      sb(`open_crowd_tally?select=event_key,market,title,country,released_at,up,down&released_at=gte.${since}&order=released_at.desc&limit=400`),
+      sb(`open_relcalls?select=event_key,market,dir,how&released_at=gte.${since}&limit=1000`)
+    ]);
+  } catch (e) { return { ready: false, error: String(e.message || e).slice(0, 120) }; }
+  const d = CROWD.duel(tallies, bots, await crowdOutcome());
+  return { ready: true, days: 90, min: CROWD.MIN_CROWD, ...d, rows: d.rows.slice(0, 30), updated: Date.now() };
+}
+// Totals for upcoming and just-released events (shown after a reader makes their call, or after the release)
+async function crowdTallies(keys) {
+  if (!keys.length) return {};
+  const list = keys.map((k) => '"' + String(k).replace(/"/g, "") + '"').join(",");
+  const rows = await memo("ctally:" + keys.join("~").slice(0, 400), 20e3, () => sb(`open_crowd_tally?select=event_key,market,up,down&event_key=in.(${encodeURIComponent(list)})`)).catch(() => []);
+  const out = {};
+  (rows || []).forEach((r) => { (out[r.event_key] = out[r.event_key] || {})[r.market] = { up: r.up, down: r.down }; });
+  return out;
+}
+// A reader's own record: their calls (read with their own sign-in, so only theirs), graded the same way
+async function crowdMe(req) {
+  const tok = bearer(req);
+  if (!tok) throw new HttpErr(401, "Sign in to see your calls.", { why: "signin" });
+  const r = await fetch(`${SB_URL}/rest/v1/open_crowd?select=event_key,title,market,dir,released_at&order=released_at.desc&limit=300`, { headers: { apikey: SB_KEY, Authorization: "Bearer " + tok } });
+  if (!r.ok) throw new HttpErr(r.status === 401 ? 401 : 502, r.status === 401 ? "Sign in again to see your calls." : "Couldn’t load your calls.");
+  const calls = await r.json();
+  return { ready: true, ...CROWD.myRecord(calls, await crowdOutcome()), updated: Date.now() };
+}
+
 // ---------- Automatic adjustments: the graded results change how the site calls things ----------
 // Only with enough graded results, and they lift on their own once the numbers recover:
 // - a release rule (e.g. inflation report -> NQ) right under 40% of the time over 6+ graded calls is paused;
@@ -3656,6 +3712,7 @@ async function buildThread(id) {
 // The analysis lives in recap.js (pure functions, covered by tests/recap.test.js); this part only fetches the data.
 var RECAP = require("./recap.js");
 var SURPRISE = require("./surprise.js");
+var CROWD = require("./crowd.js");
 async function buildRecap(q) {
   const inst = RECAP.INSTR[q.i] ? q.i : RECAP.INSTR[q.m] ? q.m : "NQ", I = RECAP.INSTR[inst];
   const from = Math.max(0, Math.min(1439, Math.round(+q.from || 570))), to = Math.max(0, Math.min(1440, Math.round(+q.to || 690)));
@@ -3928,7 +3985,7 @@ async function stripeHook(req) {
     .then(async (r) => { if (!r.ok) throw new HttpErr(502, "Couldn’t save the plan: " + (await r.text()).slice(0, 120)); });
   return { ok: true };
 }
-var POST_ROUTES = { threadai: threadAI, airead: aiRead, aideep: aiDeep, checkout, portal, stripe: stripeHook };
+var POST_ROUTES = { crowdme: crowdMe, threadai: threadAI, airead: aiRead, aideep: aiDeep, checkout, portal, stripe: stripeHook };
 // Routes whose answer depends on the reader's plan
 var PLAN_ROUTES = new Set(["desk", "brief", "explain", "memedesk"]);
 // Read-only audit of every logged call: what drove it and how it turned out (for tuning the call engine)
@@ -3966,6 +4023,8 @@ var ROUTES = {
   ticks: [(q) => build15(q), 2],
   results: [(q) => build16(q.date), 5],
   relscore: [() => buildRelScore(), 300],
+  crowd: [() => buildCrowdScore(), 300],
+  crowdtally: [(q) => crowdTallies(String(q.keys || "").split("~").filter(Boolean).slice(0, 30)), 15],
   adjust: [() => memo("adjust", 10 * 6e4, computeAdjust).then((v) => { _adj.v = v; _adj.t = Date.now(); return v; }), 300],
   rhyme: [(q) => buildRhyme(q), 600],
   threads: [() => buildThreads(), 300],

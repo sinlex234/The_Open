@@ -484,6 +484,102 @@ function meterHTML(r, compact = false) {
     ${compact ? '' : `<p class="smt-how">${how}</p>`}</div>`;
 }
 const meterChip = r => { const S = r && r.meter && r.meter.s; return S && S.sized && (S.band === 'big' || S.band === 'shock') ? `<span class="smt-chip l${SM_SEG[S.band]}">${esc(S.word)}</span>` : ''; };
+// ---------- Crowd vs the bot: readers call up or down before a big release; the site calls it after the number ----------
+const CROWD = { mine: {}, tally: {}, loaded: false, err: {}, res: {} };
+const CW_NAME = { NQ: 'NQ', BTC: 'Bitcoin', EURUSD: 'EUR/USD' };
+const crowdOk = e => e && !e.allDay && e.impact === 'High' && (e.country === 'USD' || e.country === 'EUR');
+const crowdMks = () => { const k = [...new Set(myMarkets().map(m => SM_OF[m]).filter(Boolean))]; return (k.length ? k : ['NQ']).slice(0, 3); };
+const cwId = (key, mk) => key + '#' + mk;
+const cwPct = (t, dir) => { const n = (t.up || 0) + (t.down || 0); return n ? Math.round((dir === 'up' ? t.up : t.down) / n * 100) : 0; };
+function cwSplit(t) {
+  if (!t || !(t.up + t.down)) return `<span class="cw-split faint">No other calls yet</span>`;
+  const n = t.up + t.down, up = cwPct(t, 'up');
+  return `<span class="cw-split"><span class="cw-bar" aria-hidden="true"><i class="up" style="width:${up}%"></i><i class="down" style="width:${100 - up}%"></i></span>${up}% up · ${n} call${n === 1 ? '' : 's'}</span>`;
+}
+const cwDir = d => d === 'up' ? '↑ Up' : d === 'down' ? '↓ Down' : '';
+function crowdInner(key, t, r) {
+  const now = Date.now(), mks = crowdMks(), done = r && r.released && r.actual, open = now < t;
+  if (done || !open) {
+    const rows = mks.map(mk => {
+      const tot = (done ? (r.crowd || {})[mk] : (CROWD.tally[key] || {})[mk]) || { up: 0, down: 0 }, n = tot.up + tot.down;
+      const cdir = n >= 3 && tot.up !== tot.down ? (tot.up > tot.down ? 'up' : 'down') : null;
+      const bot = done && r.bot && r.bot[mk], mine = CROWD.mine[cwId(key, mk)];
+      return `<div class="cw-vs"><span class="cw-mk">${CW_NAME[mk]}</span>
+        <span class="cw-side"><small>Readers · before the number</small>${cdir ? `<span class="pill ${cdir}">${cwDir(cdir)} ${cwPct(tot, cdir)}%</span> <span class="faint">${n} calls</span>` : `<span class="faint">${n ? (tot.up === tot.down ? `Split ${tot.up}–${tot.down}` : `${n} call${n === 1 ? '' : 's'}, too few to count`) : 'No calls'}</span>`}</span>
+        <span class="cw-side"><small>The site · after the number</small>${bot ? `<span class="pill ${bot.dir}">${cwDir(bot.dir)}</span>${bot.how === 'react' ? ' <span class="faint">followed the first move</span>' : ''}` : `<span class="faint">${done ? 'No call' : 'Waiting'}</span>`}</span>
+        <span class="cw-side"><small>You</small>${mine ? `<span class="pill ${mine}">${cwDir(mine)}</span>` : '<span class="faint">No call</span>'}</span></div>`;
+    }).join('');
+    return `<p class="cw-q"><b>Crowd vs the bot</b>${done ? '' : ' <span class="faint">· calls are locked, waiting for the number</span>'}</p>${rows}
+      <p class="cw-fine">Everyone is graded on the same thing: where the market is an hour after the release, from the price at the release. The crowd needs 3+ calls. Results land on the <a href="/scorecard">Scorecard</a>.</p>`;
+  }
+  const voted = mks.some(mk => CROWD.mine[cwId(key, mk)]);
+  const rows = mks.map(mk => {
+    const mine = CROWD.mine[cwId(key, mk)];
+    return `<div class="cw-row"><span class="cw-mk">${CW_NAME[mk]}</span>
+      <span class="cw-btns" role="group" aria-label="Your call for ${CW_NAME[mk]}">${['up', 'down'].map(d => `<button type="button" class="cw-b ${d}${mine === d ? ' on' : ''}" data-cv="${d}" data-mk="${mk}" aria-pressed="${mine === d}">${cwDir(d)}</button>`).join('')}</span>
+      ${mine ? cwSplit((CROWD.tally[key] || {})[mk]) : ''}</div>`;
+  }).join('');
+  const err = CROWD.err[key];
+  return `<p class="cw-q"><b>Your call</b> Where is ${mks.map(m => CW_NAME[m]).join(' / ')} an hour after the number?</p>${rows}
+    <p class="cw-fine">${err ? `<span class="cw-err">${esc(err)}</span> ` : ''}${signedIn() ? (voted ? 'Locked in when the number comes out; you can change it until then. The site makes its own call after the number, and you’re both graded an hour later.' : 'Make your call to see what other readers think. The site calls it after the number; can the crowd beat it before?') : 'Sign in to make your call.'}</p>`;
+}
+const cwRes = key => CROWD.res[key] || results.map[key] || null;
+function crowdHTML(e, res) {
+  if (!crowdOk(e)) return '';
+  const key = relKey(e);
+  if (res && res.released) CROWD.res[key] = res;
+  const r = cwRes(key);
+  return `<div class="cw" data-cw="${esc(key)}" data-t="${e.time}" data-title="${esc(e.name || e.title)}" data-cc="${esc(e.country)}">${crowdInner(key, e.time, r)}</div>`;
+}
+function crowdPaint(only) {
+  document.querySelectorAll('[data-cw]').forEach(el => {
+    const key = el.dataset.cw; if (only && key !== only) return;
+    el.innerHTML = crowdInner(key, +el.dataset.t, cwRes(key));
+  });
+}
+async function crowdTallies(keys) {
+  if (!keys.length) return;
+  try { const d = await api('crowdtally?keys=' + encodeURIComponent(keys.join('~')), 15e3); keys.forEach(k => { CROWD.tally[k] = d[k] || {}; }); } catch {}
+}
+async function crowdLoadMine() {
+  if (CROWD.loaded || !signedIn()) return;
+  CROWD.loaded = true;
+  try {
+    const { data } = await sbClient().from('open_crowd').select('event_key, market, dir').gte('released_at', new Date(Date.now() - 3 * 864e5).toISOString());
+    (data || []).forEach(x => { CROWD.mine[cwId(x.event_key, x.market)] = x.dir; });
+  } catch { CROWD.loaded = false; }
+}
+// New call boxes on the page: load your calls, then the totals for anything you've called or that's locked
+let cwTimer = 0;
+function crowdHydrate() {
+  clearTimeout(cwTimer);
+  cwTimer = setTimeout(async () => {
+    const els = [...document.querySelectorAll('[data-cw]:not([data-cwd])')]; if (!els.length) return;
+    els.forEach(el => { el.dataset.cwd = '1'; });
+    await crowdLoadMine();
+    const now = Date.now(), need = [...new Set(els.filter(el => { const k = el.dataset.cw; return !(cwRes(k) && cwRes(k).released) && (now >= +el.dataset.t || crowdMks().some(mk => CROWD.mine[cwId(k, mk)])); }).map(el => el.dataset.cw))];
+    await crowdTallies(need.slice(0, 30));
+    crowdPaint();
+  }, 250);
+}
+new MutationObserver(ms => { if (ms.some(m => [...m.addedNodes].some(n => n.nodeType === 1 && (n.matches?.('[data-cw]') || n.querySelector?.('[data-cw]'))))) crowdHydrate(); }).observe(document.documentElement, { childList: true, subtree: true });
+async function crowdVote(b) {
+  const box = b.closest('[data-cw]'); if (!box) return;
+  const key = box.dataset.cw, t = +box.dataset.t, mk = b.dataset.mk, dir = b.dataset.cv, id = cwId(key, mk);
+  if (!signedIn()) { CROWD.err[key] = 'Sign in to make your call.'; return crowdPaint(key); }
+  if (Date.now() >= t) return crowdPaint(key);
+  const prev = CROWD.mine[id]; if (prev === dir) return;
+  CROWD.mine[id] = dir; delete CROWD.err[key]; crowdPaint(key);
+  const sb = sbClient();
+  const upd = () => sb.from('open_crowd').update({ dir }).eq('event_key', key).eq('market', mk).eq('user_id', me.user.id);
+  let { error } = prev ? await upd() : await sb.from('open_crowd').insert({ event_key: key, title: box.dataset.title.slice(0, 160), country: box.dataset.cc, released_at: new Date(t).toISOString(), market: mk, dir });
+  if (error && !prev && /duplicate|23505/i.test(error.message + (error.code || ''))) ({ error } = await upd());
+  if (error) { if (prev) CROWD.mine[id] = prev; else delete CROWD.mine[id]; CROWD.err[key] = Date.now() >= t ? 'Too late, the number is out.' : 'Couldn’t save your call. Try again.'; }
+  cache.delete('crowdtally?keys=' + encodeURIComponent(key));
+  await crowdTallies([key]);
+  crowdPaint(key);
+}
+document.addEventListener('click', e => { const b = e.target.closest('[data-cv]'); if (b) { e.preventDefault(); crowdVote(b); } });
 const relCallPill = e => `<span class="pill ${e.paused && e.how !== 'react' ? 'paused' : e.dir === 'up' ? 'up' : e.dir === 'down' ? 'down' : ''}"><b>${esc(e.label)}</b> ${e.paused && e.how !== 'react' ? '⏸ Call paused' : e.dir === 'up' ? '↑ Likely up' : e.dir === 'down' ? '↓ Likely down' : '… Waiting for the first move'}</span>`;
 function releasedHTML() {
   const now = Date.now(), gone = store.get('relDismissed', []);
@@ -500,6 +596,7 @@ function releasedHTML() {
       <div class="rel-nums"><div><small>Actual</small><b class="${cls}">${esc(r.actual)}</b></div>${r.forecast ? `<div><small>Forecast</small><b>${esc(r.forecast)}</b></div>` : ''}${r.previous ? `<div><small>Previous</small><b>${esc(r.previous)}</b></div>` : ''}</div>
       <p class="rel-text"><b>Why:</b> ${esc(v.why)}</p>
       ${meterHTML(r)}
+      ${crowdHTML(r)}
       ${rest.length ? `<div class="rel-effs">${rest.map(e => `<div class="beff">${relCallPill(e)}<span class="br">${esc(e.how === 'react' ? `Following the first move after the release.` : e.reason || '')}</span></div>`).join('')}</div>` : ''}
       ${(r.since || []).length ? `<p class="rel-since"><span>Since the release:</span> ${r.since.map(x => reactTxt(x).replace(' since</span>', '</span>')).join(' · ')}</p>` : ''}
     </article>`;
@@ -579,7 +676,7 @@ function eventRow(e, mini = false, showFy = true) {
   const fp = [rel ? `Actual ${rel.actual}` : '', e.forecast && `Expected ${e.forecast}`, e.previous && `Last ${e.previous.split('|')[0]}`].filter(Boolean).join(', ');
   const fy = showFy ? forYouEvent(e) : null;
   const deep = depth() !== 'quick';
-  const body = [(isBeginner() || depth() === 'deep') && e.what ? `<p>${esc(e.what)}</p>` : '', `<p>${esc(e.why)}</p>`, e.note && deep ? `<p class="note">${esc(e.note)}</p>` : '', mini && fp ? `<p class="small">${esc(fp)}</p>` : '', meterHTML(rel, mini)].join('');
+  const body = [(isBeginner() || depth() === 'deep') && e.what ? `<p>${esc(e.what)}</p>` : '', `<p>${esc(e.why)}</p>`, e.note && deep ? `<p class="note">${esc(e.note)}</p>` : '', mini && fp ? `<p class="small">${esc(fp)}</p>` : '', meterHTML(rel, mini), crowdHTML(e)].join('');
   return `<details class="ev${past ? ' past' : ''}${soon ? ' soon' : ''}${mini ? ' mini' : ''}"><summary>
       <span class="t">${e.allDay ? 'All day' : fmtTime(e.time)}</span><span class="dot ${e.impact}" title="${e.impact} impact"></span>
       ${mini ? '' : `<span class="cc">${esc(e.country)}</span>`}
@@ -2124,7 +2221,7 @@ function ffRow(e, act, today, now, nextT, showT) {
   const past = e.time < now - 60e3 && !e.allDay, isNext = e.time === nextT;
   const fy = forYouEvent(e);
   const rev = revisionTxt(e, r);
-  const body = [e.what ? `<p>${esc(e.what)}</p>` : '', e.why ? `<p>${esc(e.why)}</p>` : '', e.note ? `<p class="note">${esc(e.note)}</p>` : '', r && r.text ? `<p><b>${esc(r.label || '')}.</b> ${esc(r.text)}</p>` : '', rev ? `<p class="ff-rev">${esc(rev)}</p>` : '', meterHTML(r), fy ? `<p class="ff-fy-b"><b>For you:</b> ${esc(fy)}</p>` : '', scenHTML(e, r), histSlot(e, r)].join('');
+  const body = [e.what ? `<p>${esc(e.what)}</p>` : '', e.why ? `<p>${esc(e.why)}</p>` : '', e.note ? `<p class="note">${esc(e.note)}</p>` : '', r && r.text ? `<p><b>${esc(r.label || '')}.</b> ${esc(r.text)}</p>` : '', rev ? `<p class="ff-rev">${esc(rev)}</p>` : '', meterHTML(r), crowdHTML(e, r), fy ? `<p class="ff-fy-b"><b>For you:</b> ${esc(fy)}</p>` : '', scenHTML(e, r), histSlot(e, r)].join('');
   return `<details class="ff-row${past ? ' past' : ''}${isNext ? ' next' : ''}${imp === 'High' ? ' hi' : ''}" data-k="${esc(`${e.country}|${e.title}|${e.time}`)}"><summary>
       <span class="ff-t">${showT ? (e.allDay ? 'All day' : fmtTime(e.time).replace(' ', '').toLowerCase()) : ''}</span>
       <span class="ff-c">${esc(e.country)}</span>
@@ -2388,7 +2485,7 @@ function gradeCell(g) {
 PAGES.scorecard = () => {
   layout(`<h1 class="page-h">Scorecard</h1>
     <p class="page-intro">Every “Likely up” and “Likely down” call in the briefing is saved the moment it’s made, with the price at that time. We check it against what price actually did an hour later and at the 4 PM New York close. Nothing is deleted, so the misses stay here too.</p>
-    <div id="scBody">${skel(3)}</div><section class="block"><div class="sec-row"><h2 class="sec">Your day bias, by confidence</h2></div><div id="scDay">${skel(2)}</div></section><section class="block"><div class="sec-row"><h2 class="sec">Live read, every 5 minutes</h2></div><div id="scPulse">${skel(2)}</div></section><section class="block"><div class="sec-row"><h2 class="sec">Release calls</h2></div><div id="scRel">${skel(2)}</div></section><section class="block"><div class="sec-row"><h2 class="sec">Automatic adjustments</h2></div><div id="scAdj">${skel(1)}</div></section>`);
+    <div id="scBody">${skel(3)}</div><section class="block"><div class="sec-row"><h2 class="sec">Your day bias, by confidence</h2></div><div id="scDay">${skel(2)}</div></section><section class="block"><div class="sec-row"><h2 class="sec">Live read, every 5 minutes</h2></div><div id="scPulse">${skel(2)}</div></section><section class="block"><div class="sec-row"><h2 class="sec">Release calls</h2></div><div id="scRel">${skel(2)}</div></section><section class="block"><div class="sec-row"><h2 class="sec">Crowd vs the bot</h2></div><div id="scCrowd">${skel(2)}</div><div id="scMine"></div></section><section class="block"><div class="sec-row"><h2 class="sec">Automatic adjustments</h2></div><div id="scAdj">${skel(1)}</div></section>`);
   fill('scRel', 'the release-call record', api('relscore', 5 * 60e3), d => {
     if (!d.ready) return `<div class="sc-empty"><p><b>Release-call tracking is being set up.</b></p></div>`;
     if (!d.total) return `<div class="sc-empty"><p><b>Tracking starts with the next big release.</b> When CPI, jobs, PPI, retail sales or a Fed decision comes out, the site’s call for NQ, Bitcoin and EUR/USD is saved with the price and graded 15 minutes later, an hour later and at the close.</p></div>`;
@@ -2403,6 +2500,27 @@ PAGES.scorecard = () => {
           <span role="cell" class="sc-story"><b>${esc(c.title)}</b><small>${new Date(c.time).toLocaleDateString('en-US', { timeZone: TZ, month: 'short', day: 'numeric' })}, ${fmtTime(c.time)} · ${esc(c.actual)}${c.forecast ? ` vs ${esc(c.forecast)}` : ''}</small></span>
           <span role="cell" class="sc-g">${gradeCell(c.m15)}</span><span role="cell" class="sc-g">${gradeCell(c.hour)}</span><span role="cell" class="sc-g">${gradeCell(c.close)}</span></div>`).join('')}
       </div>${stamp(d)}`;
+  });
+  fill('scCrowd', 'the crowd vs the bot record', api('crowd', 5 * 60e3), d => {
+    if (!d.ready) return `<div class="sc-empty"><p><b>Crowd calls are being set up.</b></p></div>`;
+    const intro = `<p class="sc-fine">Before each big US or euro-area release, readers call where NQ, Bitcoin or EUR/USD will be an hour after the number. The crowd’s call is the majority (${d.min}+ calls; a tie is no call). The site makes its call after the number is out, so it has more to go on. Everyone is graded the same way: from the price at the release to an hour later. The head-to-head only counts releases where both made a call.</p>`;
+    if (!d.rows.length) return `<div class="sc-empty"><p><b>The first matchup is the next big release.</b> Open it in the calendar or the release room and make your call before the number comes out.</p></div>${intro}`;
+    const cell = (dir, res, extra) => dir ? `<span class="pill ${dir}">${cwDir(dir)}</span>${extra ? `<small>${esc(extra)}</small>` : ''}${res ? `<small><span class="gr ${res}">${RES_TXT[res]}</span></small>` : ''}` : '<span class="faint">No call</span>';
+    return `<div class="sc-tiles sc3">${scoreTile('Readers (majority)', d.both.crowd, 'Called before the number')}${scoreTile('The site', d.both.site, 'Called after the number')}${scoreTile('Every reader call', d.votes, 'Each reader on their own')}</div>${intro}
+      <div class="sc-list" role="table" aria-label="Latest matchups">
+        <div class="sc-row sc-cw sc-head" role="row"><span role="columnheader">Release</span><span role="columnheader">Readers</span><span role="columnheader">The site</span><span role="columnheader">After 1 hour</span></div>
+        ${d.rows.map(x => `<div class="sc-row sc-cw" role="row">
+          <span role="cell" class="sc-story"><b>${esc(x.title)}</b><small>${esc(CW_NAME[x.market] || x.market)} · ${new Date(x.time).toLocaleDateString('en-US', { timeZone: TZ, month: 'short', day: 'numeric' })}, ${fmtTime(x.time)}</small></span>
+          <span role="cell">${x.crowd.dir ? cell(x.crowd.dir, x.crowdResult, `${x.crowd.share}% of ${x.crowd.n}`) : `<span class="faint">${x.crowd.why === 'tie' ? 'Split' : `${x.crowd.n} call${x.crowd.n === 1 ? '' : 's'}`}</span>`}</span>
+          <span role="cell">${cell(x.bot && x.bot.dir, x.botResult)}</span>
+          <span role="cell" class="sc-g">${x.result === 'pending' ? '<span class="gr pending">Waiting</span>' : x.moved != null ? `<small>${esc(CW_NAME[x.market])} ${rhymeMove(x.moved, x.unit)}</small>` : ''}</span></div>`).join('')}
+      </div>${stamp(d)}`;
+  });
+  if (signedIn()) fill('scMine', 'your calls', postAI('crowdme', {}), d => {
+    const t = d.tally, n = t.right + t.wrong;
+    if (!d.rows.length) return `<p class="sc-fine"><b>Your calls:</b> none yet. Make one on the next big release.</p>`;
+    return `<h2 class="sec">Your calls</h2><div class="sc-tiles sc3">${scoreTile('Your record', t, n ? '' : 'Graded an hour after each release')}</div>
+      <div class="sc-mk">${d.rows.slice(0, 12).map(x => `<div class="sc-mrow"><b>${esc(x.title)}</b><span><span class="pill ${x.dir}">${esc(CW_NAME[x.market] || x.market)} ${cwDir(x.dir)}</span> <span class="gr ${x.result}">${RES_TXT[x.result]}</span></span><span class="faint small">${new Date(x.time).toLocaleDateString('en-US', { timeZone: TZ, month: 'short', day: 'numeric' })}</span></div>`).join('')}</div>`;
   });
   fill('scAdj', 'the automatic adjustments', api('adjust', 5 * 60e3), d => {
     const items = d.list || [], watch = d.watching || [];
@@ -2945,6 +3063,7 @@ function renderRoom(tickOnly) {
     el.innerHTML = `<div class="lsr-cd">${lsClock(t - now)}</div><p class="lsr-sub">${t > now ? `Out at ${fmtTime(t)} ${tzAbbr(t)}. The number appears here the moment it lands.` : 'Waiting for the number. It usually appears within seconds.'}</p>
       <div class="lsr-nums"><div><small>Forecast</small><b>${esc(fc || '—')}</b></div><div><small>Previous</small><b>${esc(pv || '—')}</b></div><div class="lsr-act"><small>Actual</small><b class="faint">…</b></div></div>
       ${scenHTML(x.ev, r)}
+      ${crowdHTML(x.ev)}
       <p class="lsr-note">The first minute after big data is often a fake-out. The site waits 10 minutes before its Live read leans again.</p>${histSlot(x.ev, r)}`;
     fillHist(el);
     return;
@@ -2954,6 +3073,7 @@ function renderRoom(tickOnly) {
     <div class="lsr-nums big"><div class="lsr-act"><small>Actual</small><b class="${r.ccyDir === 'good' ? 'up' : r.ccyDir === 'bad' ? 'down' : ''}">${esc(r.actual)}</b></div><div><small>Forecast</small><b>${esc(fc || '—')}</b></div><div><small>Previous</small><b>${esc(pv || '—')}</b></div></div>
     <p class="lsr-text"><b>Why:</b> ${esc(v.why)}</p>
     ${meterHTML(r)}
+    ${crowdHTML(x.ev)}
     ${rest.length ? `<p class="lsr-k2">Your other markets</p><div class="rel-effs">${rest.map(e => `<div class="beff">${relCallPill(e)}<small>${esc(e.how === 'react' ? 'Following the first move after the release.' : e.reason || '')}</small></div>`).join('')}</div>` : ''}
     ${(r.since || []).length ? `<p class="rel-since"><span>Since the release:</span> ${r.since.map(s => reactTxt(s).replace(' since</span>', '</span>')).join(' · ')}</p>` : ''}
     ${revisionTxt(x.ev, r) ? `<p class="ff-rev">${esc(revisionTxt(x.ev, r))}</p>` : ''}${r.src === 'FRED' ? '<p class="faint small">Number from FRED (backup source).</p>' : ''}${histSlot(x.ev, r)}`;
