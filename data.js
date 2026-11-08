@@ -2955,6 +2955,42 @@ async function fredBackup(title, releaseT) {
   return hit ? hit.txt : null;
 }
 var RES_REACT = ["NQ", "EURUSD", "GOLD", "BTC"];
+// ---------- Surprise meter (rules in surprise.js): how big the miss was vs normal, and whether the market reacted more or less ----------
+var METER_MKTS = { NQ: { sym: "NQ=F", name: "NQ" }, EURUSD: { sym: "EURUSD=X", name: "EUR/USD" }, BTC: { sym: "BTC-USD", name: "Bitcoin" } };
+var meterMktsFor = (ccy) => ccy === "USD" ? ["NQ", "EURUSD", "BTC"] : ccy === "EUR" ? ["EURUSD"] : [];
+// Shown in the same units as the release: "0.1%", "45K", "0.20M"
+function inUnits(v, sample) {
+  const s = String(sample || ""), dec = Math.min(2, ((s.match(/\.(\d+)/) || [])[1] || "").length), suf = (s.match(/[%KMBT]\s*$/) || [""])[0].trim();
+  return (Math.abs(v) < 1e-9 ? 0 : v).toFixed(dec) + suf;
+}
+async function pastMisses(title, skipKey) {
+  const rows = await memo("relhist", 30 * 6e4, () => sb(`open_relcalls?select=event_key,title,actual,forecast&released_at=gte.${new Date(Date.now() - 400 * 864e5).toISOString()}&limit=2000`)).catch(() => []);
+  const seen = new Set(), out = [];
+  (rows || []).forEach((r) => { if (r.title !== title || r.event_key === skipKey || seen.has(r.event_key)) return; seen.add(r.event_key); const a = numOf(r.actual), f = numOf(r.forecast); if (a != null && f != null) out.push({ actual: a, forecast: f }); });
+  return out;
+}
+async function addMeters(out, now, isToday) {
+  const evs = out.filter((x) => x.released && x.actual && x.forecast && (x.impact === "High" || x.impact === "Medium") && numOf(x.actual) != null && numOf(x.forecast) != null);
+  if (!evs.length) return;
+  const need = [...new Set(evs.flatMap((x) => meterMktsFor(x.country)))];
+  const fresh = isToday && evs.some((x) => now - x.time < 20 * 6e4);
+  const { res: charts } = await settle(Object.fromEntries(need.map((k) => [k, memo("meter5:" + k + (fresh ? ":live" : ""), fresh ? 45e3 : 20 * 6e4, () => yahooChart(METER_MKTS[k].sym, { interval: "5m", range: "1mo" }))])));
+  await Promise.all(evs.map(async (x) => {
+    const sp = fredSpec(x.title), ref = fredRefDate(x.title, x.time);
+    let history = null;
+    if (sp) { try { const pts = fredSeries(await fredRaw(sp.id), sp.kind); history = (ref ? pts.filter((p) => p.d < ref) : pts.slice(0, -1)).map((p) => p.v); } catch (e) { history = null; } }
+    const past = history && history.length >= 7 ? null : await pastMisses(x.title, x.key);
+    const s = SURPRISE.sizeSurprise({ actual: numOf(x.actual), forecast: numOf(x.forecast), history, past });
+    if (s && s.sized) { s.usualTxt = inUnits(s.usual, x.forecast); s.missTxt = (s.miss > 0 ? "+" : "") + inUnits(s.miss, x.forecast); }
+    const r = {}, v = {};
+    meterMktsFor(x.country).forEach((k) => {
+      const c = charts[k]; const rr = c && SURPRISE.sizeReaction({ bars: c.bars, t: x.time, now });
+      if (rr) r[k] = rr;
+      const vv = SURPRISE.verdict(s, rr || null, METER_MKTS[k].name); if (vv) v[k] = vv;
+    });
+    if (s && (s.sized || Object.keys(r).length)) x.meter = { s, r, v, names: Object.fromEntries(Object.keys(r).map((k) => [k, METER_MKTS[k].name])) };
+  }));
+}
 async function build16(date) {
   const now = Date.now(), today0 = ny(now).date;
   const today = /^\d{4}-\d{2}-\d{2}$/.test(String(date || "")) && String(date) <= today0 ? String(date) : today0, isToday = today === today0;
@@ -3015,6 +3051,7 @@ async function build16(date) {
     const vals = await Promise.all(miss.map(([x]) => fredBackup(x.title, x.time).catch(() => null)));
     miss.forEach(([, i], j) => { if (vals[j]) out[i] = mk(evs[i], vals[j]); });
   }
+  await addMeters(out, now, isToday).catch(() => null);
   const relLog = isToday ? await logRelCalls(out).catch((e) => "not logged: " + String(e.message || e).slice(0, 80)) : "not today";
   return { relLog, events: out, matched: out.filter((x) => x.actual).length, updated: now };
 }
@@ -3618,6 +3655,7 @@ async function buildThread(id) {
 // ---------- Session recap: once your trading window is over, what happened and what each strategy's rules would have done ----------
 // The analysis lives in recap.js (pure functions, covered by tests/recap.test.js); this part only fetches the data.
 var RECAP = require("./recap.js");
+var SURPRISE = require("./surprise.js");
 async function buildRecap(q) {
   const inst = RECAP.INSTR[q.i] ? q.i : RECAP.INSTR[q.m] ? q.m : "NQ", I = RECAP.INSTR[inst];
   const from = Math.max(0, Math.min(1439, Math.round(+q.from || 570))), to = Math.max(0, Math.min(1440, Math.round(+q.to || 690)));

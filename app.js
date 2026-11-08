@@ -460,6 +460,30 @@ function relVerdict(r) {
   }
   return { head, cls, why: why.filter(Boolean).join(' '), effs, main };
 }
+// ---------- Surprise meter: how big the surprise was vs normal, and how hard the market reacted ----------
+const SM_OF = { futures: 'NQ', stocks: 'NQ', options: 'NQ', forex: 'EURUSD', crypto: 'BTC', memes: 'BTC' };
+const SM_SEG = { inline: 1, small: 2, big: 3, shock: 4, normal: 1, moved: 2, huge: 4 };
+function meterMkt(m) {
+  // the reader's own market first; if it has no price data (e.g. futures closed), the next one that does
+  const want = [...new Set(myMarkets().map(x => SM_OF[x]).filter(Boolean)), 'NQ', 'EURUSD', 'BTC'];
+  return want.find(k => m.r && m.r[k]) || null;
+}
+const smBar = (b, lvl) => `<span class="smt-bar" aria-hidden="true">${[1, 2, 3, 4].map(i => `<i class="${i <= lvl ? 'on l' + lvl : ''}"></i>`).join('')}</span>`;
+const smPct = v => (v >= 1 ? v.toFixed(2) : v.toFixed(v >= 0.1 ? 2 : 3)) + '%';
+function meterHTML(r, compact = false) {
+  const m = r && r.meter; if (!m) return '';
+  const k = meterMkt(m), S = m.s, R = k && m.r[k], V = k && m.v[k], name = k ? m.names[k] || (k === 'EURUSD' ? 'EUR/USD' : k === 'BTC' ? 'Bitcoin' : k) : '';
+  if (!S || (!S.sized && !R)) return '';
+  const rows = [];
+  if (S.sized) rows.push(`<div class="smt-row"><span class="smt-l">Surprise</span>${smBar(S.band, SM_SEG[S.band])}<b class="smt-w l${SM_SEG[S.band]}">${esc(S.word)}</b></div>`);
+  if (R) rows.push(`<div class="smt-row"><span class="smt-l">${esc(name)} reaction</span>${smBar(R.band, SM_SEG[R.band])}<b class="smt-w l${SM_SEG[R.band]}">${esc(R.word)}${R.done ? '' : ' <small>so far</small>'}</b></div>`);
+  const how = [S.sized ? `Came in ${esc(S.missTxt.replace(/^[+-]/, ''))} ${S.miss > 0 ? 'above' : 'below'} the forecast. ${S.base === 'change' ? `This number usually changes about ${esc(S.usualTxt)} from one report to the next.` : `Forecasts for this release are usually off by about ${esc(S.usualTxt)}.`}` : '',
+    R ? `${esc(name)} swung ${smPct(R.pct)} in the first 15 minutes${R.done ? '' : ' so far'}, against ${smPct(R.typical)} on a normal day at this time (${R.days} days).` : ''].filter(Boolean).join(' ');
+  return `<div class="smt${compact ? ' smt-c' : ''}"><p class="smt-cap">Surprise meter</p>${rows.join('')}
+    ${V && V.text ? `<p class="smt-v"><b>${esc(V.head)}.</b> ${esc(V.text)}</p>` : ''}
+    ${compact ? '' : `<p class="smt-how">${how}</p>`}</div>`;
+}
+const meterChip = r => { const S = r && r.meter && r.meter.s; return S && S.sized && (S.band === 'big' || S.band === 'shock') ? `<span class="smt-chip l${SM_SEG[S.band]}">${esc(S.word)}</span>` : ''; };
 const relCallPill = e => `<span class="pill ${e.paused && e.how !== 'react' ? 'paused' : e.dir === 'up' ? 'up' : e.dir === 'down' ? 'down' : ''}"><b>${esc(e.label)}</b> ${e.paused && e.how !== 'react' ? '⏸ Call paused' : e.dir === 'up' ? '↑ Likely up' : e.dir === 'down' ? '↓ Likely down' : '… Waiting for the first move'}</span>`;
 function releasedHTML() {
   const now = Date.now(), gone = store.get('relDismissed', []);
@@ -475,6 +499,7 @@ function releasedHTML() {
       <p class="rel-call ${v.cls}">${esc(v.head)}</p>
       <div class="rel-nums"><div><small>Actual</small><b class="${cls}">${esc(r.actual)}</b></div>${r.forecast ? `<div><small>Forecast</small><b>${esc(r.forecast)}</b></div>` : ''}${r.previous ? `<div><small>Previous</small><b>${esc(r.previous)}</b></div>` : ''}</div>
       <p class="rel-text"><b>Why:</b> ${esc(v.why)}</p>
+      ${meterHTML(r)}
       ${rest.length ? `<div class="rel-effs">${rest.map(e => `<div class="beff">${relCallPill(e)}<span class="br">${esc(e.how === 'react' ? `Following the first move after the release.` : e.reason || '')}</span></div>`).join('')}</div>` : ''}
       ${(r.since || []).length ? `<p class="rel-since"><span>Since the release:</span> ${r.since.map(x => reactTxt(x).replace(' since</span>', '</span>')).join(' · ')}</p>` : ''}
     </article>`;
@@ -554,12 +579,12 @@ function eventRow(e, mini = false, showFy = true) {
   const fp = [rel ? `Actual ${rel.actual}` : '', e.forecast && `Expected ${e.forecast}`, e.previous && `Last ${e.previous.split('|')[0]}`].filter(Boolean).join(', ');
   const fy = showFy ? forYouEvent(e) : null;
   const deep = depth() !== 'quick';
-  const body = [(isBeginner() || depth() === 'deep') && e.what ? `<p>${esc(e.what)}</p>` : '', `<p>${esc(e.why)}</p>`, e.note && deep ? `<p class="note">${esc(e.note)}</p>` : '', mini && fp ? `<p class="small">${esc(fp)}</p>` : ''].join('');
+  const body = [(isBeginner() || depth() === 'deep') && e.what ? `<p>${esc(e.what)}</p>` : '', `<p>${esc(e.why)}</p>`, e.note && deep ? `<p class="note">${esc(e.note)}</p>` : '', mini && fp ? `<p class="small">${esc(fp)}</p>` : '', meterHTML(rel, mini)].join('');
   return `<details class="ev${past ? ' past' : ''}${soon ? ' soon' : ''}${mini ? ' mini' : ''}"><summary>
       <span class="t">${e.allDay ? 'All day' : fmtTime(e.time)}</span><span class="dot ${e.impact}" title="${e.impact} impact"></span>
       ${mini ? '' : `<span class="cc">${esc(e.country)}</span>`}
       <span class="nm">${esc(e.name)}<small>${mini ? esc(e.country) + (e.name !== e.title ? ', ' + esc(e.title) : '') : (e.name !== e.title ? esc(e.title) : '')}</small></span>
-      ${mini ? (rel ? `<span class="act ${rel.dir || ''}">${esc(rel.actual)}</span>` : '') : `<span class="fp">${rel ? `<b class="act ${rel.dir || ''}">${esc(rel.actual)}</b> ` : ''}${esc(fp.replace(/^Actual [^,]*, ?/, ''))}</span>`}
+      ${mini ? (rel ? `<span class="act ${rel.dir || ''}">${esc(rel.actual)}</span>${meterChip(rel)}` : '') : `<span class="fp">${rel ? `<b class="act ${rel.dir || ''}">${esc(rel.actual)}</b> ${meterChip(rel)}` : ''}${esc(fp.replace(/^Actual [^,]*, ?/, ''))}</span>`}
       ${fy ? `<span class="fy"><b>For you</b>${esc(fy)}</span>` : ''}</summary>
     <div class="body">${body}</div></details>`;
 }
@@ -2099,12 +2124,12 @@ function ffRow(e, act, today, now, nextT, showT) {
   const past = e.time < now - 60e3 && !e.allDay, isNext = e.time === nextT;
   const fy = forYouEvent(e);
   const rev = revisionTxt(e, r);
-  const body = [e.what ? `<p>${esc(e.what)}</p>` : '', e.why ? `<p>${esc(e.why)}</p>` : '', e.note ? `<p class="note">${esc(e.note)}</p>` : '', r && r.text ? `<p><b>${esc(r.label || '')}.</b> ${esc(r.text)}</p>` : '', rev ? `<p class="ff-rev">${esc(rev)}</p>` : '', fy ? `<p class="ff-fy-b"><b>For you:</b> ${esc(fy)}</p>` : '', scenHTML(e, r), histSlot(e, r)].join('');
+  const body = [e.what ? `<p>${esc(e.what)}</p>` : '', e.why ? `<p>${esc(e.why)}</p>` : '', e.note ? `<p class="note">${esc(e.note)}</p>` : '', r && r.text ? `<p><b>${esc(r.label || '')}.</b> ${esc(r.text)}</p>` : '', rev ? `<p class="ff-rev">${esc(rev)}</p>` : '', meterHTML(r), fy ? `<p class="ff-fy-b"><b>For you:</b> ${esc(fy)}</p>` : '', scenHTML(e, r), histSlot(e, r)].join('');
   return `<details class="ff-row${past ? ' past' : ''}${isNext ? ' next' : ''}${imp === 'High' ? ' hi' : ''}" data-k="${esc(`${e.country}|${e.title}|${e.time}`)}"><summary>
       <span class="ff-t">${showT ? (e.allDay ? 'All day' : fmtTime(e.time).replace(' ', '').toLowerCase()) : ''}</span>
       <span class="ff-c">${esc(e.country)}</span>
       <span class="ff-i">${ffIcon(imp)}</span>
-      <span class="ff-e">${esc(e.title)}${e.name && e.name !== e.title ? `<small>${esc(e.name)}</small>` : ''}${fy ? '<span class="ff-fy">For you</span>' : ''}</span>
+      <span class="ff-e">${esc(e.title)}${e.name && e.name !== e.title ? `<small>${esc(e.name)}</small>` : ''}${fy ? '<span class="ff-fy">For you</span>' : ''}${meterChip(r)}</span>
       <span class="ff-vals"><span class="ff-v ff-a ${r && r.ccyDir ? r.ccyDir : ''}" data-l="Actual">${r ? esc(r.actual) : ''}</span>
       <span class="ff-v" data-l="Forecast">${esc(e.forecast || (r && r.forecast) || '')}</span>
       <span class="ff-v" data-l="Previous">${esc((e.previous || '').split('|')[0])}</span></span>
@@ -2928,6 +2953,7 @@ function renderRoom(tickOnly) {
   el.innerHTML = `<p class="lsr-call ${v.cls}">${esc(v.head)}</p>
     <div class="lsr-nums big"><div class="lsr-act"><small>Actual</small><b class="${r.ccyDir === 'good' ? 'up' : r.ccyDir === 'bad' ? 'down' : ''}">${esc(r.actual)}</b></div><div><small>Forecast</small><b>${esc(fc || '—')}</b></div><div><small>Previous</small><b>${esc(pv || '—')}</b></div></div>
     <p class="lsr-text"><b>Why:</b> ${esc(v.why)}</p>
+    ${meterHTML(r)}
     ${rest.length ? `<p class="lsr-k2">Your other markets</p><div class="rel-effs">${rest.map(e => `<div class="beff">${relCallPill(e)}<small>${esc(e.how === 'react' ? 'Following the first move after the release.' : e.reason || '')}</small></div>`).join('')}</div>` : ''}
     ${(r.since || []).length ? `<p class="rel-since"><span>Since the release:</span> ${r.since.map(s => reactTxt(s).replace(' since</span>', '</span>')).join(' · ')}</p>` : ''}
     ${revisionTxt(x.ev, r) ? `<p class="ff-rev">${esc(revisionTxt(x.ev, r))}</p>` : ''}${r.src === 'FRED' ? '<p class="faint small">Number from FRED (backup source).</p>' : ''}${histSlot(x.ev, r)}`;

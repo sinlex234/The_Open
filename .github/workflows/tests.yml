@@ -11,7 +11,7 @@ jobs:
         with:
           node-version: 22
       - name: Syntax check
-        run: node --check data.js && node --check recap.js && node --check sections.js && node --check app.js
+        run: node --check data.js && node --check recap.js && node --check sections.js && node --check surprise.js && node --check app.js
       - name: Session recap and section rules
         run: node --test tests/*.test.js
   layout:

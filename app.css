@@ -1793,3 +1793,19 @@ img,svg,video,canvas,iframe,table{max-width:100%}
 .nav.more-l.more-r,.tfbar.more-l.more-r,.tn-strip.more-l.more-r,.th-row.more-l.more-r{-webkit-mask-image:linear-gradient(to right,transparent,#000 2.5rem,#000 calc(100% - 2.5rem),transparent);mask-image:linear-gradient(to right,transparent,#000 2.5rem,#000 calc(100% - 2.5rem),transparent)}
 .rc-plan{color:var(--ink-2)!important}
 .rc-plan span,.rc-what{font-weight:600;color:var(--ink-3)}
+
+/* Surprise meter: blue intensity scale (a surprise isn't good or bad, just big or small) */
+.smt{margin:0.875rem 0 0;padding:0.75rem 0.875rem;border:1px solid var(--rule-2);border-radius:var(--r-sm);background:var(--bg-2);max-width:40rem}
+.smt-cap{margin:0 0 0.5rem;font-size:0.6875rem;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3)}
+.smt-row{display:grid;grid-template-columns:minmax(6.5rem,auto) minmax(5rem,9rem) 1fr;align-items:center;gap:0.75rem;margin:0.25rem 0;font-size:0.8438rem}
+.smt-l{color:var(--ink-2);min-width:0}
+.smt-bar{display:grid;grid-template-columns:repeat(4,1fr);gap:3px;height:0.4375rem}
+.smt-bar i{border-radius:2px;background:var(--panel-3)}
+.smt-bar i.on.l1{background:rgba(91,140,255,.35)} .smt-bar i.on.l2{background:rgba(91,140,255,.6)} .smt-bar i.on.l3{background:var(--acc)} .smt-bar i.on.l4{background:var(--acc-2);box-shadow:0 0 8px rgba(136,170,255,.5)}
+.smt-w{font-weight:600;color:var(--ink-2)} .smt-w.l3,.smt-w.l4{color:var(--ink)} .smt-w small{font-weight:400;color:var(--ink-3)}
+.smt-v{margin:0.625rem 0 0;font-size:0.875rem;line-height:1.55;color:var(--ink-2)} .smt-v b{color:var(--ink)}
+.smt-how{margin:0.375rem 0 0;font-size:0.7812rem;line-height:1.5;color:var(--ink-3)}
+.smt.smt-c{padding:0.5rem 0.625rem}
+.smt-chip{display:inline-block;margin-left:0.375rem;padding:0 0.375rem;border-radius:999px;font-size:0.6875rem;font-weight:600;line-height:1.5;vertical-align:middle;border:1px solid var(--acc-line);color:var(--acc-2);background:var(--acc-bg);white-space:nowrap}
+.smt-chip.l4{color:var(--acc-ink);background:var(--acc);border-color:var(--acc)}
+@media (max-width:560px){.smt-row{grid-template-columns:1fr auto;grid-template-areas:"l w" "b b";row-gap:0.25rem}.smt-l{grid-area:l}.smt-w{grid-area:w}.smt-bar{grid-area:b}}
