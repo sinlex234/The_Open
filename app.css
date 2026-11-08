@@ -1778,8 +1778,12 @@ body.room-open{overflow:hidden}
 .dp-recap[hidden]{display:none}
 .rc-v{margin:.25rem 0 .375rem;font:650 1rem/1.35 var(--sans);color:var(--ink)}
 .rc-v.up{color:var(--up)}.rc-v.down{color:var(--down)}
-.rc-s,.rc-p{margin:0 0 .625rem;font-size:.875rem;line-height:1.55;color:var(--ink-2)}
-.rc-p{color:var(--ink)}
+.rc-s{margin:0 0 .625rem;font-size:.875rem;line-height:1.55;color:var(--ink-2)}
+.rc-p{margin:0 0 .625rem;padding:.625rem .75rem;border:1px solid var(--rule-2);border-left-width:3px;border-radius:var(--r)}
+.rc-p.win{border-left-color:var(--up)}.rc-p.loss{border-left-color:var(--down)}
+.rc-p b{font-size:.75rem;font-family:var(--mono);letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3)}
+.rc-p p{margin:.25rem 0 0;font-size:.875rem;line-height:1.55;color:var(--ink)}
+.rc-tabs{margin:.375rem 0 .5rem}
 .rc-ai{font-size:.875rem;color:var(--ink-2)}
 .th-lean{margin:0 0 1rem}
 .th-lean-r{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem;margin:.25rem 0}

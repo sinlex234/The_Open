@@ -3610,74 +3610,33 @@ async function buildThread(id) {
   return { lean: storyLean(th.members), id, title: TH_TITLE[th.keys[0]] || th.keys.slice(0, 2).map(cap1).join(" and "), kicker: themeDef ? themeDef.label : th.theme, mk, name, unit: c.unit, dp: c.dp, summary, items, series, updated: Date.now() };
 }
 
-// ---------- Session recap: once your trading window is over, what happened and what the plan would have done ----------
-var RECAP_SYM = { NQ: { sym: "NQ=F", dp: 2, unit: "pts" }, ES: { sym: "ES=F", dp: 2, unit: "pts" }, BTC: { sym: "BTC-USD", dp: 0, unit: "$" }, EURUSD: { sym: "EURUSD=X", dp: 5, unit: "pips", pip: 1e-4 } };
+// ---------- Session recap: once your trading window is over, what happened and what each strategy's rules would have done ----------
+// The analysis lives in recap.js (pure functions, covered by tests/recap.test.js); this part only fetches the data.
+var RECAP = require("./recap.js");
 async function buildRecap(q) {
-  const key = RECAP_SYM[q.m] ? q.m : "NQ", C = RECAP_SYM[key];
-  const from = Math.max(0, Math.min(1439, +q.from || 570)), to = Math.max(from + 15, Math.min(1440, +q.to || 690));
-  const ict = q.ict === "1", now = Date.now(), n = ny(now);
-  const ch = await yahooChart(C.sym, { interval: "5m", range: "5d" });
-  const bars = (ch && ch.bars || []).map((b) => ({ ...b, d: ny(b.t).date, m: ny(b.t).mins }));
-  // the latest session that has finished (today if it's over, otherwise the last trading day before)
-  const dates = [...new Set(bars.map((b) => b.d))].sort();
-  let D = null;
-  for (let i = dates.length - 1; i >= 0; i--) { const d = dates[i]; if (d === n.date && n.mins < to) continue; if (bars.some((b) => b.d === d && b.m >= from && b.m < to)) { D = d; break; } }
-  if (!D) return { ready: false, why: "No finished session in the price history yet." };
-  const sess = bars.filter((b) => b.d === D && b.m >= from && b.m < to);
-  const prevD = dates[dates.indexOf(D) - 1];
-  const prevRth = bars.filter((b) => b.d === prevD && b.m >= 570 && b.m < 960);
-  const overnight = bars.filter((b) => (b.d === prevD && b.m >= 1080) || (b.d === D && b.m < from));
-  const fmt = (v) => C.pip ? v.toFixed(4) : v.toLocaleString("en-US", { maximumFractionDigits: C.dp === 0 ? 0 : 2 });
-  const amt = (d) => C.pip ? Math.round(Math.abs(d) / C.pip) + " pips" : C.unit === "$" ? "$" + Math.round(Math.abs(d)).toLocaleString("en-US") : Math.abs(d).toFixed(Math.abs(d) >= 100 ? 0 : 1) + " pts";
-  const tm = (t) => fmtT2(t).replace(/ ET$/, "");
-  const O = sess[0].o, Cl = sess[sess.length - 1].c;
-  let H = sess[0], L = sess[0]; sess.forEach((b) => { if (b.h > H.h) H = b; if (b.l < L.l) L = b; });
-  const refs = [];
-  if (overnight.length) { refs.push({ name: "the overnight high", side: "high", v: Math.max(...overnight.map((b) => b.h)) }, { name: "the overnight low", side: "low", v: Math.min(...overnight.map((b) => b.l)) }); }
-  if (prevRth.length) { refs.push({ name: "yesterday’s high", side: "high", v: Math.max(...prevRth.map((b) => b.h)) }, { name: "yesterday’s low", side: "low", v: Math.min(...prevRth.map((b) => b.l)) }); }
-  // the logged bias for that day, else the one on the page
-  let call = null, conf = null, logged = false;
-  try { const r = await sb(`open_daybias?select=call,conf&day=eq.${D}&market=eq.${key === "ES" ? "NQ" : key}`); if (r && r[0]) { call = r[0].call; conf = r[0].conf; logged = true; } } catch {}
-  const net = Cl - O, range = H.h - L.l, pct = net / O * 100, flat = Math.abs(pct) < (key === "BTC" ? 0.3 : key === "EURUSD" ? 0.05 : 0.1);
-  // No saved bias for that day: describe the session in hindsight instead of grading a call that wasn't made
-  const hind = !call && !flat;
-  if (hind) call = net > 0 ? "up" : "down";
-  const result = !call ? null : hind ? "hindsight" : flat ? "flat" : (net > 0) === (call === "up") ? "right" : "wrong";
-  // first liquidity grab against the bias, then the move with it
-  const swept = (side) => refs.filter((r) => r.side === side).map((r) => { const b = sess.find((x) => side === "high" ? x.h > r.v : x.l < r.v); return b ? { ...r, at: b } : null; }).filter(Boolean).sort((a, b) => a.at.t - b.at.t)[0] || null;
-  const sweepHigh = swept("high"), sweepLow = swept("low");
-  const lines = [], plan = [];
-  const nm = key === "EURUSD" ? "EUR/USD" : key === "BTC" ? "Bitcoin" : key;
-  lines.push(`${nm} ${net >= 0 ? "rose" : "fell"} ${amt(net)} in the session (${minsTxtS(from)}–${minsTxtS(to)} ET), with a ${amt(range)} range from high to low.`);
-  lines.push(`It opened at ${fmt(O)}, ${H.t < L.t ? `made its high of ${fmt(H.h)} at ${tm(H.t)}, then its low of ${fmt(L.l)} at ${tm(L.t)}` : `made its low of ${fmt(L.l)} at ${tm(L.t)}, then its high of ${fmt(H.h)} at ${tm(H.t)}`}, and finished at ${fmt(Cl)}.`);
-  const quiet = range < (key === "BTC" ? O * 0.006 : key === "EURUSD" ? O * 0.0015 : O * 0.0035);
-  let verdict = "";
-  if (!call) verdict = "There was no saved bias for this session, and price barely moved.";
-  else if (hind) verdict = `There was no saved bias for this session. In hindsight it was ${call === "up" ? "an up" : "a down"} session.`;
-  else verdict = `The bias was ${call}${conf ? ` (${conf} confidence)` : ""}, and ${result === "right" ? "it was right" : result === "wrong" ? "it was wrong" : "price barely moved, so it gets no grade"}.`;
-  if (quiet) plan.push(`Quiet session: only ${amt(range)} from high to low. Sitting out was the right call; there wasn’t enough room for a good trade.`);
-  else if (call === "down") {
-    const s = sweepHigh && sweepHigh.at.t < L.t ? sweepHigh : null;
-    if (result === "wrong") plan.push(`The bias was wrong. ${sweepHigh ? `Price ran above ${sweepHigh.name} (${fmt(sweepHigh.v)}) at ${tm(sweepHigh.at.t)} and kept going instead of reversing.` : "Price kept pushing higher."} The plan said to step back if price held above the level, so no short was the right answer.`);
-    else if (ict && s) { const risk = s.at.h - s.v, reward = s.v - L.l; plan.push(`ICT play: the run above ${s.name} (${fmt(s.v)}) at ${tm(s.at.t)} was the buy-side liquidity grab. A short once price broke back below ${fmt(s.v)}, with the stop above the high of ${fmt(s.at.h)}, had room to the low at ${fmt(L.l)}: about ${amt(reward)} for ${amt(risk)} of risk${risk > 0 ? ` (${(reward / Math.max(risk, 1e-9)).toFixed(1)}R)` : ""}.`); }
-    else plan.push(`${hind ? "The session’s main move" : "Best move with the bias"}: from the high of ${fmt(H.h)} at ${tm(H.t)} down to ${fmt(L.l)} at ${tm(L.t)}, about ${amt(H.h - L.l)}. ${H.t - sess[0].t > 20 * 6e4 ? "Waiting for the opening run up to finish before shorting caught most of it." : "The drop started right at the open."}`);
-  } else if (call === "up") {
-    const s = sweepLow && sweepLow.at.t < H.t ? sweepLow : null;
-    if (result === "wrong") plan.push(`The bias was wrong. ${sweepLow ? `Price broke below ${sweepLow.name} (${fmt(sweepLow.v)}) at ${tm(sweepLow.at.t)} and kept falling instead of reversing.` : "Price kept sliding."} The plan said to step back if price held below the level, so no long was the right answer.`);
-    else if (ict && s) { const risk = s.v - s.at.l, reward = H.h - s.v; plan.push(`ICT play: the run below ${s.name} (${fmt(s.v)}) at ${tm(s.at.t)} was the sell-side liquidity grab. A long once price reclaimed ${fmt(s.v)}, with the stop below the low of ${fmt(s.at.l)}, had room to the high at ${fmt(H.h)}: about ${amt(reward)} for ${amt(risk)} of risk${risk > 0 ? ` (${(reward / Math.max(risk, 1e-9)).toFixed(1)}R)` : ""}.`); }
-    else plan.push(`${hind ? "The session’s main move" : "Best move with the bias"}: from the low of ${fmt(L.l)} at ${tm(L.t)} up to ${fmt(H.h)} at ${tm(H.t)}, about ${amt(H.h - L.l)}. ${L.t - sess[0].t > 20 * 6e4 ? "Waiting for the opening dip to finish before buying caught most of it." : "The push started right at the open."}`);
-  } else plan.push(`With no clear bias, the cleaner choice was to wait for a level to break and hold, or sit out.`);
-  let ai = null;
+  const inst = RECAP.INSTR[q.i] ? q.i : RECAP.INSTR[q.m] ? q.m : "NQ", I = RECAP.INSTR[inst];
+  const from = Math.max(0, Math.min(1439, Math.round(+q.from || 570))), to = Math.max(0, Math.min(1440, Math.round(+q.to || 690)));
+  const strategies = String(q.st || (q.ict === "1" ? "ict" : "")).split(",").map((x) => x.trim()).filter((x) => RECAP.RECIPE[x]).slice(0, 3);
+  const now = Date.now();
+  const [ch, cal] = await Promise.all([yahooChart(I.sym, { interval: "5m", range: "1mo" }), memo("calendar", 6e4, () => build()).catch(() => null)]);
+  let biases = [];
+  if (I.bias) { try { biases = (await sb(`open_daybias?select=call,conf,logged_at&market=eq.${I.bias}&day=gte.${new Date(now - 9 * 864e5).toISOString().slice(0, 10)}&order=day.desc&limit=10`)).map((r) => ({ call: r.call, conf: r.conf, at: Date.parse(r.logged_at) })); } catch {} }
+  const ccy = I.kind === "fx" ? [I.name.slice(0, 3), I.name.slice(4, 7)] : ["USD"];
+  const events = (cal && cal.events || []).filter((e) => e.impact === "High" && ccy.includes(e.country) && !e.allDay).map((e) => ({ time: e.time, name: e.name || e.title }));
+  const r = RECAP.analyze({ instrument: inst, bars: ch && ch.bars || [], from, to, now, bias: biases, strategies, events });
+  if (!r.ready) return r;
+  r.today = r.date === ny(now).date;
+  r.ai = null;
   if (hasAI()) {
     try {
-      const facts = { market: nm, session: `${minsTxtS(from)}-${minsTxtS(to)} ET`, date: D, open: fmt(O), high: fmt(H.h), high_time: tm(H.t), low: fmt(L.l), low_time: tm(L.t), close: fmt(Cl), bias: call, bias_result: result, levels: refs.map((r) => `${r.name} ${fmt(r.v)}`), strategy: ict ? "ICT" : "general", rules_plan: plan.join(" ") };
-      const r = await memo(`recap:${key}:${D}:${from}:${to}:${ict}`, 6 * 36e5, () => askClaude({ maxTokens: 400, system: VOICE + "\nYou are a calm trading coach reviewing one finished session. Use ONLY the numbers given. Never invent prices or times. No advice to trade real money.", user: `Facts:\n${JSON.stringify(facts)}\n\nReturn ONLY JSON: {"note":"3 short sentences: what the session did, whether the plan worked, and the one lesson for next time"}` }));
-      // fact check: every number the AI writes must be one of the numbers we gave it
-      const factTxt = JSON.stringify(facts).replace(/,(?=\d{3})/g, ""), nums = String(r && r.note || "").match(/\d[\d,.:]*\d|\d/g) || [];
-      if (r && r.note && nums.every((x) => factTxt.includes(x.replace(/,/g, "").replace(/[.:]$/, "")))) ai = String(r.note).slice(0, 500);
+      const facts = { market: r.name, session: `${minsTxtS(from)}-${minsTxtS(to)} ET`, date: r.date, open: r.open, high: r.high, low: r.low, close: r.close, bias: r.call, bias_result: r.result, summary: r.summary, plans: r.plans.map((p) => p.name + ": " + p.text) };
+      const out = await memo(`recap:${inst}:${r.date}:${from}:${to}:${strategies.join(",")}`, 6 * 36e5, () => askClaude({ maxTokens: 400, system: VOICE + "\nYou are a calm trading coach reviewing one finished session. Use ONLY the facts given. Never invent prices, times or results. No advice to trade real money.", user: `Facts:\n${JSON.stringify(facts)}\n\nReturn ONLY JSON: {"note":"3 short sentences: what the session did, whether the plan worked, and the one lesson for next time"}` }));
+      // fact check: every number the AI writes must appear in the facts we gave it
+      const factTxt = JSON.stringify(facts).replace(/,(?=\d{3})/g, ""), nums = String(out && out.note || "").match(/\d[\d,.:]*\d|\d/g) || [];
+      if (out && out.note && nums.every((x) => factTxt.includes(x.replace(/,/g, "").replace(/[.:]$/, "")))) r.ai = String(out.note).slice(0, 500);
     } catch {}
   }
-  return { ready: true, market: key, date: D, today: D === n.date, from, to, open: O, high: H.h, low: L.l, close: Cl, net: C.pip ? Math.round(net / C.pip) : +net.toFixed(C.dp), unit: C.unit, call, conf, logged, result, summary: lines, verdict, plan, ai, updated: now };
+  return r;
 }
 var minsTxtS = (m) => { const h = Math.floor(m / 60) % 24, mm = m % 60; return `${(h % 12) || 12}${mm ? ":" + String(mm).padStart(2, "0") : ""} ${h >= 12 ? "PM" : "AM"}`; };
 // ---------- Story read: which way a developing story leans for each market (rules; AI read on top when credits are on) ----------

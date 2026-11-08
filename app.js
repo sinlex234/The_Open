@@ -793,7 +793,7 @@ function dayPlanHTML(plans) {
     return `<div class="dp ${p.call}">
     <div class="dp-top"><span class="dp-mk">${esc(p.short)} · ${esc(ss.label)}, ${minsTxt(ss.from)}–${minsTxt(ss.to)} ET</span><span class="pill ${p.call === 'up' ? 'up' : p.call === 'down' ? 'down' : ''}">${esc(p.conf)} confidence</span></div>
     <p class="dp-h"><i>${arrow[p.call]}</i>${esc(p.head)}${p.call !== 'range' ? `<span class="dp-sub">for your session</span>` : ''}</p>
-    <div class="dp-when" data-tk="${esc(p.timing || 'NQ')}" data-from="${ss.from}" data-to="${ss.to}" data-call="${p.call}" data-ict="${p.plans.some(x => x.strategy === 'ict') ? 1 : 0}" data-mk="${esc(p.market)}"><span class="dp-k">Most likely move</span><span class="dp-wt">${p.event ? `${esc(p.event.time)}, when ${esc(p.event.name)} comes out` : 'Working it out…'}</span></div>
+    <div class="dp-when" data-tk="${esc(p.timing || 'NQ')}" data-from="${ss.from}" data-to="${ss.to}" data-call="${p.call}" data-ict="${p.plans.some(x => x.strategy === 'ict') ? 1 : 0}" data-st="${esc(p.plans.map(x => x.strategy).join(','))}" data-mk="${esc(p.market)}"><span class="dp-k">Most likely move</span><span class="dp-wt">${p.event ? `${esc(p.event.time)}, when ${esc(p.event.name)} comes out` : 'Working it out…'}</span></div>
     <ul class="dp-why">${p.why.map(w => `<li>${esc(w)}</li>`).join('')}</ul>
     ${p.plans.map(pl => `<div class="dp-plan"><p class="dp-k">Your plan · ${esc(pl.name)}</p><ol>${pl.steps.map(x => `<li>${esc(pl.strategy === 'ict' ? ictWords(x, p.market) : x)}</li>`).join('')}</ol></div>`).join('')}
     ${p.flip ? `<p class="dp-flip">${esc(p.flip)}</p>` : ''}
@@ -824,23 +824,42 @@ function dpNow(el) {
   if (st) st.textContent = inSess ? `· Now: ${cur ? cur.querySelector('.dp-tt').childNodes[0].textContent : ''}` : (!wk || crypto) && m < from ? `· Starts in ${left(from)}` : '· Off market';
   el.classList.toggle('off', !inSess);
   const rc = el.querySelector('.dp-recap');
-  if (!inSess && rc && !rc.dataset.done) {
-    rc.dataset.done = 1; rc.hidden = false; rc.innerHTML = skel(2);
-    const strat = el.dataset.ict === '1' ? 1 : 0;
-    api('recap?' + new URLSearchParams({ m: el.dataset.tk, from, to, call: el.dataset.call, ict: strat }).toString(), 10 * 60e3).then(r => {
-      if (!r.ready) { rc.innerHTML = `<p class="muted small">${esc(r.why || 'No finished session yet.')}</p>`; return; }
-      const day = r.today ? 'Today’s session' : new Date(r.date + 'T12:00:00Z').toLocaleDateString('en-US', { timeZone: 'UTC', weekday: 'long' }) + '’s session';
-      rc.innerHTML = `<p class="dp-k">Off market · ${esc(day)} recap</p>
-        <p class="rc-v ${r.result === 'right' ? 'up' : r.result === 'wrong' ? 'down' : ''}">${esc(r.verdict)}</p>
-        <p class="rc-s">${esc(r.summary.join(' '))}</p>
-        <p class="dp-k">What the plan would have done</p>
-        ${r.plan.map(x => `<p class="rc-p">${esc(el.dataset.ict === '1' ? ictWords(x, el.dataset.mk) : x)}</p>`).join('')}
-        ${r.ai ? `<p class="rc-ai"><span class="pl-ai">AI review</span>${esc(r.ai)}</p>` : ''}
-        <p class="dp-tfoot">From 5-minute prices that can lag up to 15 minutes. Hindsight, for learning, not a promise about the next session.</p>`;
-    }).catch(() => { rc.innerHTML = ''; rc.hidden = true; });
-  }
+  if (!inSess && rc && !rc.dataset.done) { rc.dataset.done = 1; rc.hidden = false; loadRecap(el, rc, recapInstruments(el)[0]); }
+}
+// The instruments this reader trades in this market (their own pairs and contracts), main one first
+const RECAP_IDS = ['NQ', 'MNQ', 'ES', 'MES', 'YM', 'RTY', 'CL', 'GC', 'XAUUSD', 'SI', 'NG', 'EURUSD', 'GBPUSD', 'USDJPY', 'BTC', 'ETH', 'SOL'];
+function recapInstruments(el) {
+  const mk = el.dataset.mk, main = el.dataset.tk;
+  const own = myAssets().filter(a => RECAP_IDS.includes(a.id) && (mk === 'forex' ? !!a.ccy || /USD|JPY/.test(a.id) : mk === 'crypto' || mk === 'memes' ? ['BTC', 'ETH', 'SOL'].includes(a.id) : !['EURUSD', 'GBPUSD', 'USDJPY', 'BTC', 'ETH', 'SOL'].includes(a.id))).map(a => a.id);
+  return [...new Set([...own, main])].filter(x => RECAP_IDS.includes(x)).slice(0, 4);
+}
+function loadRecap(el, rc, inst) {
+  const list = recapInstruments(el), from = +el.dataset.from, to = +el.dataset.to;
+  rc.innerHTML = skel(2);
+  api('recap?' + new URLSearchParams({ i: inst, from, to, st: el.dataset.st || '' }).toString(), 10 * 60e3).then(r => {
+    if (!r.ready) { rc.innerHTML = `<p class="muted small">${esc(r.why || 'No finished session yet.')}</p>`; return; }
+    const day = r.today ? 'Today’s session' : new Date(r.date + 'T12:00:00Z').toLocaleDateString('en-US', { timeZone: 'UTC', weekday: 'long' }) + '’s session';
+    const tabs = list.length > 1 ? `<div class="chips tight rc-tabs">${list.map(x => `<button type="button" class="chip" data-rci="${esc(x)}" aria-pressed="${x === inst}">${esc(x === 'XAUUSD' ? 'Gold' : x.length === 6 ? x.slice(0, 3) + '/' + x.slice(3) : x)}</button>`).join('')}</div>` : '';
+    rc.innerHTML = `<p class="dp-k">Off market · ${esc(day)} recap</p>${tabs}
+      <p class="rc-v ${r.result === 'right' ? 'up' : r.result === 'wrong' ? 'down' : ''}">${esc(r.verdict)}</p>
+      <p class="rc-s">${esc(r.summary.join(' '))}</p>
+      <p class="dp-k">What your plan’s rules would have done</p>
+      ${r.plans.map(x => `<div class="rc-p ${x.result || ''}"><b>${esc(x.name)}</b><p>${esc(x.strategy === 'ict' ? ictWords(x.text, el.dataset.mk) : x.text)}</p></div>`).join('')}
+      ${r.ai ? `<p class="rc-ai"><span class="pl-ai">AI review</span>${esc(r.ai)}</p>` : ''}
+      <p class="dp-tfoot">Entries on a candle’s close, stops past the extreme plus a buffer, walked forward candle by candle to a 2R target or the session end. From 5-minute prices that can lag up to 15 minutes. For learning, not a promise about the next session.</p>`;
+    rc.querySelectorAll('[data-rci]').forEach(b => b.onclick = () => loadRecap(el, rc, b.dataset.rci));
+  }).catch(() => { rc.innerHTML = ''; rc.hidden = true; });
 }
 setInterval(() => document.querySelectorAll('.dp-when[data-done]').forEach(dpNow), 30e3);
+// Weekend: the last session's recap for each market the reader trades (their own session window)
+function weekendRecapHTML() {
+  if (isLearning()) return '';
+  const mks = myMarkets().filter(m => PULSE_KEY[m] && m !== 'stocks').slice(0, 2);
+  return mks.map(m => { const ss = daySession(m), st = stratsFor(m).join(',');
+    return `<li class="dayplan wk-recap"><div class="dp"><div class="dp-top"><span class="dp-mk">${esc({ futures: 'Futures', options: 'Options', forex: 'Forex', crypto: 'Crypto', memes: 'Memecoins' }[m] || m)} · ${esc(ss.label)}, ${minsTxt(ss.from)}–${minsTxt(ss.to)} ET</span></div>
+      <div class="dp-when off" data-wk="1" data-tk="${PULSE_KEY[m]}" data-from="${ss.from}" data-to="${ss.to}" data-st="${esc(st)}" data-ict="${st.split(',').includes('ict') ? 1 : 0}" data-mk="${m}"><div class="dp-recap"></div></div></div></li>`; }).join('');
+}
+function fillWeekendRecap() { document.querySelectorAll('.dp-when[data-wk]:not([data-done])').forEach(el => { el.dataset.done = 1; const rc = el.querySelector('.dp-recap'); loadRecap(el, rc, recapInstruments(el)[0]); }); }
 function fillDayWhen() {
   document.querySelectorAll('.dp-when[data-tk]:not([data-done])').forEach(el => {
     el.dataset.done = '1';
@@ -1345,7 +1364,7 @@ PAGES.today = () => {
   main.querySelectorAll('.wknd-hide').forEach(x => x.classList.toggle('wk-off', !!shut));
   bindTabs();
   if (shut) {
-    const bf = $('#bfeed'); if (bf) { bf.innerHTML = `<li class="closed-li">${closedHTML(shut, myMarkets().length > 1 ? 'Every market you trade' : `The ${SHUT_NAME[myMarkets()[0]] || ''} market`)}</li>`; bindWeekend(); }
+    const bf = $('#bfeed'); if (bf) { bf.innerHTML = `<li class="closed-li">${closedHTML(shut, myMarkets().length > 1 ? 'Every market you trade' : `The ${SHUT_NAME[myMarkets()[0]] || ''} market`)}</li>${weekendRecapHTML()}`; bindWeekend(); fillWeekendRecap(); }
     const oh = $('#outlookH'); if (oh) oh.textContent = 'What’s coming when it reopens';
     const ti = $('#todayIntro'); if (ti && !isLearning()) ti.textContent = 'Your markets are closed for the weekend. Here’s what’s coming when they reopen.';
   }
