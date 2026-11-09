@@ -3637,29 +3637,8 @@ async function threadPool() {
 }
 // Words too broad to name a story on their own (they're the topic, not the story)
 var TH_BROAD = new Set("january drives drive driven driving leads lead leading turns turn moves move says report february march april june july august september october november december steady hold holds held following follows post posts amid toward towards across within without another other ahead behind latest concerns concern worries worry fears fear victory sweep pressure pressures center centers financial data wobbles wobble outlook rally rallies soar soars tumble tumbles sink sinks plunge plunges selloff rout boost boosts lifts weighs weigh hopes hope bets bet focus parse watch strong weak big small top best worst oil crude energy earnings beat beats misses miss results profit revenue tech chip chips chipmaker semiconductor crypto bitcoin cryptocurrency inflation gold dollar yield yields treasury treasuries bond bonds economy economic growth fed rate rates hike hikes cutting policy central bank banks trump president government wall street nasdaq dow equity equities index indexes trade jobs labor unemployment consumer prices outlook forecast guidance demand supply sales spending investors value valuation financialjuice reuters bloomberg cnbc".split(" "));
-function findThreads(pool) {
-  const N = pool.length, freq = {};
-  pool.forEach((h) => h.words.forEach((w) => { freq[w] = (freq[w] || 0) + 1; }));
-  const keys = Object.entries(freq).filter(([w, n]) => n >= 3 && n <= Math.max(8, N * 0.35) && !TH_BROAD.has(w)).sort((x, y) => y[1] - x[1]).map(([w]) => w).slice(0, 40);
-  // words that nearly always come together are one story ("democrats" + "midterms")
-  const groups = [];
-  keys.forEach((k) => {
-    const withK = pool.filter((h) => h.words.includes(k));
-    const g = groups.find((gr) => withK.filter((h) => h.words.includes(gr.keys[0])).length >= withK.length * 0.5);
-    if (g) g.keys.push(k); else groups.push({ keys: [k] });
-  });
-  const used = new Set(), threads = [];
-  groups.forEach((g) => {
-    const mem = pool.filter((h) => !used.has(h.id) && g.keys.some((k) => h.words.includes(k)));
-    if (mem.length < 4) return;
-    mem.forEach((h) => used.add(h.id));
-    const tc = {}; mem.forEach((h) => { tc[h.theme] = (tc[h.theme] || 0) + 1; });
-    const theme = Object.entries(tc).sort((x, y) => y[1] - x[1])[0][0];
-    const label = (mem.find((h) => h.theme === theme) || {}).label || theme;
-    threads.push({ theme, label, keys: g.keys.slice(0, 3), members: mem.sort((x, y) => y.t - x.t) });
-  });
-  return threads;
-}
+var THREADS = require("./threads.js");
+var findThreads = (pool) => THREADS.findThreads(pool, TH_BROAD);
 var cap1 = (w) => ["ai", "fed", "ecb", "boj", "boe", "gdp", "cpi", "ppi", "pce", "sec", "etf", "opec", "gop", "uk", "eu"].includes(w) ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1);
 async function buildThreads() {
   const pool = await threadPool();
@@ -3669,7 +3648,8 @@ async function buildThreads() {
     const m = th.members, last = m[0], run = m.filter((h) => now - h.t < 72 * 36e5), first = run.length >= 3 ? run[run.length - 1] : m[m.length - 1];
     const themeDef = THEMES.find((x) => x.id === th.theme), mk = TH_MK[(themeDef && themeDef.markets || [])[0]] || "NQ";
     const recent3h = m.filter((h) => now - h.t < 3 * 36e5).length, recent24 = m.filter((h) => now - h.t < 24 * 36e5).length;
-    const lastMoves = m.filter((h) => h.next && h.next[mk]).slice(0, 4).map((h) => h.next[mk].way);
+    const mbars = charts.res[mk] && charts.res[mk].bars || [];
+    const lastMoves = m.filter((h) => h.next && h.next[mk] && THREADS.openAt(mbars, h.t)).slice(0, 4).map((h) => h.next[mk].way);
     let status = "steady", statusTxt = `${recent24} new in the last day`;
     if (recent3h >= 3) { status = "hot"; statusTxt = `Heating up: ${recent3h} new headlines in the last 3 hours`; }
     else if (!recent24) { status = "cooling"; statusTxt = `Cooling: nothing new since ${new Date(last.t).toLocaleDateString("en-US", { timeZone: "America/New_York", weekday: "short" })}`; }
@@ -3692,9 +3672,10 @@ async function buildThread(id) {
   const now = Date.now(), m = th.members.slice(0, 40), run = th.members.filter((h) => now - h.t < 72 * 36e5), first = run.length >= 3 ? run[run.length - 1] : th.members[th.members.length - 1];
   const c = CALL_MKTS[mk], ch = await yahooChart(c.sym, { interval: "15m", range: "1mo" }).catch(() => null);
   const bars = (ch && ch.bars || []).filter((b) => b.t >= first.t - 6 * 36e5);
-  const step = Math.max(1, Math.ceil(bars.length / 160));
-  const series = bars.filter((_, i) => i % step === 0 || i === bars.length - 1).map((b) => [b.t, +b.c.toFixed(c.dp)]);
-  const items = m.map((h) => ({ id: h.id, title: h.title, source: h.source, link: h.link || null, t: h.t, next: h.next && h.next[mk] || null }));
+  const ts = THREADS.tradingSeries(bars), series = ts.pts.map(([t, v]) => [t, +v.toFixed(c.dp)]);
+  const allBars = ch && ch.bars || [];
+  // a headline only gets a market-move grade if the market was trading right after it
+  const items = m.map((h) => ({ id: h.id, title: h.title, source: h.source, link: h.link || null, t: h.t, closed: !THREADS.openAt(allBars, h.t), next: h.next && h.next[mk] && THREADS.openAt(allBars, h.t) ? h.next[mk] : null }));
   const days = Math.max(1, Math.ceil((th.members[0].t - th.members[th.members.length - 1].t) / 864e5));
   const p0 = bars.length && first.t >= bars[0].t ? priceAt(bars, first.t) : null, p1 = bars.length ? bars[bars.length - 1].c : null;
   const name = mk === "EURUSD" ? "EUR/USD" : mk === "BTC" ? "Bitcoin" : "NQ";
@@ -3703,9 +3684,9 @@ async function buildThread(id) {
     `${th.members.length} headlines over ${days} day${days === 1 ? "" : "s"}. This round started with “${first.title}” (${first.source}).`,
     `Latest: “${m[0].title}” (${m[0].source}).`,
     p0 != null && p1 != null ? `${name} is ${p1 >= p0 ? "up" : "down"} ${c.pip ? Math.abs(Math.round((p1 - p0) / c.pip)) + " pips" : c.unit === "$" ? "$" + Math.abs(Math.round(p1 - p0)).toLocaleString("en-US") : Math.abs(p1 - p0).toFixed(1) + " pts"} since this round began.` : "",
-    graded >= 3 ? `${moved} of ${graded} headlines moved ${name} noticeably in the hour after.` : ""
+    graded >= 3 ? `${moved} of the ${graded} headlines that came out while ${name} was trading moved it noticeably in the hour after.` : ""
   ].filter(Boolean).join(" ");
-  return { lean: storyLean(th.members), id, title: TH_TITLE[th.keys[0]] || th.keys.slice(0, 2).map(cap1).join(" and "), kicker: themeDef ? themeDef.label : th.theme, mk, name, unit: c.unit, dp: c.dp, summary, items, series, updated: Date.now() };
+  return { lean: storyLean(th.members), id, title: TH_TITLE[th.keys[0]] || th.keys.slice(0, 2).map(cap1).join(" and "), kicker: themeDef ? themeDef.label : th.theme, mk, name, unit: c.unit, dp: c.dp, summary, items, series, breaks: ts.breaks, updated: Date.now() };
 }
 
 // ---------- Session recap: once your trading window is over, what happened and what each strategy's rules would have done ----------
@@ -3752,31 +3733,74 @@ function storyLean(members, sinceByMk) {
   });
   return out;
 }
+// The AI read on a story: plain answers to "what's going on, where is my market likely headed, what would change it,
+// what do I watch next". Every number it writes must come from the facts it was given, or that sentence is dropped.
+var TAI_SYM = { NQ: ["NQ=F", 2], ES: ["ES=F", 2], BTC: ["BTC-USD", 0], ETH: ["ETH-USD", 0], SOL: ["SOL-USD", 2], EURUSD: ["EURUSD=X", 4], GBPUSD: ["GBPUSD=X", 4], USDJPY: ["JPY=X", 2], GOLD: ["GC=F", 1] };
+function numsOK(text, factTxt) {
+  const nums = String(text || "").match(/\d[\d,.:]*\d|\d/g) || [];
+  return nums.every((x) => factTxt.includes(x.replace(/,/g, "").replace(/[.:]$/, "")));
+}
+// keep only the sentences whose numbers check out
+function factClean(text, factTxt, max) {
+  const parts = String(text || "").split(/(?<=[.!?])\s+/).filter((x) => x && numsOK(x, factTxt));
+  return parts.join(" ").slice(0, max);
+}
 async function threadAI(req) {
   const tok = bearer(req);
   if (!tok) throw new HttpErr(401, "Sign in to use AI reads.", { why: "signin" });
   if (!hasAI()) throw new HttpErr(503, "AI reads aren’t switched on yet.");
   const b = await readBody(req);
   const id = String(b.id || "").slice(0, 80);
-  const mk = [...new Set((Array.isArray(b.markets) ? b.markets : []).map(String).filter((x) => AIR_MKTS[x]))].slice(0, 3);
+  const mk = [...new Set((Array.isArray(b.markets) ? b.markets : []).map(String).filter((x) => AIR_MKTS[x] && TAI_SYM[x]))].slice(0, 3);
   if (!mk.length) mk.push("NQ");
   const th = await buildThread(id);
   if (!th || th.missing) throw new HttpErr(404, "That story isn’t being tracked any more.");
   const use = await meter(tok, 1, "free");
-  const heads = th.items.slice(0, 15).map((x) => `- ${new Date(x.t).toISOString().slice(0, 16)} ${x.title} (${x.source})`).join("\n");
-  const res = await memo("tai:" + id + "|" + mk.join(",") + "|" + (th.items[0] && th.items[0].t), 20 * 6e4, () => askClaude({
+  const now = Date.now(), first = th.items.length ? th.items[th.items.length - 1].t : now;
+  // where each market is now, since the story began, and over the last day
+  const { res: ch } = await settle(Object.fromEntries(mk.map((k) => [k, memo("tai15:" + k, 5 * 6e4, () => yahooChart(TAI_SYM[k][0], { interval: "15m", range: "1mo" }))])));
+  const prices = mk.map((k) => {
+    const bars = ch[k] && ch[k].bars || [], dp = TAI_SYM[k][1]; if (bars.length < 5) return { market: AIR_MKTS[k] };
+    const last = bars[bars.length - 1].c, at = (t) => { const x = bars.find((y) => y.t >= t); return x ? x.o : null; };
+    const p0 = at(first), p24 = at(now - 864e5), pct = (a) => a ? +((last - a) / a * 100).toFixed(2) : null;
+    return { market: AIR_MKTS[k], price_now: +last.toFixed(dp), change_since_story_began_pct: pct(p0), change_last_24h_pct: pct(p24), market_open_now: now - bars[bars.length - 1].t < 45 * 6e4 };
+  });
+  const cal = await memo("calendar", 6e4, () => build()).catch(() => null);
+  const upcoming = (cal && cal.events || []).filter((e) => e.impact === "High" && !e.allDay && e.time > now && e.time < now + 3 * 864e5).slice(0, 6)
+    .map((e) => ({ event: e.name || e.title, country: e.country, when_ny: new Date(e.time).toLocaleString("en-US", { timeZone: "America/New_York", weekday: "short", hour: "numeric", minute: "2-digit" }) }));
+  const heads = th.items.slice(0, 15).map((x) => ({ when_ny: new Date(x.t).toLocaleString("en-US", { timeZone: "America/New_York", weekday: "short", hour: "numeric", minute: "2-digit" }), headline: x.title, source: x.source,
+    [th.name + "_in_the_hour_after"]: x.closed ? "market closed" : x.next ? (x.next.move > 0 ? "+" : "") + x.next.move + " " + th.unit : "not measured yet" }));
+  const facts = { story: th.title, now_ny: new Date(now).toLocaleString("en-US", { timeZone: "America/New_York", weekday: "short", hour: "numeric", minute: "2-digit" }), headlines_newest_first: heads, markets: prices, big_events_next_3_days: upcoming };
+  const factTxt = JSON.stringify(facts).replace(/,(?=\d{3})/g, "");
+  const res = await memo("tai2:" + id + "|" + mk.join(",") + "|" + (th.items[0] && th.items[0].t), 20 * 6e4, () => askClaude({
     system: VOICE + `
-You read a developing news story (a list of headlines, newest first) and say where it is heading and what it most likely means for each named market over the next day.
-- "dir": "up", "down" or "unclear"; "conf": "high", "medium" or "low"; "why": one sentence, max 26 words, only what the headlines support.
-- "stage": one short phrase: "just starting", "building", "peaking", "fading" or "priced in".
-- "take": two sentences: what the story is really about now, and what would change it.
-Reply with JSON only: {"reads":[{"m":"NQ","dir":"down","conf":"medium","why":"..."}],"stage":"building","take":"..."}`,
-    user: `Story: ${th.title}\nSummary: ${th.summary}\nHeadlines:\n${heads}\nMarkets: ${mk.map((k) => k + " = " + AIR_MKTS[k]).join("; ")}`,
-    maxTokens: 600
+You explain a developing news story to an everyday trader in plain English, like a smart friend. No jargon: never write "lean", "risk-on", "risk-off", "priced in", "sentiment" or "catalyst". Short sentences.
+Use ONLY the facts given. Never invent prices, numbers, dates or events. If you mention a number, copy it exactly from the facts.
+Answer for the NEXT DAY, for each market named in the facts.
+Return JSON only:
+{"now": "2 short sentences: what is going on in this story right now and why it matters to markets",
+ "stage": "one of: just starting, building, peaking, fading, over",
+ "stage_why": "one short sentence on why you picked that stage (e.g. fewer new headlines, smaller price reactions)",
+ "reads": [{"m": "NQ", "dir": "up | down | unclear", "conf": "high | medium | low",
+   "why": "1-2 sentences: what this story is doing to this market and what price has actually done",
+   "up_if": "one concrete thing that would push it higher over the next day",
+   "down_if": "one concrete thing that would push it lower over the next day"}],
+ "watch": ["up to 3 concrete things to watch next; use events and times from big_events_next_3_days when they matter"]}
+If the direction is unclear, say plainly what the market is waiting for in "why". Be honest about low confidence; most stories don't decide where a market goes on their own.`,
+    user: `Markets (use these codes for "m"): ${mk.map((k) => k + " = " + AIR_MKTS[k]).join("; ")}\nFacts:\n${JSON.stringify(facts)}`,
+    maxTokens: 900
   }));
-  const reads = ((res && res.reads) || []).filter((r) => mk.includes(r.m) && /^(up|down|unclear)$/.test(r.dir) && r.why).map((r) => ({ m: r.m, label: AIR_MKTS[r.m].replace(/ \(.*/, ""), dir: r.dir, conf: /^(high|medium|low)$/.test(r.conf) ? r.conf : "low", why: String(r.why).slice(0, 220) }));
+  const clean = (t, n) => factClean(t, factTxt, n);
+  const reads = ((res && res.reads) || []).filter((r) => mk.includes(r.m) && /^(up|down|unclear)$/.test(r.dir)).map((r) => ({
+    m: r.m, label: AIR_MKTS[r.m].replace(/ \(.*/, ""), dir: r.dir, conf: /^(high|medium|low)$/.test(r.conf) ? r.conf : "low",
+    why: clean(r.why, 320), up_if: clean(r.up_if, 200), down_if: clean(r.down_if, 200)
+  })).filter((r) => r.why);
   if (!reads.length) throw new HttpErr(502, "The AI didn’t give a usable answer. Try again in a minute.");
-  return { reads, stage: res.stage ? String(res.stage).slice(0, 30) : "", take: res.take ? String(res.take).slice(0, 320) : "", used: use.used, limit: use.limit, tier: use.tier };
+  const STAGES = ["just starting", "building", "peaking", "fading", "over"];
+  const stage = STAGES.includes(String(res.stage || "").toLowerCase()) ? String(res.stage).toLowerCase() : "";
+  return { v: 2, reads, now: clean(res.now, 360), stage, stage_why: stage ? clean(res.stage_why, 200) : "",
+    watch: (Array.isArray(res.watch) ? res.watch : []).map((w) => clean(w, 180)).filter(Boolean).slice(0, 3),
+    used: use.used, limit: use.limit, tier: use.tier };
 }
 // ---------- Session bias record: the "Your day" call, logged once at 9:30 New York and graded at the 4 PM close ----------
 var DAY_LOG_MKTS = { futures: "NQ", crypto: "BTC", forex: "EURUSD" };

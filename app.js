@@ -3154,11 +3154,11 @@ async function openThread(id) {
       <div class="th-ai"><button type="button" class="ai-btn" id="thAiBtn">${SPARK}AI read on this story</button><div id="thAiOut"></div></div>
       ${thChart(d)}
       <p class="hist-cap">Timeline</p>
-      <ol class="th-tl">${d.items.map(x => `<li><span class="th-when">${new Date(x.t).toLocaleDateString('en-US', { timeZone: TZ, month: 'short', day: 'numeric' })}<small>${fmtTime(x.t)}</small></span><span class="th-it">${x.link ? `<a href="${esc(x.link)}" target="_blank" rel="noopener">${esc(x.title)}</a>` : esc(x.title)}<small>${esc(x.source || '')}</small></span><span class="th-mv ${x.next ? (x.next.way === 'up' ? 'up' : x.next.way === 'down' ? 'down' : '') : ''}">${x.next ? esc(rhymeMove(x.next.move, x.next.unit)) : ''}</span></li>`).join('')}</ol>
-      <p class="rh-foot">Grouped automatically from the headlines the site has saved. The number on the right is how ${esc(d.name)} moved in the hour after each headline. Follow a story to get an alert when a new headline lands.</p>`;
+      <ol class="th-tl">${d.items.map(x => `<li><span class="th-when">${new Date(x.t).toLocaleDateString('en-US', { timeZone: TZ, month: 'short', day: 'numeric' })}<small>${fmtTime(x.t)}</small></span><span class="th-it">${x.link ? `<a href="${esc(x.link)}" target="_blank" rel="noopener">${esc(x.title)}</a>` : esc(x.title)}<small>${esc(x.source || '')}</small></span><span class="th-mv ${x.next ? (x.next.way === 'up' ? 'up' : x.next.way === 'down' ? 'down' : '') : ''}">${x.next ? esc(rhymeMove(x.next.move, x.next.unit)) : x.closed ? '<small class="faint">Market closed</small>' : ''}</span></li>`).join('')}</ol>
+      <p class="rh-foot">Grouped automatically from the headlines the site has saved. The number on the right is how ${esc(d.name)} moved in the hour after each headline (none when the market was closed). Follow a story to get an alert when a new headline lands.</p>`;
     const ab = $('#thAiBtn'); if (ab) ab.onclick = async () => {
       const out = $('#thAiOut'); ab.disabled = true; out.innerHTML = skel(2);
-      try { const x = await postAI('threadai', { id, markets: airMarkets() }); out.innerHTML = `${x.stage ? `<p class="th-stage">Stage: <b>${esc(x.stage)}</b></p>` : ''}${airResultHTML(x, d.title)}`; }
+      try { const x = await postAI('threadai', { id, markets: airMarkets() }); plan.used = x.used; out.innerHTML = x.v === 2 ? storyAIHTML(x, d.title) : airResultHTML(x, d.title); }
       catch (e) { out.innerHTML = upsellHTML(e.why, /switched on/.test(e.message) ? 'AI reads aren’t switched on yet. The story read above is from the site’s rules.' : e.message); }
       ab.disabled = false;
     };
@@ -3166,23 +3166,43 @@ async function openThread(id) {
     const f = thFollow(); const me2 = f.find(x => x.id === id); if (me2 && d.items[0]) { me2.last = Math.max(me2.last || 0, d.items[0].t); store.set('thFollow', f); }
   } catch (e) { const b = $('#thBody'); if (b) b.innerHTML = errBox('this story', e.message); }
 }
+// The AI read on a story, answering: what's going on, where is my market likely headed, what would change that, what to watch
+const SAI_DIR = { up: 'Likely higher over the next day', down: 'Likely lower over the next day', unclear: 'No clear direction yet' };
+const SAI_STAGE = { 'just starting': 'Just starting', building: 'Building', peaking: 'At its peak', fading: 'Fading', over: 'Mostly over' };
+function storyAIHTML(x, title) {
+  const deep = plan.tier === 'pro' ? `<button type="button" class="linkbtn air-deep" data-deep="${esc(title)}">Deep dive</button>` : '';
+  const reads = x.reads.map(r => `<div class="sai-m">
+      <div class="sai-top"><b>${esc(r.label)}</b><span class="pill ${r.dir === 'up' ? 'up' : r.dir === 'down' ? 'down' : ''}">${r.dir === 'up' ? '↑ ' : r.dir === 'down' ? '↓ ' : ''}${SAI_DIR[r.dir]}</span><small>${esc(r.conf)} confidence</small></div>
+      <p>${esc(r.why)}</p>
+      ${r.up_if || r.down_if ? `<ul class="sai-if">${r.up_if ? `<li class="up"><b>↑ Higher if</b> ${esc(r.up_if.replace(/^(it |if )/i, ''))}</li>` : ''}${r.down_if ? `<li class="down"><b>↓ Lower if</b> ${esc(r.down_if.replace(/^(it |if )/i, ''))}</li>` : ''}</ul>` : ''}
+    </div>`).join('');
+  return `<div class="air-head">${SPARK}<b>AI read</b><span>${x.used} of ${x.limit} used today</span></div>
+    ${x.now ? `<p class="sai-now">${esc(x.now)}</p>` : ''}
+    ${reads}
+    ${x.stage ? `<p class="sai-stage"><b>Where the story is: ${esc(SAI_STAGE[x.stage] || x.stage)}.</b> ${esc(x.stage_why || '')}</p>` : ''}
+    ${x.watch && x.watch.length ? `<p class="hist-cap">What to watch next</p><ul class="sai-watch">${x.watch.map(w => `<li>${esc(w)}</li>`).join('')}</ul>` : ''}
+    <div class="air-foot">${deep}<span>For the next day. A best guess from the headlines and prices, not a promise or financial advice.</span></div><div class="air-deepbox" hidden></div>`;
+}
 function thLeanHTML(d) {
   const L = d.lean || {}, mks = [...new Set([d.mk, ...rhymeMks()])].slice(0, 2);
   const rows = mks.map(k => { const x = L[k]; if (!x) return ''; const nm = RH_NAME[k];
-    const head = x.dir === 'up' ? `${nm} ↑ leaning up` : x.dir === 'down' ? `${nm} ↓ leaning down` : `${nm}: no clear lean`;
-    return `<div class="th-lean-r"><span class="pill ${x.dir || ''}"><b>${esc(head)}</b></span><span class="br">${x.up} of the last ${x.n} headlines read up, ${x.down} read down${d.mk === k && d.items.length ? '' : ''}.</span></div>`; }).join('');
-  return rows ? `<div class="th-lean"><p class="hist-cap">Story read</p>${rows}<p class="rh-foot">From the site’s headline reader, newest headlines counting most. A lean, not a promise.</p></div>` : '';
+    const head = x.dir === 'up' ? `${nm}: headlines point higher` : x.dir === 'down' ? `${nm}: headlines point lower` : `${nm}: headlines are mixed`;
+    const rest = x.n - x.up - x.down;
+    return `<div class="th-lean-r"><span class="pill ${x.dir || ''}"><b>${esc(head)}</b></span><span class="br">Of the last ${x.n} headlines, ${x.up} point to ${esc(nm)} going up, ${x.down} to it going down${rest > 0 ? `, and ${rest} don’t point either way` : ''}.</span></div>`; }).join('');
+  return rows ? `<div class="th-lean"><p class="hist-cap">What the headlines say</p>${rows}<p class="rh-foot">The site’s headline reader counts which way each headline points, newest counting most. For the full picture, tap AI read.</p></div>` : '';
 }
 function thChart(d) {
   const pts = d.series || []; if (pts.length < 5) return '';
-  const W = 600, H = 150, pad = 6, t0 = pts[0][0], t1 = pts[pts.length - 1][0];
+  const W = 600, H = 150, pad = 6, n = pts.length;
   const vs = pts.map(p => p[1]), lo = Math.min(...vs), hi = Math.max(...vs), sp = (hi - lo) || 1;
-  const x = t => pad + (t - t0) / ((t1 - t0) || 1) * (W - pad * 2), y = v => pad + (hi - v) / sp * (H - pad * 2 - 14);
-  const path = pts.map((p, i) => `${i ? 'L' : 'M'}${x(p[0]).toFixed(1)},${y(p[1]).toFixed(1)}`).join('');
-  const near = t => { let b = pts[0]; for (const p of pts) { if (p[0] <= t) b = p; else break; } return b; };
-  const dots = d.items.filter(i => i.t >= t0 && i.t <= t1).map(i => { const p = near(i.t); return `<circle cx="${x(i.t).toFixed(1)}" cy="${y(p[1]).toFixed(1)}" r="3.2" class="th-pt ${i.next ? i.next.way : ''}"><title>${esc(i.title)}</title></circle>`; }).join('');
+  // x by position in trading time, so nights and weekends the market was closed aren't drawn as flat lines
+  const xi = i => pad + i / ((n - 1) || 1) * (W - pad * 2), y = v => pad + (hi - v) / sp * (H - pad * 2 - 14);
+  const idx = t => { let i = pts.findIndex(p => p[0] >= t); return i < 0 ? n - 1 : i; };
+  const path = pts.map((p, i) => `${i ? 'L' : 'M'}${xi(i).toFixed(1)},${y(p[1]).toFixed(1)}`).join('');
+  const brk = (d.breaks || []).filter(t => t > pts[0][0]).map(t => { const i = idx(t), xx = (xi(Math.max(0, i - 0.5))).toFixed(1); return `<line x1="${xx}" x2="${xx}" y1="${pad}" y2="${H - 16}" class="th-brk"/>`; }).join('');
+  const dots = d.items.filter(i => i.t >= pts[0][0] - 6 * 36e5 && i.t <= pts[n - 1][0]).map(i => { const k = idx(i.t); return `<circle cx="${xi(k).toFixed(1)}" cy="${y(pts[k][1]).toFixed(1)}" r="3.2" class="th-pt ${i.next ? i.next.way : 'closed'}"><title>${esc(i.title)}${i.closed ? ' (market closed)' : ''}</title></circle>`; }).join('');
   const lab = t => new Date(t).toLocaleDateString('en-US', { timeZone: TZ, month: 'short', day: 'numeric' });
-  return `<p class="hist-cap">${esc(d.name)} through the story · each dot is a headline</p><svg viewBox="0 0 ${W} ${H}" class="th-svg" role="img" aria-label="${esc(d.name)} price with headline markers"><path d="${path}" class="th-line"/>${dots}<text x="${pad}" y="${H - 2}" class="hl">${lab(t0)}</text><text x="${W - pad}" y="${H - 2}" text-anchor="end" class="hl">${lab(t1)}</text></svg>`;
+  return `<p class="hist-cap">${esc(d.name)} through the story · each dot is a headline${(d.breaks || []).length ? ' · dashed line = market closed' : ''}</p><svg viewBox="0 0 ${W} ${H}" class="th-svg" role="img" aria-label="${esc(d.name)} price with headline markers">${brk}<path d="${path}" class="th-line"/>${dots}<text x="${pad}" y="${H - 2}" class="hl">${lab(pts[0][0])}</text><text x="${W - pad}" y="${H - 2}" text-anchor="end" class="hl">${lab(pts[n - 1][0])}</text></svg>`;
 }
 document.addEventListener('click', ev => {
   const f = ev.target.closest('[data-thf]'); if (f) { ev.preventDefault(); ev.stopPropagation(); thToggle(f.dataset.thf); return; }
