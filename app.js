@@ -931,6 +931,32 @@ function ictWords(t, mk) {
   const entry = c.includes('ote') ? 'enter on the pullback into the 62–79% OTE zone' : c.includes('ob') && !c.includes('fvg') ? 'an order block to enter on the pullback' : 'a fair value gap to enter on the pullback';
   return t.replace('and a fair value gap to enter on the pullback', c.includes('ote') ? 'then ' + entry : 'and ' + entry);
 }
+// AI read on the daily bias: plain words on why, the levels that matter, what would flip it, what to watch
+function dayAIHTML(x) {
+  const dir = x.call === 'up' ? 'Leaning higher today' : x.call === 'down' ? 'Leaning lower today' : 'No clear direction today';
+  return `<div class="air-head">${SPARK}<b>AI read</b><span>${x.used} of ${x.limit} used today</span></div>
+    <div class="sai-top"><b>${esc(x.market)}</b><span class="pill ${x.call === 'up' ? 'up' : x.call === 'down' ? 'down' : ''}">${x.call === 'up' ? '↑ ' : x.call === 'down' ? '↓ ' : ''}${dir}</span><small>${esc(x.conf)} confidence</small></div>
+    ${x.summary ? `<p class="sai-now">${esc(x.summary)}</p>` : ''}
+    ${x.why.length ? `<p class="hist-cap">Why</p><ul class="sai-watch">${x.why.map(w => `<li>${esc(w)}</li>`).join('')}</ul>` : ''}
+    ${x.levels.length ? `<p class="hist-cap">Levels that matter today</p><ul class="dai-lv">${x.levels.map(l => `<li><b>${esc(l.price)}</b><span>${esc(l.what)}</span></li>`).join('')}</ul>` : ''}
+    ${x.flip ? `<p class="sai-stage"><b>What would make it wrong:</b> ${esc(x.flip)}</p>` : ''}
+    ${x.plan ? `<p class="sai-stage"><b>Your plan today:</b> ${esc(x.plan)}</p>` : ''}
+    ${x.watch.length ? `<p class="hist-cap">What to watch</p><ul class="sai-watch">${x.watch.map(w => `<li>${esc(w)}</li>`).join('')}</ul>` : ''}
+    <div class="air-foot"><span>For today’s session. A best guess from today’s news, prices and levels, not a promise or financial advice.</span></div>`;
+}
+document.addEventListener('click', async e => {
+  const b = e.target.closest && e.target.closest('[data-dayai]'); if (!b) return;
+  e.preventDefault();
+  const out = b.parentElement.querySelector('.dai-out'); if (!out) return;
+  if (out.classList.contains('air-box')) { out.className = 'dai-out'; out.innerHTML = ''; b.setAttribute('aria-expanded', 'false'); return; }
+  out.className = 'dai-out air-box'; b.setAttribute('aria-expanded', 'true');
+  if (!signedIn()) { out.innerHTML = upsellHTML('signin'); return; }
+  out.innerHTML = `<div class="air-head">${SPARK}<b>AI read</b><span>Reading today’s setup…</span></div>${skel(3)}`;
+  b.disabled = true;
+  try { const x = await postAI('dayai', { q: profileQuery(), market: b.dataset.dayai }); plan.used = x.used; out.innerHTML = dayAIHTML(x); }
+  catch (err) { out.innerHTML = upsellHTML(err.why, /switched on/.test(err.message) ? 'AI reads aren’t switched on yet.' : err.message); }
+  b.disabled = false;
+});
 function dayPlanHTML(plans) {
   if (!plans || !plans.length) return '';
   const arrow = { up: '↑', down: '↓', range: '↔' };
@@ -943,6 +969,7 @@ function dayPlanHTML(plans) {
     <ul class="dp-why">${p.why.map(w => `<li>${esc(w)}</li>`).join('')}</ul>
     ${p.plans.map(pl => `<div class="dp-plan"><p class="dp-k">Your plan · ${esc(pl.name)}</p><ol>${pl.steps.map(x => `<li>${esc(pl.strategy === 'ict' ? ictWords(x, p.market) : x)}</li>`).join('')}</ol></div>`).join('')}
     ${p.flip ? `<p class="dp-flip">${esc(p.flip)}</p>` : ''}
+    ${p.call !== 'range' || p.why.length ? `<div class="dai"><button type="button" class="ai-btn" data-dayai="${esc(p.market)}">${SPARK}AI read on today’s bias</button><div class="dai-out"></div></div>` : ''}
     ${p.capped ? `<p class="pl-cap">${esc(p.capped)} <a href="/scorecard">Scorecard</a></p>` : ''}
   </div>`; }).join('')}<p class="dp-note">From today’s news, price and the Live read, for the session you trade. A lean, not a promise, and not financial advice.</p></li>`;
 }

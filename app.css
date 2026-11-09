@@ -1844,3 +1844,11 @@ img,svg,video,canvas,iframe,table{max-width:100%}
 .sai-watch{margin:0.25rem 0 0;padding-left:1.1rem;font-size:0.84rem;line-height:1.6;color:var(--ink-2)}
 .th-brk{stroke:var(--rule-2);stroke-dasharray:3 3;stroke-width:1}
 .th-pt.closed{fill:var(--panel-3);stroke:var(--ink-3)}
+
+/* Daily bias AI read */
+.dai{margin-top:0.75rem}
+.dai-out.air-box{margin-top:0.625rem}
+.dai-lv{list-style:none;margin:0.25rem 0 0;padding:0;display:grid;gap:0.375rem}
+.dai-lv li{display:grid;grid-template-columns:6.5rem 1fr;gap:0.75rem;align-items:baseline;padding:0.375rem 0.625rem;border-radius:var(--r-sm);background:var(--bg-2);font-size:0.84rem;line-height:1.5}
+.dai-lv b{font-variant-numeric:tabular-nums;color:var(--ink)} .dai-lv span{color:var(--ink-2)}
+@media (max-width:480px){.dai-lv li{grid-template-columns:1fr;gap:0.125rem}}

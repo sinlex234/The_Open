@@ -4020,6 +4020,64 @@ async function userLogin(req) {
   LOGIN_TRIES.delete(uname);
   return { access_token: j.access_token, refresh_token: j.refresh_token };
 }
+// AI read on the daily bias ("Your day"): why it leans that way today, the levels that matter, what would flip it,
+// what to watch, and what the reader's own plan waits for. Built from the same facts the bias card shows; every
+// sentence with a number or name not in those facts is dropped.
+async function dayAI(req) {
+  const tok = bearer(req);
+  if (!tok) throw new HttpErr(401, "Sign in to use AI reads.", { why: "signin" });
+  if (!hasAI()) throw new HttpErr(503, "AI reads aren’t switched on yet.");
+  const b = await readBody(req);
+  const qs = String(b.q || "").slice(0, 1500), market = String(b.market || "").slice(0, 20);
+  const q = Object.fromEntries(new URLSearchParams(qs));
+  delete q.focus; delete q.__tier;
+  const desk = await memo("dayai-desk:" + hashKey(JSON.stringify(q)), 5 * 6e4, () => build11(q));
+  const d = (desk.dayplan || []).find((x) => x.market === market);
+  if (!d) throw new HttpErr(404, "There’s no daily bias for that market right now.");
+  const now = Date.now(), today = ny(now).date;
+  const cal = await memo("calendar", 6e4, () => build()).catch(() => null);
+  const ccy = market === "forex" ? ["USD", "EUR"] : ["USD"];
+  const events = (cal && cal.events || []).filter((e) => e.impact === "High" && !e.allDay && ccy.includes(e.country) && e.time > now - 36e5 && ny(e.time).date === today)
+    .map((e) => ({ event: e.name || e.title, when_ny: new Date(e.time).toLocaleString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" }), forecast: e.forecast || null, previous: e.previous || null, out_already: e.time <= now }));
+  const L = d.levels || {};
+  const facts = {
+    market: d.short, now_ny: new Date(now).toLocaleString("en-US", { timeZone: "America/New_York", weekday: "short", hour: "numeric", minute: "2-digit" }),
+    bias: d.call === "range" ? "no bias" : d.call, confidence: d.conf, confidence_capped: d.capped || null,
+    reasons: d.why, price_now: L.price || null,
+    levels_above: (L.above || []).map((x) => ({ name: x.name, price: x.txt })), levels_below: (L.below || []).map((x) => ({ name: x.name, price: x.txt })),
+    bias_is_wrong_if: d.flip || null, next_big_event: d.event || null, big_events_today: events,
+    reader_plan: (d.plans || []).map((p) => ({ strategy: p.name, steps: p.steps }))
+  };
+  const factTxt = JSON.stringify(facts).replace(/,(?=\d{3})/g, "");
+  const key = "dai:" + hashKey(factTxt);
+  const gate = await aiGate(tok, 1, "free", key);
+  const res = await memo(key, 20 * 6e4, () => askClaude({
+    system: VOICE + `
+You explain today's session bias for one market to an everyday trader, in plain English, like a smart friend. Short sentences. No jargon: never write "lean", "risk-on", "risk-off", "priced in", "sentiment" or "catalyst".
+Use ONLY the facts given. Never invent prices, times, events or numbers; copy any number exactly as written in the facts. Never tell the reader to buy or sell.
+Return JSON only:
+{"summary": "2 short sentences: which way today most likely goes and the main reason, said plainly (if the bias is weak or mixed, say so honestly)",
+ "why": ["2-3 short points, each one reason from the facts in plain words"],
+ "levels": [{"price": "copy a price from levels_above or levels_below", "what": "one short sentence: what it means if price reaches it today"}],
+ "flip": "one or two sentences: what would show the bias is wrong today, using bias_is_wrong_if",
+ "watch": ["up to 3 things to watch today, with times from big_events_today when there are any"],
+ "plan": "1-2 sentences: what the reader's own plan waits for today (describe what the plan looks for, not an instruction to trade)"}
+Give at most 3 levels, nearest to the current price first.`,
+    user: `Facts:\n${JSON.stringify(facts)}`,
+    maxTokens: 900
+  }));
+  const clean = (t, n) => factClean(t, factTxt, n);
+  const out = {
+    summary: clean(res && res.summary, 360),
+    why: (Array.isArray(res && res.why) ? res.why : []).map((x) => clean(x, 220)).filter(Boolean).slice(0, 3),
+    levels: (Array.isArray(res && res.levels) ? res.levels : []).filter((x) => x && x.price && factTxt.includes(String(x.price).replace(/,/g, ""))).map((x) => ({ price: String(x.price).slice(0, 20), what: clean(x.what, 200) })).filter((x) => x.what).slice(0, 3),
+    flip: clean(res && res.flip, 300), plan: clean(res && res.plan, 300),
+    watch: (Array.isArray(res && res.watch) ? res.watch : []).map((x) => clean(x, 180)).filter(Boolean).slice(0, 3)
+  };
+  if (!out.summary && !out.why.length) throw new HttpErr(502, "The AI didn’t give a usable answer. Try again in a minute.");
+  const use = await gate.charge();
+  return { ...out, market: d.short, call: d.call, conf: d.conf, used: use.used, limit: use.limit, tier: use.tier };
+}
 // AI read: one click on a story, how each of your markets most likely reacts
 async function aiRead(req) {
   const tok = bearer(req);
@@ -4157,7 +4215,7 @@ async function stripeHook(req) {
     .then(async (r) => { if (!r.ok) throw new HttpErr(502, "Couldn’t save the plan: " + (await r.text()).slice(0, 120)); });
   return { ok: true };
 }
-var POST_ROUTES = { userlogin: userLogin, crowdme: crowdMe, threadai: threadAI, airead: aiRead, aideep: aiDeep, checkout, portal, stripe: stripeHook };
+var POST_ROUTES = { dayai: dayAI, userlogin: userLogin, crowdme: crowdMe, threadai: threadAI, airead: aiRead, aideep: aiDeep, checkout, portal, stripe: stripeHook };
 // Routes whose answer depends on the reader's plan
 var PLAN_ROUTES = new Set(["desk", "brief", "explain", "memedesk", "recap"]);
 // Read-only audit of every logged call: what drove it and how it turned out (for tuning the call engine)
