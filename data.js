@@ -61,7 +61,7 @@ function send(res, data, maxAge = 300) {
 function fail(res, err) {
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.setHeader("Cache-Control", "no-store");
-  res.status(502).send(JSON.stringify({ error: String(err && err.message || err) }));
+  res.status(err && err.status || 502).send(JSON.stringify({ error: String(err && err.message || err) }));
 }
 var nyFmt = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", weekday: "short", hourCycle: "h23" });
 function ny(ms) {
@@ -95,6 +95,8 @@ function parseRSS(xml, source) {
       const m = b.match(/<link[^>]*href="([^"]+)"/);
       link = m ? m[1] : "";
     }
+    link = String(link || "").trim();
+    if (link && !/^https?:\/\//i.test(link)) link = ""; // only normal web links (never javascript: or data:)
     const title = tag("title");
     if (!title) continue;
     const date = tag("pubDate") || tag("published") || tag("updated") || tag("dc:date");
@@ -179,7 +181,9 @@ function computeLevels(chart, dayStart) {
     return x.toISOString().slice(0, 10);
   };
   const thisWeek = days.filter((d) => weekKey(d.key) === weekKey(today.key));
-  const lastWeek = days.filter((d) => weekKey(d.key) !== weekKey(today.key)).slice(-5);
+  // the whole previous week (7 days for crypto, which never closes), not just the last 5 days
+  const prevWeekKey = (() => { const older = days.filter((d) => weekKey(d.key) !== weekKey(today.key)); return older.length ? weekKey(older[older.length - 1].key) : null; })();
+  const lastWeek = days.filter((d) => prevWeekKey && weekKey(d.key) === prevWeekKey);
   const weekOpen = thisWeek.length ? thisWeek[0].bars[0].o : null;
   const lastWeekClose = lastWeek.length && thisWeek.length ? lastWeek[lastWeek.length - 1].bars.slice(-1)[0].c : null;
   const pRange = { high: hi(prev.bars), low: lo(prev.bars) };
@@ -198,7 +202,7 @@ function computeLevels(chart, dayStart) {
     adr,
     week: thisWeek.length ? { open: weekOpen, high: Math.max(...thisWeek.map((d) => hi(d.bars))), low: Math.min(...thisWeek.map((d) => lo(d.bars))) } : null,
     lastWeek: lastWeek.length ? { high: Math.max(...lastWeek.map((d) => hi(d.bars))), low: Math.min(...lastWeek.map((d) => lo(d.bars))) } : null,
-    weekendGap: weekOpen != null && lastWeekClose != null ? { from: lastWeekClose, to: weekOpen } : null,
+    weekendGap: dayStart !== 0 && weekOpen != null && lastWeekClose != null ? { from: lastWeekClose, to: weekOpen } : null, // crypto never closes, so it has no weekend gap
     asOf: last.t,
     spark: tb.map((b) => +b.c.toFixed(6)).filter((_, i, a) => a.length < 80 || i % Math.ceil(a.length / 80) === 0)
   };
@@ -213,12 +217,12 @@ function quoteFromMeta(meta, bars) {
 var FAKEOUT = "The first jump after a big number is often a head-fake. Plenty of traders let the first few minutes play out and wait to see which side gives up.";
 var QUIET_BEFORE = "Price usually goes quiet and drifts sideways into the release, and those tight little ranges leave stop orders stacked just above and below.";
 var EVENTS = [
-  { re: /^core cpi|^cpi/i, name: "Inflation report (CPI)", what: "How fast everyday prices rose last month.", why: "Hotter than expected means rate cuts look further away, which usually hits stocks (especially tech) and lifts the dollar. Cooler is the opposite.", note: FAKEOUT },
-  { re: /core pce|pce price/i, name: "The Fed\u2019s favorite inflation gauge (PCE)", what: "Another read on price rises, the one the Fed watches most.", why: "Usually less of a surprise than CPI because much of it can be worked out in advance, but a miss still moves rates and tech.", note: QUIET_BEFORE },
-  { re: /^core ppi|^ppi/i, name: "Wholesale prices (PPI)", what: "Price changes for businesses before they reach shoppers.", why: "An early hint about where consumer inflation is heading.", note: FAKEOUT },
-  { re: /non-farm employment change|non-farm payrolls/i, exclude: /adp/i, name: "Jobs report (NFP)", what: "How many jobs the US added last month.", why: "One of the biggest movers of the month. Strong jobs can mean higher rates for longer. Weak jobs can spark worry about the economy. Either way, expect fast swings.", note: "The 8:30 spike often runs one direction, grabs the orders sitting past the morning\u2019s high or low, then turns. The cleaner move tends to show up after 9:30." },
-  { re: /adp non-farm/i, name: "Private jobs (ADP)", what: "A private estimate of job growth, out two days before the main jobs report.", why: "A preview, not the main event. Moves are usually smaller.", note: "" },
-  { re: /unemployment rate/i, name: "Unemployment rate", what: "Share of people looking for work who can\u2019t find it.", why: "Released with the jobs report. A jump can shift the mood quickly toward rate cuts.", note: "" },
+  { re: /^core cpi|^cpi/i, cur: "USD", name: "Inflation report (CPI)", what: "How fast everyday prices rose last month.", why: "Hotter than expected means rate cuts look further away, which usually hits stocks (especially tech) and lifts the dollar. Cooler is the opposite.", note: FAKEOUT },
+  { re: /core pce|pce price/i, cur: "USD", name: "The Fed\u2019s favorite inflation gauge (PCE)", what: "Another read on price rises, the one the Fed watches most.", why: "Usually less of a surprise than CPI because much of it can be worked out in advance, but a miss still moves rates and tech.", note: QUIET_BEFORE },
+  { re: /^core ppi|^ppi/i, cur: "USD", name: "Wholesale prices (PPI)", what: "Price changes for businesses before they reach shoppers.", why: "An early hint about where consumer inflation is heading.", note: FAKEOUT },
+  { re: /non-farm employment change|non-farm payrolls/i, exclude: /adp/i, cur: "USD", name: "Jobs report (NFP)", what: "How many jobs the US added last month.", why: "One of the biggest movers of the month. Strong jobs can mean higher rates for longer. Weak jobs can spark worry about the economy. Either way, expect fast swings.", note: "The 8:30 spike often runs one direction, grabs the orders sitting past the morning\u2019s high or low, then turns. The cleaner move tends to show up after 9:30." },
+  { re: /adp non-farm/i, cur: "USD", name: "Private jobs (ADP)", what: "A private estimate of job growth, out two days before the main jobs report.", why: "A preview, not the main event. Moves are usually smaller.", note: "" },
+  { re: /unemployment rate/i, cur: "USD", name: "Unemployment rate", what: "Share of people looking for work who can\u2019t find it.", why: "Released with the jobs report. A jump can shift the mood quickly toward rate cuts.", note: "" },
   { re: /average hourly earnings/i, name: "Wage growth", what: "How fast paychecks are growing.", why: "Fast wage growth can keep inflation sticky.", note: "" },
   { re: /unemployment claims|jobless claims/i, name: "Weekly jobless claims", what: "New filings for unemployment benefits last week.", why: "Usually a small mover unless the number is way off, or it lands on the same morning as something bigger.", note: "" },
   { re: /jolts/i, name: "Job openings (JOLTS)", what: "How many jobs businesses are trying to fill.", why: "Lands at 10:00, often right when the morning move is settling, so it can restart things.", note: "A 10:00 release can be the push that sends price back through the morning\u2019s range." },
@@ -227,7 +231,7 @@ var EVENTS = [
   { re: /fomc meeting minutes|fomc minutes/i, name: "Fed meeting notes", what: "Detailed notes from the last Fed meeting.", why: "Can move markets if they show the Fed leaning a new way. Out at 2:00 PM.", note: "" },
   { re: /fed chair .* speaks|powell speaks/i, name: "Fed Chair speaking", what: "The head of the Fed speaks in public.", why: "Any hint about future rate moves can swing stocks, bonds and the dollar at once.", note: "Moves on speeches are often sharp and short. Watch whether price holds after the first reaction." },
   { re: /fomc member .* speaks|fed .* speaks/i, name: "Fed official speaking", what: "A Fed official gives a speech or interview.", why: "Usually small, unless they say something new about rates.", note: "" },
-  { re: /core retail sales|retail sales/i, name: "Retail sales", what: "How much people spent in stores and online.", why: "Shows whether shoppers are still spending. A big miss can move stocks and the dollar.", note: FAKEOUT },
+  { re: /core retail sales|retail sales/i, cur: "USD", name: "Retail sales", what: "How much people spent in stores and online.", why: "Shows whether shoppers are still spending. A big miss can move stocks and the dollar.", note: FAKEOUT },
   { re: /gdp/i, name: "Economic growth (GDP)", what: "How fast the economy grew.", why: "The first estimate moves most. Later revisions rarely do.", note: "" },
   { re: /ism manufacturing pmi/i, name: "Factory survey (ISM)", what: "Purchasing managers rate how factories are doing.", why: "Above 50 means growing, below 50 shrinking. Comes out at 10:00.", note: "Out at 10:00, when the morning move often pauses. A surprise can push price back through the morning\u2019s range." },
   { re: /ism services pmi/i, name: "Services survey (ISM)", what: "How the services side of the economy is doing.", why: "Services are most of the US economy, and the prices part of this survey is watched for inflation.", note: "" },
@@ -235,13 +239,17 @@ var EVENTS = [
   { re: /consumer sentiment|consumer confidence/i, name: "Consumer mood", what: "A survey of how people feel about money and the economy.", why: "The inflation-expectations part gets the most attention.", note: "" },
   { re: /crude oil inventories/i, name: "Oil stockpiles", what: "How much crude the US has in storage.", why: "Moves oil prices at 10:30 Wednesday. Rarely moves stock indexes.", note: "" },
   { re: /durable goods/i, name: "Big-ticket orders", what: "Orders for long-lasting goods like machinery.", why: "Usually a small mover.", note: "" },
-  { re: /empire state|philly fed/i, name: "Regional factory survey", what: "A snapshot of factories in one part of the country.", why: "Usually small. Sometimes an early hint for the national numbers.", note: "" },
+  { re: /empire state|philly fed/i, cur: "USD", name: "Regional factory survey", what: "A snapshot of factories in one part of the country.", why: "Usually small. Sometimes an early hint for the national numbers.", note: "" },
   { re: /home sales|housing starts|building permits/i, name: "Housing data", what: "Home building and sales.", why: "Rarely moves index futures on its own.", note: "" },
   { re: /bond auction/i, name: "Government bond sale", what: "The Treasury sells bonds to investors.", why: "Weak demand pushes yields up, which can weigh on tech stocks around 1:00 PM.", note: "" },
   { re: /main refinancing rate|ecb press conference|monetary policy statement/i, cur: "EUR", name: "European Central Bank decision", what: "The ECB sets rates for the eurozone.", why: "Moves the euro the most. Can spill over into the dollar.", note: "" },
   { re: /official bank rate|boe|mpc/i, cur: "GBP", name: "Bank of England decision", what: "The UK\u2019s central bank sets rates.", why: "Moves the pound.", note: "" },
   { re: /boj|policy rate/i, cur: "JPY", name: "Bank of Japan decision", what: "Japan\u2019s central bank sets rates.", why: "Big for the yen, and sometimes for global markets when it surprises.", note: "" },
-  { re: /bank holiday/i, name: "Bank holiday", what: "Banks are closed in this country.", why: "Thin trading. Moves can be slow, or jumpy with nobody around.", note: "" }
+  { re: /bank holiday/i, name: "Bank holiday", what: "Banks are closed in this country.", why: "Thin trading. Moves can be slow, or jumpy with nobody around.", note: "" },
+  // the same releases from other countries (the US versions above talk about the Fed and the dollar)
+  { re: /\bcpi\b|consumer price|inflation rate/i, name: "Inflation report (CPI)", what: "How fast everyday prices rose in that country.", why: "Hotter than expected usually lifts that country\u2019s currency, because rate cuts there look further away.", note: "" },
+  { re: /employment change|unemployment rate|claimant count/i, name: "Jobs data", what: "How the job market is doing in that country.", why: "A strong job market usually lifts that country\u2019s currency; a weak one makes rate cuts more likely.", note: "" },
+  { re: /retail sales/i, name: "Retail sales", what: "How much people spent in that country.", why: "A big beat or miss mostly moves that country\u2019s currency.", note: "" },
 ];
 function explainEvent(ev) {
   const m = EVENTS.find((e) => e.re.test(ev.title) && !(e.exclude && e.exclude.test(ev.title)) && (!e.cur || e.cur === ev.country));
@@ -254,12 +262,12 @@ var THEMES = [
   { id: "crypto", label: "Crypto", re: /bitcoin|\bbtc\b|\bcrypto(currency|currencies)?\b|\bether(eum)?\b|\bsolana\b|stablecoin|coinbase|binance|\bxrp\b|blockchain|\btokens?\b|defi\b/i, line: "Crypto trades around the clock and reacts to interest-rate news the way tech stocks do, only bigger.", markets: ["crypto", "memes"] },
   { id: "gold", label: "Gold", re: /\bgold\b|bullion|precious metals?|\bsilver\b/i, line: "Gold tends to rise when people get nervous or expect lower interest rates.", markets: ["forex", "futures"] },
   { id: "rates", label: "Interest rates", re: /\bfed\b|fomc|powell|mortgage rates?|rate cuts?|rate hikes?|interest rates?|central bank|treasury yields?|bond yields?|\byields?\b|\becb\b|bank of england|bank of japan|\bboj\b|lagarde/i, line: "Interest-rate news moves almost everything. The dollar, bonds and tech stocks usually react first.", markets: ["futures", "forex", "options", "crypto"] },
-  { id: "dollar", label: "Currencies", re: /\bdollar\b|\beuro\b|\byen\b|sterling|\bpound\b|\bcurrenc(y|ies)\b|\bforex\b|\bfx\b|\byuan\b|\brupiah\b|\brupee\b|\bfranc\b|\bpeso\b|\bwon\b/i, line: "Currency moves change what trade and foreign assets are worth. A stronger dollar usually weighs on gold and other currencies.", markets: ["forex"] },
+  { id: "dollar", label: "Currencies", re: /\bdollar\b|\beuro\b|\byen\b|sterling|\bpound\b|\bcurrenc(y|ies)\b|\bforex\b|\bfx\b|\byuan\b|\brupiah\b|\brupee\b|\bfranc\b|\bpeso\b|\b(?:korean )?won\b(?![’']t)(?=\s+(?:falls?|fell|slides?|slid|weakens?|strengthens?|rises?|rose|gains?|drops?|dropped|hits?|jumps?|tumbles?|rallies|rallied|plunges?|at\b|against\b))/i, line: "Currency moves change what trade and foreign assets are worth. A stronger dollar usually weighs on gold and other currencies.", markets: ["forex"] },
   { id: "energy", label: "Oil and energy", re: /\boil\b|crude|opec|natural gas|gasoline|\bbrent\b|\blng\b|fuel prices/i, line: "Higher oil feeds inflation worries, which tends to weigh on stocks.", markets: ["futures", "forex"] },
   { id: "inflation", label: "Inflation", re: /inflation|\bcpi\b|\bppi\b|\bpce\b|consumer prices|price pressures/i, line: "Higher inflation means rate cuts take longer, which usually weighs on stocks.", markets: ["futures", "forex", "options"] },
   { id: "jobs", label: "Jobs", re: /jobs report|payrolls?\b|unemployment|jobless|labor market|labour market|hiring|layoffs/i, line: "Job numbers shape what the Fed does next.", markets: ["futures", "forex"] },
   { id: "earnings", label: "Earnings", re: /\bearnings\b|quarterly (results|profit|revenue|sales)|\bguidance\b|\brevenue\b|profit warning|\beps\b|beats? (estimates|expectations|forecasts)|miss(es|ed)? (estimates|expectations|forecasts)|\bq[1-4] (results|earnings|sales)/i, line: "Results from big companies can move their whole sector, and sometimes the index.", markets: ["futures", "options"] },
-  { id: "ai", label: "AI and chips", re: /\bai\b|artificial intelligence|nvidia|semiconductor|chipmakers?|\bchips?\b|openai|data centers?/i, line: "AI and chip stocks are a big part of the Nasdaq. When they move, the index moves.", markets: ["futures", "options"] },
+  { id: "ai", label: "AI and chips", re: /\bai\b|artificial intelligence|nvidia|semiconductor|chipmakers?|(?<!blue[ -])\bchips?\b|openai|data centers?/i, line: "AI and chip stocks are a big part of the Nasdaq. When they move, the index moves.", markets: ["futures", "options"] },
   { id: "trade", label: "Trade and tariffs", re: /tariffs?|trade war|trade deal|trade talks|export controls?|export curbs|sanctions?|\bcurbs\b/i, line: "Trade headlines hit fast and often get walked back, so first moves can be overdone.", markets: ["futures", "forex", "crypto"] },
   { id: "world", label: "World events", re: /\bwar\b|missile|attacks?\b|strikes? on|\biran\b|israel|russia|ukraine|taiwan|north korea|ceasefire|conflict|houthi|middle east/i, line: "Conflict headlines usually knock prices down fast. If things don't escalate, buyers often return.", markets: ["futures", "forex", "crypto"] },
   { id: "growth", label: "Economy", re: /\beconom(y|ies|ic growth)\b|\bgdp\b|recession|consumer spending|retail sales|factory (output|activity)|\bpmi\b/i, line: "Growth news shapes what investors expect for company profits and for interest rates.", markets: ["futures", "forex", "stocks"] },
@@ -407,7 +415,18 @@ function scenFor(e) {
   const sc = SCEN.find((x) => x.re.test(e.title) || x.re.test(e.name || ""));
   if (!sc && (e.impact !== "High" || /speaks|testif|minutes|meeting|conference/i.test(e.title))) return {};
   const fill = (t) => t.replace(/CCY/g, CCY_NAME[e.country] || e.country);
-  const side = (d) => ({ label: sc ? sc[d][0] : d === "up" ? "Stronger than forecast" : "Weaker than forecast", text: sc ? fill(sc[d][1]) : fill(d === "up" ? "CCY would likely strengthen." : "CCY would likely weaken."), effects: adjustEffects(releaseEffects(sc, e.country, d), sc ? sc.title : "Economic data") });
+  // The scenario texts for inflation and jobs are written for the US (the dollar, the Fed). Other countries get their own.
+  const CB = { EUR: "the ECB", GBP: "the Bank of England", JPY: "the Bank of Japan", AUD: "the Reserve Bank of Australia", CAD: "the Bank of Canada", NZD: "the Reserve Bank of New Zealand", CHF: "the Swiss National Bank", CNY: "China\u2019s central bank" };
+  const foreignText = (d) => {
+    if (!sc || e.country === "USD") return null;
+    const ccy = CCY_NAME[e.country] || e.country, cb = CB[e.country] || "the central bank";
+    const strong = `${ccy} would likely strengthen, as rate cuts from ${cb} look further away.`, weak = `${ccy} would likely weaken, as ${cb} gets more room to cut rates.`;
+    if (/inflation|jobs/i.test(sc.title)) return d === "up" ? strong : weak;
+    if (/unemployment/i.test(sc.title)) return d === "up" ? weak : strong;
+    if (/dollar|\bFed\b/.test(sc[d][1])) return d === "up" ? `${ccy} would likely strengthen.` : `${ccy} would likely weaken.`;
+    return null;
+  };
+  const side = (d) => ({ label: sc ? sc[d][0] : d === "up" ? "Stronger than forecast" : "Weaker than forecast", text: foreignText(d) || (sc ? fill(sc[d][1]) : fill(d === "up" ? "CCY would likely strengthen." : "CCY would likely weaken.")), effects: adjustEffects(releaseEffects(sc, e.country, d), ruleKind(sc ? sc.title : "Economic data", e.country)) });
   return { scen: { up: side("up"), down: side("down") } };
 }
 async function build() {
@@ -953,7 +972,7 @@ var BY_SECTION = {
 };
 async function build6(section = "all") {
   const names = BY_SECTION[section] || BY_SECTION.all;
-  const { res, errors } = await settle(Object.fromEntries(names.map((n) => [n, getText(FEEDS2[n]).then((x) => parseRSS(x, n))])));
+  const { res, errors } = await settle(Object.fromEntries(names.filter((n) => FEEDS2[n] || FEEDS3[n]).map((n) => [n, getText(FEEDS2[n] || FEEDS3[n]).then((x) => parseRSS(x, n))])));
   const seen = /* @__PURE__ */ new Set();
   let items = names.flatMap((n) => res[n] || []).filter((i) => {
     const k = i.title.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 60);
@@ -987,7 +1006,14 @@ function headlineFor(todayBig, n) {
   if (todayBig.length) return `${todayBig[0].name} is the one to watch today`;
   return "A quiet calendar. Price levels do the talking today";
 }
-async function build7(selected = ["futures"], q = {}) {
+// The brief only depends on which markets are picked and whether the AI version is on, so it's shared for 10 minutes
+function build7(selected = ["futures"], q = {}) {
+  selected = [...new Set(selected)].filter((m) => ["futures", "forex", "crypto", "memes", "stocks", "options"].includes(m)).sort();
+  if (!selected.length) selected = ["futures"];
+  const key = "brief:" + selected.join(",") + ":" + (aiOn(q, "plus") ? "ai" : "rules");
+  return memo(key, 10 * 6e4, () => build7Fresh(selected, q));
+}
+async function build7Fresh(selected = ["futures"], q = {}) {
   const want = new Set(selected);
   const now = Date.now(), n = ny(now);
   const jobs = { cal: build(), fut: build2("futures"), earn: build5(), news: build6("all") };
@@ -1059,9 +1085,11 @@ async function build7(selected = ["futures"], q = {}) {
   let out = { headline: headlineFor(todayBig, n), paragraphs, nextEvent: later[0] ? { name: later[0].name, time: later[0].time } : null, source: "rules" };
   const key = process.env.ANTHROPIC_API_KEY;
   if (key && aiOn(q, "plus")) {
+    const ctrl = new AbortController(), timer = setTimeout(() => ctrl.abort(), 20e3);
     try {
       const r = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
+        signal: ctrl.signal,
         headers: { "x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json" },
         body: JSON.stringify({
           model: process.env.ANTHROPIC_MODEL || "claude-haiku-5-5",
@@ -1075,12 +1103,14 @@ ${JSON.stringify(out)}` }]
         })
       });
       const j = await r.json();
+      if (!r.ok) throw new Error(j.error && j.error.message || "Claude API " + r.status);
       const text = j.content && j.content[0] && j.content[0].text || "";
       const parsed = vetAI(JSON.parse(text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1)), JSON.stringify(facts) + JSON.stringify(out) + [...want].join(" "));
-      if (parsed.headline && Array.isArray(parsed.paragraphs)) out = { ...out, headline: parsed.headline, paragraphs: parsed.paragraphs, source: "ai" };
+      // the fact check can remove paragraphs; only use the AI version if enough of it survived
+      if (parsed.headline && Array.isArray(parsed.paragraphs) && parsed.paragraphs.length >= Math.min(2, out.paragraphs.length || 2)) out = { ...out, headline: parsed.headline, paragraphs: parsed.paragraphs, source: "ai" };
     } catch (e) {
       out.aiError = String(e.message || e);
-    }
+    } finally { clearTimeout(timer); }
   }
   return { ...out, updated: Date.now() };
 }
@@ -1152,8 +1182,13 @@ function reactKey(h) {
   if (h.theme === "dollar") return "EURUSD";
   return "NQ";
 }
+// Price at time t: the open of the candle that contains t, using the feed's real candle size
+// (a fixed 5 minutes took the price up to 4 minutes early on 1-minute charts)
 function priceAt(bars, t) {
-  for (const b of bars) if (b.t + 5 * 6e4 > t) return b.o;
+  if (!bars || !bars.length) return null;
+  const gaps = []; for (let i = 1; i < Math.min(bars.length, 30); i++) gaps.push(bars[i].t - bars[i - 1].t);
+  const step = gaps.length ? gaps.sort((a, b) => a - b)[gaps.length >> 1] : 6e4;
+  for (const b of bars) if (b.t + step > t) return b.o;
   return null;
 }
 function reaction(bars, t, cfg) {
@@ -1176,10 +1211,20 @@ function score(h) {
   s -= Math.min(2.5, ageH / 8);
   return s;
 }
-var norm = (t) => t.toLowerCase().replace(/[’']/g, "").replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter((w) => w.length > 3 && !STOP.has(w));
+var publisherOf = (src) => String(src || "").toLowerCase().replace(/^gn:\s*/, "").replace(/\.com$/, "")
+  .replace(/^(cnbc).*$/, "cnbc").replace(/^(marketwatch|wsj|dow jones|barron).*$/, "dowjones").replace(/^(reuters).*$/, "reuters").replace(/^(bloomberg).*$/, "bloomberg")
+  .replace(/^(yahoo).*$/, "yahoo").replace(/^(investing).*$/, "investing").replace(/^(financial ?times|ft).*$/, "ft").replace(/^(coindesk).*$/, "coindesk").replace(/^(cointelegraph).*$/, "cointelegraph").replace(/\s+(markets|pulse|economy|business|top news|world|tech)$/, "").trim();
+// Story ids keep the original word rule so saved calls and follows still match
+var idWords = (t) => t.toLowerCase().replace(/[’']/g, "").replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter((w) => w.length > 3 && !STOP.has(w));
+// Subjects: if two headlines are about different ones (Fed vs ECB, oil vs gold, Nvidia vs Broadcom) they're different stories
+var SUBJ = new Set("fed ecb boj boe rba rbnz snb pboc opec oil gold silver copper gas bitcoin ether ethereum solana xrp dogecoin tether nvidia apple microsoft amazon google alphabet meta tesla broadcom amd intel netflix oracle salesforce boeing jpmorgan goldman walmart costco palantir coinbase binance openai anthropic china japan europe britain england germany france canada mexico india russia ukraine iran israel taiwan korea australia swiss euro yen pound yuan dollar treasuries".split(" "));
+var SHORT_KEEP = new Set(["fed", "ecb", "boj", "boe", "rba", "snb", "oil", "gas", "gdp", "cpi", "ppi", "pce", "war", "ai", "sec", "etf", "xrp", "amd", "yen", "uk", "eu", "us"]);
+var norm = (t) => t.toLowerCase().replace(/[’']/g, "").replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter((w) => (w.length > 3 || SHORT_KEEP.has(w)) && !STOP.has(w));
 var STOP = /* @__PURE__ */ new Set(["with", "from", "that", "this", "after", "over", "into", "than", "what", "says", "said", "will", "more", "amid", "their", "have", "about", "stock", "stocks", "market", "markets", "today", "news"]);
 function similar(a, b) {
   const A = new Set(a), B = new Set(b);
+  // each headline names a subject the other doesn't: different stories, however alike the rest reads
+  if ([...A].some((w) => SUBJ.has(w) && !B.has(w)) && [...B].some((w) => SUBJ.has(w) && !A.has(w))) return 0;
   let i = 0;
   A.forEach((w) => {
     if (B.has(w)) i++;
@@ -1245,7 +1290,9 @@ function dropPassedPreviews(items, events, now) {
     for (const [inTitle, inCal] of EVENT_KEYS) {
       if (!inTitle.test(h.title)) continue;
       // the release this story was waiting for came out after the story and is now in the past
-      const done = events.some((e) => inCal.test((e.name || "") + " " + (e.title || "")) && e.time > (h.time || 0) && e.time <= now);
+      // US releases only, unless the headline names another country; ADP isn't the jobs report
+      const foreign = /\b(china|chinese|japan|japanese|uk|britain|british|euro ?zone|eurozone|german|germany|canada|canadian|australia|australian|swiss|new zealand)\b/i.exec(h.title);
+      const done = events.some((e) => inCal.test((e.name || "") + " " + (e.title || "")) && !/\badp\b/i.test(e.name || e.title || "") && (foreign ? e.country !== "USD" : e.country === "USD") && e.time > (h.time || 0) && e.time <= now);
       if (done) return false;
     }
     return true;
@@ -1303,10 +1350,11 @@ async function build8(section = "all") {
   items.forEach((h) => {
     h.impact = h.score >= 3.8 ? "high" : h.score >= 2.2 ? "medium" : "low";
     // Confirmed = two or more different outlets, or the official source itself (the Fed, the ECB)
-    h.outlets = [...new Set(h.sources || [h.source])].length;
+    // count publishers, not feeds: CNBC's two feeds (or CNBC via Google News) are still one outlet
+    h.outlets = [...new Set((h.sources || [h.source]).map(publisherOf))].length;
     h.confirmed = h.outlets >= 2 || OFFICIAL.has(h.source);
     h.breaking = h.impact === "high" && h.confirmed && h.time && Date.now() - h.time < 45 * 6e4;
-    h.id = (h.time || 0).toString(36) + "-" + norm(h.title).slice(0, 4).join("-");
+    h.id = (h.time || 0).toString(36) + "-" + idWords(h.title).slice(0, 4).join("-");
     h.section = sectionOf(h);
     if (h.markets.includes("futures") && !h.markets.includes("stocks")) h.markets.push("stocks");
   });
@@ -2048,6 +2096,8 @@ function readHeadline(title) {
   if (oneCo.d && !new RegExp(RD_SUBJ.equity + "|\\b(?:" + RD_MEGA + ")\\b", "i").test(first)) block("NQ", "about one company's stock");
   for (const c of clauses) {
     if (RD_HEDGE.test(c) && !/\b(no rush to cut|unlikely to cut)\b/i.test(c)) continue;
+    // "Inflation falls less than expected" means hotter than hoped: the plain reading would get it backwards
+    if (/\b(less|more) than (?:expected|forecast|estimated|anticipated)\b/i.test(c)) continue;
     const mv = {};
     // Inflation and bond yields only count as US when nothing in the headline points to another country or central bank
     const foreignCtx = new RegExp("\\b(?:" + RD_FOREIGN + "|boj|bank of japan|ecb|lagarde|boe|bank of england|boc|bank of canada|rba|rbnz|snb|pboc|rbi|jgbs?|bunds?|gilts?)\\b", "i").test(t) && !/\b(u\.?s\.?|us|american|treasur(y|ies)|fed|fomc|federal reserve|pce|wall street)\b/i.test(t);
@@ -2486,9 +2536,17 @@ async function dayPlanFor(prof, states, events, now) {
   try { pulse = await sb("open_pulse?select=market,lean,conf,slot&order=slot.desc&limit=6"); } catch {}
   const today = ny(now).date;
   return Promise.all(mks.map(async (m) => {
-    const c = DAY_MKT[m], st = states[m] || {};
+    const c = DAY_MKT[m];
     let L = null;
     try { L = computeLevels(await yahooChart(c.sym, { interval: "15m", range: "10d" }), c.ds); } catch {}
+    // Forex is read in dollar terms (the dollar index), but the call is for EUR/USD, which moves the other way:
+    // flip the news lean and use EUR/USD's own move for the trend, or the call comes out upside down
+    let st = states[m] || {};
+    if (m === "forex") {
+      const flip = (d) => d === "up" ? "down" : d === "down" ? "up" : d;
+      const tp = L && L.changePct != null ? L.changePct : st.tp != null ? -st.tp : null;
+      st = { ...st, bias: flip(st.bias), tp, trend: tp == null ? "flat" : tp > 0.16 ? "up" : tp < -0.16 ? "down" : "flat" };
+    }
     const lv = dayLevels(L, c.dp, c.unit);
     // Score: news lean + price trend + the latest Live read
     const pr = pulse.find((p) => p.market === PULSE_OF[m]);
@@ -2684,7 +2742,7 @@ async function build12(q) {
   const level = q.lvl === "beginner" ? "beginner" : "pro";
   const detail = ["quick", "deep"].includes(q.d) ? q.d : "balanced";
   const reaction2 = String(q.reaction || "").slice(0, 80);
-  if (!title) throw new Error("No headline given");
+  if (!title) throw new HttpErr(400, "No headline given");
   const tag = tagHeadline({ title, summary });
   let aiErr = null;
   if (aiOn(q, "plus")) {
@@ -2829,7 +2887,7 @@ async function sparkBatch(syms) {
 }
 async function build15(q) {
   const syms = String(q.s || "").split(",").map((x) => x.trim()).filter((x) => TICK_OK.test(x)).slice(0, 16);
-  if (!syms.length) throw new Error("No symbols");
+  if (!syms.length) throw new HttpErr(400, "No symbols");
   const out = {};
   const missing = syms;
   if (missing.length) {
@@ -3040,7 +3098,7 @@ async function build16(date) {
     return {
       key: `${e.country}|${e.title}|${e.time}`, title: e.title, name: e.name, country: e.country, impact: e.impact, time: e.time,
       forecast, previous: (best && best.previous) || e.previous || "", actual, released, dir: d, ccyDir, label: lab,
-      text: text.replace(/CCY/g, CCY_NAME[e.country] || e.country), effects: released && e.impact !== "Low" ? adjustEffects(releaseEffects(sc, e.country, d), sc ? sc.title : "Economic data") : [], since, src,
+      text: text.replace(/CCY/g, CCY_NAME[e.country] || e.country), effects: released && e.impact !== "Low" ? adjustEffects(releaseEffects(sc, e.country, d), ruleKind(sc ? sc.title : "Economic data", e.country)) : [], since, src,
       kind: sc ? sc.title : "Economic data"
     };
   };
@@ -3063,8 +3121,8 @@ async function addCrowd(out) {
   const keys = hi.map((x) => x.key), list = encodeURIComponent(keys.map((k) => '"' + String(k).replace(/"/g, "") + '"').join(","));
   const rel = hi.filter((x) => x.released).map((x) => x.key);
   const [bots, tal] = await Promise.all([
-    rel.length ? memo("cbot:" + rel.join("~").slice(0, 400), 30e3, () => sb(`open_relcalls?select=event_key,market,dir,how&event_key=in.(${encodeURIComponent(rel.map((k) => '"' + String(k).replace(/"/g, "") + '"').join(","))})`)).catch(() => []) : [],
-    memo("ctal:" + keys.join("~").slice(0, 400), 20e3, () => sb(`open_crowd_tally?select=event_key,market,up,down&event_key=in.(${list})`)).catch(() => [])
+    rel.length ? memo("cbot:" + hashKey(rel.join("~")), 30e3, () => sb(`open_relcalls?select=event_key,market,dir,how&event_key=in.(${encodeURIComponent(rel.map((k) => '"' + String(k).replace(/"/g, "") + '"').join(","))})`)).catch(() => []) : [],
+    memo("ctal:" + hashKey(keys.join("~")), 20e3, () => sb(`open_crowd_tally?select=event_key,market,up,down&event_key=in.(${list})`)).catch(() => [])
   ]);
   hi.forEach((x) => {
     const b = (bots || []).filter((r) => r.event_key === x.key), t = (tal || []).filter((r) => r.event_key === x.key);
@@ -3090,6 +3148,27 @@ async function sb(path, { method = "GET", body, prefer } = {}) {
     clearTimeout(t);
   }
 }
+// The site's own records (calls, live reads, release calls, headlines, day bias) are written through a function that
+// checks a server-only secret, so visitors can't write fake rows. Falls back to a plain insert until the database has it.
+async function sbLog(table, conflict, rows) {
+  if (!rows || !rows.length) return;
+  const secret = process.env.OPEN_SYNC_SECRET;
+  if (secret) {
+    const r = await fetch(`${SB_URL}/rest/v1/rpc/open_log`, { method: "POST", headers: { apikey: SB_KEY, Authorization: "Bearer " + SB_KEY, "Content-Type": "application/json" }, body: JSON.stringify({ secret, tbl: table, rows }) });
+    if (r.ok) return;
+    const txt = await r.text();
+    if (!/PGRST202|Could not find the function/i.test(txt)) throw new Error(`Supabase ${r.status}: ${txt.slice(0, 120)}`);
+  }
+  await sb(`${table}?on_conflict=${conflict}`, { method: "POST", body: rows, prefer: "resolution=ignore-duplicates,return=minimal" });
+}
+// cache keys from long lists: a hash of the whole list (cutting it off could mix up two different lists)
+var hashKey = (x) => require("crypto").createHash("sha1").update(String(x)).digest("hex");
+async function sbRpc(fn, args) {
+  const r = await fetch(`${SB_URL}/rest/v1/rpc/${fn}`, { method: "POST", headers: { apikey: SB_KEY, Authorization: "Bearer " + SB_KEY, "Content-Type": "application/json" }, body: JSON.stringify(args) });
+  const txt = await r.text();
+  if (!r.ok) { const e = new Error(`Supabase ${r.status}: ${txt.slice(0, 120)}`); e.missing = /PGRST202|Could not find the function/i.test(txt); throw e; }
+  try { return JSON.parse(txt); } catch { return txt; }
+}
 var CALL_MKTS = { NQ: { m: "futures", assets: ["NQ"], sym: "NQ=F", dp: 2, unit: "pts", flat: 0.1 }, BTC: { m: "crypto", assets: ["BTC"], sym: "BTC-USD", dp: 0, unit: "$", flat: 0.3 }, EURUSD: { m: "forex", assets: ["EURUSD"], sym: "EURUSD=X", dp: 5, unit: "pips", pip: 1e-4, flat: 0.05 } };
 // The calls a reader of each market sees: the top 3 briefing stories for that market, up or down only
 function callsToLog(allStories, upcoming, pick, px) {
@@ -3110,7 +3189,7 @@ function callsToLog(allStories, upcoming, pick, px) {
 async function logCalls(rows) {
   if (!rows.length) return "none";
   try {
-    await sb("open_calls?on_conflict=story_id,market", { method: "POST", body: rows, prefer: "resolution=ignore-duplicates,return=minimal" });
+    await sbLog("open_calls", "story_id,market", rows);
     return "logged " + rows.length;
   } catch (e) {
     return "not logged: " + String(e.message || e).slice(0, 80);
@@ -3125,9 +3204,15 @@ function closeAfter(t) {
 }
 function grade(bars, from, to, c, dir, step = 15 * 6e4) {
   if (!bars || !bars.length) return { result: "pending" };
-  const i0 = bars.findIndex((b) => b.t + step > from);
+  // older than the price history we have: can't be graded honestly, so it's left out
+  if (from < bars[0].t - step) return { result: "expired" };
+  // start from the first price AFTER the call, never the open of a candle that began before it
+  // (that would give the call credit for a move that already happened)
+  let i0 = bars.findIndex((b) => b.t >= from);
+  const inBar = bars.findIndex((b) => b.t + step > from);
   if (i0 < 0) return { result: "pending" };
-  const start = Math.max(from, bars[i0].t), end = to(start);
+  if (inBar >= 0 && inBar < i0 && bars[inBar].t === from) i0 = inBar;
+  const start = bars[i0].t, end = to(Math.max(from, start));
   if (end > Date.now()) return { result: "pending", due: end };
   const i1 = bars.findIndex((b) => b.t >= end);
   const last = i1 < 0 ? bars[bars.length - 1] : bars[i1 - 1] || bars[i1];
@@ -3155,6 +3240,7 @@ async function buildCalls() {
     const t = Date.parse(r.called_at), bars = charts.res[r.market] && charts.res[r.market].bars;
     const hour = grade(bars, t, (s) => s + 36e5, c, r.dir);
     const close = grade(bars, t, (s) => closeAfter(s), c, r.dir);
+    if (!sum.hour.hasOwnProperty(hour.result) || !sum.close.hasOwnProperty(close.result)) return null;
     sum.hour[hour.result]++; sum.close[close.result]++;
     const b = by[r.market] = by[r.market] || { market: r.market, hour: tally(), close: tally() };
     b.hour[hour.result]++; b.close[close.result]++;
@@ -3297,7 +3383,7 @@ async function pulseLog(reads) {
   const rows = reads.filter((r) => r.price != null && !r.closed).map((r) => ({ market: r.key, slot: r.slot, lean: r.lean, conf: r.conf, score: r.score, price: r.price, note: r.note ? String(r.note).slice(0, 400) : null, engine: r.engine }));
   if (!rows.length) return "none";
   try {
-    await sb("open_pulse?on_conflict=market,slot", { method: "POST", body: rows, prefer: "resolution=ignore-duplicates,return=minimal" });
+    await sbLog("open_pulse", "market,slot", rows);
     return "logged " + rows.length;
   } catch (e) {
     return "not logged: " + String(e.message || e).slice(0, 80);
@@ -3321,7 +3407,8 @@ async function buildPulse() {
     saved.forEach((x) => { const r = reads.find((y) => y.key === x.market); if (r && x.engine === "ai") { r.note = x.note; if (x.lean === "none" && r.lean !== "none") { r.lean = "none"; r.conf = null; r.why = "The AI check saw no clear edge, so no lean."; } } });
     reads.forEach((r) => r.engine = "ai");
   } else {
-    try { ai = await pulseAI(reads, events, now); } catch (e) { aiStatus = "error: " + String(e.message || e).slice(0, 120); }
+    // one AI check per 5-minute slot, even when several requests arrive at once or the slot's row wasn't logged
+    try { ai = await memo("pulseai:" + reads[0].slot, 6 * 6e4, () => pulseAI(reads, events, now)); } catch (e) { aiStatus = "error: " + String(e.message || e).slice(0, 120); }
     reads.forEach((r) => {
       r.engine = ai ? "ai" : "rules";
       const a = ai && ai.find((x) => String(x.market || "").toLowerCase() === r.name.toLowerCase());
@@ -3333,7 +3420,11 @@ async function buildPulse() {
   // Reads refresh every minute; the Scorecard log and the AI check stay on 5-minute slots
   const log = now - reads[0].slot < 90e3 ? await pulseLog(reads) : "between slots";
   const dayLog = await logDayBias(now, reads).catch((e) => "day bias not logged: " + String(e.message || e).slice(0, 80));
-  return { reads: reads.map(({ stories: st, ...r }) => ({ ...r, stories: st.map(({ wt, ...s }) => s) })), next: Math.floor(now / 6e4) * 6e4 + 6e4, aiStatus, log, dayLog, updated: now };
+  // Release calls are logged when the results are built; the 5-minute job builds them right after big releases too,
+  // so a release with no visitors in the first half hour (early-morning euro data) still gets its call on record
+  const justOut = events.some((e) => e.impact === "High" && (e.country === "USD" || e.country === "EUR") && !e.allDay && e.time <= now && now - e.time < 30 * 6e4);
+  const relLog = justOut ? await memo("results:cron", 60e3, () => build16()).then((x) => x && x.relLog).catch((e) => "release calls not logged: " + String(e.message || e).slice(0, 80)) : "no release";
+  return { reads: reads.map(({ stories: st, ...r }) => ({ ...r, stories: st.map(({ wt, ...s }) => s) })), next: Math.floor(now / 6e4) * 6e4 + 6e4, aiStatus, log, dayLog, relLog, updated: now };
 }
 // Grade each lean after one hour (the Scorecard's "Live read" section)
 async function buildPulseScore() {
@@ -3348,6 +3439,7 @@ async function buildPulseScore() {
     const c = CALL_MKTS[r.market], bars = charts.res[r.market] && charts.res[r.market].bars;
     if (!c) return null;
     const g = grade(bars, +r.slot, (s) => s + 36e5, { ...c, flat: c.flat / 2 }, r.lean);
+    if (!sum.hasOwnProperty(g.result)) return null;
     const cf = confBand(r.score); sum[g.result]++; byConf[cf][g.result]++;
     (by[r.market] = by[r.market] || tally())[g.result]++;
     const mc = byMkConf[r.market] = byMkConf[r.market] || { high: tally(), medium: tally(), low: tally() }; mc[cf][g.result]++;
@@ -3421,7 +3513,7 @@ function relCallsToLog(out) {
 async function logRelCalls(out) {
   const rows = relCallsToLog(out);
   if (!rows.length) return "none";
-  await sb("open_relcalls?on_conflict=event_key,market", { method: "POST", body: rows, prefer: "resolution=ignore-duplicates,return=minimal" });
+  await sbLog("open_relcalls", "event_key,market", rows);
   rows.forEach((r) => _relLogged.add(r.event_key + "|" + r.market));
   return "logged " + rows.length;
 }
@@ -3444,9 +3536,10 @@ async function buildRelScore() {
     const m15 = grade(b5, from, (s) => s + 15 * 6e4, { ...c, flat: c.flat / 3 }, r.dir, 5 * 6e4);
     const hour = grade(b15, from, (s) => s + 36e5, { ...c, flat: c.flat / 2 }, r.dir);
     const close = grade(b15, from, (s) => closeAfter(s), c, r.dir);
+    if (![m15, hour, close].every((g) => sum.hour.hasOwnProperty(g.result))) return null;
     sum.m15[m15.result]++; sum.hour[hour.result]++; sum.close[close.result]++;
     byHow[r.how] && byHow[r.how][hour.result]++;
-    if (r.how === "rule") (byRule[r.kind + "|" + r.market] = byRule[r.kind + "|" + r.market] || tally())[hour.result]++;
+    if (r.how === "rule") { const rk = ruleKind(r.kind, r.country) + "|" + r.market; (byRule[rk] = byRule[rk] || tally())[hour.result]++; }
     return { ...r, time: Date.parse(r.released_at), m15, hour, close };
   }).filter(Boolean);
   return { ready: true, days: 90, total: calls.length, summary: sum, byHow, byRule, calls: calls.slice(0, 40), updated: Date.now() };
@@ -3475,7 +3568,7 @@ async function buildCrowdScore() {
 async function crowdTallies(keys) {
   if (!keys.length) return {};
   const list = keys.map((k) => '"' + String(k).replace(/"/g, "") + '"').join(",");
-  const rows = await memo("ctally:" + keys.join("~").slice(0, 400), 20e3, () => sb(`open_crowd_tally?select=event_key,market,up,down&event_key=in.(${encodeURIComponent(list)})`)).catch(() => []);
+  const rows = await memo("ctally:" + hashKey(keys.join("~")), 20e3, () => sb(`open_crowd_tally?select=event_key,market,up,down&event_key=in.(${encodeURIComponent(list)})`)).catch(() => []);
   const out = {};
   (rows || []).forEach((r) => { (out[r.event_key] = out[r.event_key] || {})[r.market] = { up: r.up, down: r.down }; });
   return out;
@@ -3532,6 +3625,8 @@ function adjustNow() {
   if (Date.now() - _adj.t > 30 * 6e4 && !_adj.p) _adj.p = computeAdjust().then((v) => { _adj.v = v; _adj.t = Date.now(); }).catch(() => { _adj.t = Date.now() - 25 * 6e4; }).finally(() => { _adj.p = null; });
   return _adj.v;
 }
+// US and euro-area versions of a release are separate rules (US CPI and euro CPI move EUR/USD opposite ways)
+var ruleKind = (kind, country) => !country || country === "USD" ? kind : `${kind} (${country})`;
 function adjustEffects(effects, kind) {
   const A = adjustNow(); if (!A || !effects) return effects;
   return effects.map((e) => {
@@ -3554,7 +3649,7 @@ async function logHeads(items) {
   const rows = items.filter((h) => (h.impact === "high" || h.impact === "medium") && h.theme && !h.noise && h.time && now - h.time < 90 * 6e4 && now - h.time > -6e4 && !_headsLogged.has(h.id))
     .slice(0, 25).map((h) => ({ story_id: String(h.id).slice(0, 120), headline: String(h.title).slice(0, 300), source: String(h.source || "").slice(0, 120), theme: h.theme, impact: h.impact, outlets: h.outlets || 1, published_at: new Date(h.time).toISOString() }));
   if (!rows.length) return "none";
-  await sb("open_heads?on_conflict=story_id", { method: "POST", body: rows, prefer: "resolution=ignore-duplicates,return=minimal" });
+  await sbLog("open_heads", "story_id", rows);
   rows.forEach((r) => _headsLogged.add(r.story_id));
   return "logged " + rows.length;
 }
@@ -3582,8 +3677,9 @@ async function rhymeHistory() {
       r.next = {};
       RHYME_MKTS.forEach((k) => {
         const c = CALL_MKTS[k], bars = charts.res[k] && charts.res[k].bars;
+        if (!THREADS.openAt(bars, r.t)) return; // market closed right after the headline: the reopen gap isn't its reaction
         const g = grade(bars, r.t, (x) => x + 36e5, { ...c, flat: c.flat / 2 }, "up");
-        if (g.result !== "pending") r.next[k] = { move: g.moved, pct: g.pct, way: g.result === "right" ? "up" : g.result === "wrong" ? "down" : "flat", unit: c.unit };
+        if (["right", "wrong", "flat"].includes(g.result)) r.next[k] = { move: g.moved, pct: g.pct, way: g.result === "right" ? "up" : g.result === "wrong" ? "down" : "flat", unit: c.unit };
       });
     });
     return rows;
@@ -3595,7 +3691,7 @@ async function buildRhyme(q) {
   let target = null;
   try { const w = await memo("w8all", 6e4, () => build8("all")); target = (w.items || []).find((x) => x.id === id) || null; } catch {}
   if (target) title = target.title;
-  if (!title) throw new Error("No headline given");
+  if (!title) throw new HttpErr(400, "No headline given");
   const tag = target || tagHeadline({ title, summary: "" }), g = headlineDirs(title), tw = norm(title), tt = target && target.time || Date.now();
   const hist = await rhymeHistory();
   const out = {};
@@ -3710,10 +3806,11 @@ async function buildRecap(q) {
   if (!r.ready) return r;
   r.today = r.date === ny(now).date;
   r.ai = null;
-  if (hasAI()) {
+  // the AI note is a paid feature like the other AI reads (and an unmetered AI call on a public route could be run up by anyone)
+  if (hasAI() && aiOn(q, "plus")) {
     try {
       const facts = { market: r.name, session: `${minsTxtS(from)}-${minsTxtS(to)} ET`, date: r.date, open: r.open, high: r.high, low: r.low, close: r.close, bias: r.call, bias_result: r.result, summary: r.summary, plans: r.plans.map((p) => p.name + ": plan: " + (p.plan || "") + " What happened: " + p.text) };
-      const out = await memo(`recap:${inst}:${r.date}:${from}:${to}:${strategies.join(",")}`, 6 * 36e5, () => askClaude({ maxTokens: 400, system: VOICE + "\nYou are a calm trading coach reviewing one finished session. Use ONLY the facts given. Never invent prices, times or results. No advice to trade real money.", user: `Facts:\n${JSON.stringify(facts)}\n\nReturn ONLY JSON: {"note":"3 short sentences: what the session did, whether the plan worked, and the one lesson for next time"}` }));
+      const out = await memo(`recap:${inst}:${r.date}:${from}:${to}:${strategies.join(",")}:${String(q.fu || "").slice(0, 200)}`, 6 * 36e5, () => askClaude({ maxTokens: 400, system: VOICE + "\nYou are a calm trading coach reviewing one finished session. Use ONLY the facts given. Never invent prices, times or results. No advice to trade real money.", user: `Facts:\n${JSON.stringify(facts)}\n\nReturn ONLY JSON: {"note":"3 short sentences: what the session did, whether the plan worked, and the one lesson for next time"}` }));
       // fact check: every number the AI writes must appear in the facts we gave it
       const factTxt = JSON.stringify(facts).replace(/,(?=\d{3})/g, ""), nums = String(out && out.note || "").match(/\d[\d,.:]*\d|\d/g) || [];
       if (out && out.note && nums.every((x) => factTxt.includes(x.replace(/,/g, "").replace(/[.:]$/, "")))) r.ai = String(out.note).slice(0, 500);
@@ -3755,7 +3852,7 @@ async function threadAI(req) {
   if (!mk.length) mk.push("NQ");
   const th = await buildThread(id);
   if (!th || th.missing) throw new HttpErr(404, "That story isn’t being tracked any more.");
-  const use = await meter(tok, 1, "free");
+  const gate = await aiGate(tok, 1, "free", "tai:" + id + "|" + mk.join(","));
   const now = Date.now(), first = th.items.length ? th.items[th.items.length - 1].t : now;
   // where each market is now, since the story began, and over the last day
   const { res: ch } = await settle(Object.fromEntries(mk.map((k) => [k, memo("tai15:" + k, 5 * 6e4, () => yahooChart(TAI_SYM[k][0], { interval: "15m", range: "1mo" }))])));
@@ -3796,6 +3893,7 @@ If the direction is unclear, say plainly what the market is waiting for in "why"
     why: clean(r.why, 320), up_if: clean(r.up_if, 200), down_if: clean(r.down_if, 200)
   })).filter((r) => r.why);
   if (!reads.length) throw new HttpErr(502, "The AI didn’t give a usable answer. Try again in a minute.");
+  const use = await gate.charge();
   const STAGES = ["just starting", "building", "peaking", "fading", "over"];
   const stage = STAGES.includes(String(res.stage || "").toLowerCase()) ? String(res.stage).toLowerCase() : "";
   return { v: 2, reads, now: clean(res.now, 360), stage, stage_why: stage ? clean(res.stage_why, 200) : "",
@@ -3816,7 +3914,7 @@ async function logDayBias(now, reads) {
     return { day: t.date, market: key, call: d.call, conf: d.rawConf || d.conf, score: d.score, price: r && r.price != null ? r.price : null };
   }).filter((r) => !have.some((h) => h.market === r.market));
   if (!rows.length) return "nothing to log";
-  await sb("open_daybias?on_conflict=day,market", { method: "POST", body: rows, prefer: "resolution=ignore-duplicates,return=minimal" });
+  await sbLog("open_daybias", "day,market", rows);
   return "day bias logged " + rows.length;
 }
 async function buildDayScore() {
@@ -3832,6 +3930,7 @@ async function buildDayScore() {
     const c = CALL_MKTS[r.market], bars = charts.res[r.market] && charts.res[r.market].bars;
     if (!c) return null;
     const g = grade(bars, new Date(r.logged_at).getTime(), closeOf, c, r.call);
+    if (!sum.hasOwnProperty(g.result)) return null;
     sum[g.result]++; if (byConf[r.conf]) byConf[r.conf][g.result]++;
     (by[r.market] = by[r.market] || tally())[g.result]++;
     // Saved with the confidence before any cap, so a cap doesn't hide whether that band has recovered
@@ -3869,13 +3968,57 @@ async function readBody(req, raw = false) {
   return raw ? txt : JSON.parse(txt || "{}");
 }
 var AIR_MKTS = { NQ: "NQ (Nasdaq 100 futures)", ES: "ES (S&P 500 futures)", BTC: "Bitcoin", ETH: "Ether", SOL: "Solana", EURUSD: "EUR/USD", GBPUSD: "GBP/USD", USDJPY: "USD/JPY", GOLD: "Gold" };
+function meterFail(use, need) {
+  const why = use && use.why;
+  throw new HttpErr(why === "signin" ? 401 : 402, why === "tier" ? "This is part of " + (need === "pro" ? "Pro" : "Plus") + "." : why === "limit" ? `You’ve used all ${use.limit} AI reads for today. They reset at midnight New York time.` : "Sign in to use AI reads.", { why, tier: use && use.tier, used: use && use.used, limit: use && use.limit });
+}
 async function meter(tok, cost, need) {
   const use = await rpcAs(tok, "open_use_ai", { cost, need });
-  if (!use || !use.ok) {
-    const why = use && use.why;
-    throw new HttpErr(why === "signin" ? 401 : 402, why === "tier" ? "This is part of " + (need === "pro" ? "Pro" : "Plus") + "." : why === "limit" ? `You’ve used all ${use.limit} AI reads for today. They reset at midnight New York time.` : "Sign in to use AI reads.", { why, tier: use && use.tier, used: use && use.used, limit: use && use.limit });
-  }
+  if (!use || !use.ok) meterFail(use, need);
   return use;
+}
+// Check the reader's allowance first and charge only after a good answer, so a failed or unusable AI answer
+// costs nothing, and reopening the same read within 6 hours isn't charged twice.
+var AI_PAID = new Map();
+async function aiGate(tok, cost, need, key) {
+  let pre = null;
+  try { pre = await rpcAs(tok, "open_ai_check", { cost, need }); } catch (e) { pre = null; }
+  if (!pre || typeof pre !== "object" || pre.ok == null) { const use = await meter(tok, cost, need); return { use, charge: async () => use }; } // database without the check yet: old behaviour
+  if (!pre.ok) meterFail(pre, need);
+  const k = tok.slice(-40) + "|" + String(key).slice(0, 300);
+  return { use: pre, charge: async () => {
+    const at = AI_PAID.get(k);
+    if (at && Date.now() - at < 6 * 36e5) return pre;
+    const use = await meter(tok, cost, need);
+    if (AI_PAID.size > 5000) AI_PAID.clear();
+    AI_PAID.set(k, Date.now());
+    return use;
+  } };
+}
+// Sign in with a username: the server looks up the email and signs in, so emails are never handed out to the page.
+// A few tries per username per 15 minutes, on top of Supabase's own limits.
+var LOGIN_TRIES = new Map();
+async function userLogin(req) {
+  const b = await readBody(req);
+  const uname = String(b.username || "").trim().toLowerCase().slice(0, 40), pass = String(b.password || "");
+  if (!/^[a-z0-9_]{3,20}$/.test(uname) || !pass) throw new HttpErr(401, "Wrong username or password.");
+  const now = Date.now(), tries = (LOGIN_TRIES.get(uname) || []).filter((t) => now - t < 15 * 6e4);
+  if (tries.length >= 8) throw new HttpErr(429, "Too many attempts. Wait a few minutes and try again.");
+  tries.push(now); if (LOGIN_TRIES.size > 5000) LOGIN_TRIES.clear(); LOGIN_TRIES.set(uname, tries);
+  let email = null;
+  try { email = await sbRpc("email_for_login", { uname, secret: process.env.OPEN_SYNC_SECRET || "" }); }
+  catch (e) { if (e.missing) { try { email = await sbRpc("email_for_username", { uname }); } catch {} } }
+  if (!email || typeof email !== "string") throw new HttpErr(401, "Wrong username or password.");
+  const r = await fetch(`${SB_URL}/auth/v1/token?grant_type=password`, { method: "POST", headers: { apikey: SB_KEY, "Content-Type": "application/json" }, body: JSON.stringify({ email, password: pass }) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    const m = String(j.error_description || j.msg || j.error || "");
+    if (r.status === 429) throw new HttpErr(429, "Too many attempts. Wait a minute and try again.");
+    if (/confirm/i.test(m)) throw new HttpErr(401, "Confirm your email first. Enter the code we emailed you.");
+    throw new HttpErr(401, "Wrong username or password.");
+  }
+  LOGIN_TRIES.delete(uname);
+  return { access_token: j.access_token, refresh_token: j.refresh_token };
 }
 // AI read: one click on a story, how each of your markets most likely reacts
 async function aiRead(req) {
@@ -3887,7 +4030,7 @@ async function aiRead(req) {
   if (!headline) throw new HttpErr(400, "No headline given");
   const mk = [...new Set((Array.isArray(b.markets) ? b.markets : []).map(String).filter((x) => AIR_MKTS[x]))].slice(0, 3);
   if (!mk.length) mk.push("NQ");
-  const use = await meter(tok, 1, "free");
+  const gate = await aiGate(tok, 1, "free", "ar:" + headline + "|" + mk.join(","));
   const res = await memo("ar:" + headline + "|" + mk.join(","), 30 * 6e4, () => askClaude({
     system: VOICE + `
 You read one market headline and say how each named market most likely reacts over the next few hours.
@@ -3901,6 +4044,7 @@ Reply with JSON only: {"reads":[{"m":"NQ","dir":"down","conf":"medium","why":"..
   }));
   const reads = ((res && res.reads) || []).filter((r) => mk.includes(r.m) && /^(up|down|unclear)$/.test(r.dir) && r.why).map((r) => ({ m: r.m, label: AIR_MKTS[r.m].replace(/ \(.*/, ""), dir: r.dir, conf: /^(high|medium|low)$/.test(r.conf) ? r.conf : "low", why: String(r.why).slice(0, 220) }));
   if (!reads.length) throw new HttpErr(502, "The AI didn’t give a usable answer. Try again in a minute.");
+  const use = await gate.charge();
   return { reads, take: res.take ? String(res.take).slice(0, 260) : "", used: use.used, limit: use.limit, tier: use.tier };
 }
 // Pro: deep dive on one story
@@ -3914,8 +4058,9 @@ async function aiDeep(req) {
   const mk = [...new Set((Array.isArray(b.markets) ? b.markets : []).map(String).filter((x) => AIR_MKTS[x]))].slice(0, 3);
   if (!mk.length) mk.push("NQ");
   const prof = parseProfile(String(b.p || ""));
-  const use = await meter(tok, 3, "pro");
-  const res = await memo("ad:" + headline + "|" + mk.join(",") + "|" + String(b.p || "").slice(0, 200), 30 * 6e4, () => askClaude({
+  const dkey = "ad:" + headline + "|" + mk.join(",") + "|" + require("crypto").createHash("sha1").update(String(b.p || "")).digest("hex");
+  const gate = await aiGate(tok, 3, "pro", dkey);
+  const res = await memo(dkey, 30 * 6e4, () => askClaude({
     system: VOICE + "\n" + profileText(prof, "pro", "balanced") + `
 Give a short deep dive on one headline for these markets. Plain English, no advice, only what the headline supports.
 Reply with JSON only: {"bull":"if it plays out bullish, what happens and why (max 35 words)","bear":"the bearish version (max 35 words)","flip":"what news or price action would change the read (max 30 words)","watch":["2 or 3 short things to watch next"],"fit":"how this fits the reader's strategies (max 35 words)"}`,
@@ -3923,7 +4068,9 @@ Reply with JSON only: {"bull":"if it plays out bullish, what happens and why (ma
     maxTokens: 700
   }));
   const pickS = (v, n) => typeof v === "string" ? v.slice(0, n) : "";
-  return { bull: pickS(res && res.bull, 300), bear: pickS(res && res.bear, 300), flip: pickS(res && res.flip, 260), watch: ((res && res.watch) || []).filter((x) => typeof x === "string").slice(0, 3), fit: pickS(res && res.fit, 300), used: use.used, limit: use.limit };
+  if (!res || !(pickS(res.bull, 1) || pickS(res.bear, 1))) throw new HttpErr(502, "The AI didn’t give a usable answer. Try again in a minute.");
+  const use = await gate.charge();
+  return { bull: pickS(res && res.bull, 300), bear: pickS(res && res.bear, 300), flip: pickS(res && res.flip, 260), watch: (Array.isArray(res && res.watch) ? res.watch : []).filter((x) => typeof x === "string").slice(0, 3), fit: pickS(res && res.fit, 300), used: use.used, limit: use.limit };
 }
 // ---------- Stripe (keys live in Vercel settings, never in this file) ----------
 var STRIPE = () => ({ key: process.env.STRIPE_SECRET_KEY, hook: process.env.STRIPE_WEBHOOK_SECRET, plus: process.env.STRIPE_PRICE_PLUS, pro: process.env.STRIPE_PRICE_PRO, sync: process.env.OPEN_SYNC_SECRET });
@@ -4001,7 +4148,8 @@ async function stripeHook(req) {
   if (!sub) return { ok: true, ignored: ev.type };
   const md = sub.metadata || {};
   const price = sub.items && sub.items.data && sub.items.data[0] && sub.items.data[0].price && sub.items.data[0].price.id;
-  const tier = md.tier === "pro" || price === S.pro ? "pro" : "plus";
+  // the price decides (a switch from Pro to Plus in the billing portal keeps the old "pro" label in metadata)
+  const tier = price === S.pro ? "pro" : price === S.plus ? "plus" : md.tier === "pro" ? "pro" : "plus";
   const end = sub.current_period_end || (sub.items && sub.items.data && sub.items.data[0] && sub.items.data[0].current_period_end);
   if (!md.user_id) return { ok: true, ignored: "no user" };
   await fetch(`${SB_URL}/rest/v1/rpc/open_stripe_sync`, { method: "POST", headers: { apikey: SB_KEY, Authorization: "Bearer " + SB_KEY, "Content-Type": "application/json" },
@@ -4009,9 +4157,9 @@ async function stripeHook(req) {
     .then(async (r) => { if (!r.ok) throw new HttpErr(502, "Couldn’t save the plan: " + (await r.text()).slice(0, 120)); });
   return { ok: true };
 }
-var POST_ROUTES = { crowdme: crowdMe, threadai: threadAI, airead: aiRead, aideep: aiDeep, checkout, portal, stripe: stripeHook };
+var POST_ROUTES = { userlogin: userLogin, crowdme: crowdMe, threadai: threadAI, airead: aiRead, aideep: aiDeep, checkout, portal, stripe: stripeHook };
 // Routes whose answer depends on the reader's plan
-var PLAN_ROUTES = new Set(["desk", "brief", "explain", "memedesk"]);
+var PLAN_ROUTES = new Set(["desk", "brief", "explain", "memedesk", "recap"]);
 // Read-only audit of every logged call: what drove it and how it turned out (for tuning the call engine)
 async function buildCallAudit() {
   const since = new Date(Date.now() - 30 * 864e5).toISOString();
@@ -4041,7 +4189,6 @@ var ROUTES = {
   brief: [(q) => build7(String(q.markets || "futures").split(",").filter(Boolean), q), 600],
   wire: [(q) => build8(String(q.section || "all")), 30],
   movers: [() => build9(), 120],
-  recap: [(q) => build10(String(q.sym || "NQ").toUpperCase()), 180],
   desk: [(q) => build11(q), hasAI() ? 900 : 180],
   world: [() => build13(), 120],
   ticks: [(q) => build15(q), 2],
@@ -4052,7 +4199,8 @@ var ROUTES = {
   adjust: [() => memo("adjust", 10 * 6e4, computeAdjust).then((v) => { _adj.v = v; _adj.t = Date.now(); return v; }), 300],
   rhyme: [(q) => buildRhyme(q), 600],
   threads: [() => buildThreads(), 300],
-  recap: [(q) => buildRecap(q), 300],
+  // "How today has played out" (sym=) and the session recap (i=) share this name; each gets its own data
+  recap: [(q) => q.sym && !q.i ? build10(String(q.sym).toUpperCase()) : buildRecap(q), 300],
   thread: [(q) => buildThread(String(q.id || "").slice(0, 80)), 300],
   hist: [(q) => buildHist(String(q.k || "").slice(0, 80)), 3600],
   memedesk: [(q) => build14(q), hasAI() ? 600 : 180],

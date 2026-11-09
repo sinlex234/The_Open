@@ -2,15 +2,19 @@
 // rules would actually have done. Pure functions (no network), so every rule is covered by tests/recap.test.js.
 //
 // Rules that keep it honest:
-// 1. A bias only counts if it was saved before the session (or within its first 15 minutes), and it is
-//    graded from the price when it was saved, never from earlier.
-// 2. Opening beyond a level is a gap, not a liquidity grab. A sweep needs price to start on one side and run through.
+// 1. A bias only counts if it was saved on the session's own New York trading day, before the session (or within
+//    its first 15 minutes); if several, the latest. It is graded from the price when it was saved, never from earlier.
+// 2. Opening beyond a level is a gap, not a liquidity grab. A sweep needs price to start on one side and run through;
+//    after a gap, price must first close back on the starting side, and only a later run through the level counts.
 // 3. Entries happen where the plan says (a candle close or a limit at the plan's zone), stops sit past the extreme plus
 //    a buffer, and the trade is walked forward candle by candle (stop checked first) to the plan's target, its exit
 //    rule, or the session end. No exact-top/bottom fills.
-// 4. "Quiet" is measured against this window's own recent sessions, not a fixed percentage.
+// 4. "Quiet" is measured against this window's own recent sessions (the same New York clock window on the last 5
+//    earlier dates that have data), not a fixed percentage.
 // 5. Each strategy is replayed with the exact steps and levels its day plan gave (see replay()), never "the best move".
 // 6. Only bars inside the session are used for the trade; nothing after the session can change the result.
+// 7. No look-ahead: "normal" candle size, body and volume come from bars before the session, so a later candle
+//    can't change an earlier decision. Buffers use the instrument's real tick size. Bars with a price <= 0 are ignored.
 "use strict";
 
 const NY = "America/New_York";
@@ -19,34 +23,36 @@ const nyParts = (t) => {
   const g = Object.fromEntries(p.map((x) => [x.type, x.value]));
   return { date: `${g.year}-${g.month}-${g.day}`, mins: +g.hour * 60 + +g.minute, dow: g.weekday };
 };
-// New York wall-clock time on a date -> UTC ms (handles daylight saving)
+// New York wall-clock time on a date -> UTC ms (handles daylight saving).
+// The offset is read twice: first at a guess, then at the result, so times a few hours after a
+// daylight-saving switch (e.g. 3 AM on the Sunday it changes) land on the right hour.
 function nyToMs(date, mins) {
-  const guess = Date.parse(`${date}T${String(Math.floor(mins / 60)).padStart(2, "0")}:${String(mins % 60).padStart(2, "0")}:00Z`);
-  const p = nyParts(guess);
-  const asNy = Date.parse(`${p.date}T${String(Math.floor(p.mins / 60)).padStart(2, "0")}:${String(p.mins % 60).padStart(2, "0")}:00Z`);
-  return guess + (guess - asNy);
+  const wall = Date.parse(`${date}T${String(Math.floor(mins / 60)).padStart(2, "0")}:${String(mins % 60).padStart(2, "0")}:00Z`);
+  const offset = (t) => { const p = nyParts(t); return Date.parse(`${p.date}T${String(Math.floor(p.mins / 60)).padStart(2, "0")}:${String(p.mins % 60).padStart(2, "0")}:00Z`) - t; };
+  const first = wall - offset(wall);
+  return wall - offset(first);
 }
 const addDays = (d, n) => new Date(Date.parse(d + "T12:00:00Z") + n * 864e5).toISOString().slice(0, 10);
 
-// Instruments the recap knows. kind: fut (has stock-market hours and an overnight), fx and crypto (around the clock).
+// Instruments the recap knows. tick: the smallest price step (used for stop buffers). kind: fut (has stock-market hours and an overnight), fx and crypto (around the clock).
 const INSTR = {
-  NQ: { sym: "NQ=F", name: "NQ", dp: 2, unit: "pts", kind: "fut", bias: "NQ" },
-  MNQ: { sym: "NQ=F", name: "MNQ", dp: 2, unit: "pts", kind: "fut", bias: "NQ" },
-  ES: { sym: "ES=F", name: "ES", dp: 2, unit: "pts", kind: "fut" },
-  MES: { sym: "ES=F", name: "MES", dp: 2, unit: "pts", kind: "fut" },
-  YM: { sym: "YM=F", name: "YM", dp: 0, unit: "pts", kind: "fut" },
-  RTY: { sym: "RTY=F", name: "RTY", dp: 1, unit: "pts", kind: "fut" },
-  CL: { sym: "CL=F", name: "Crude oil", dp: 2, unit: "$", kind: "fut" },
-  GC: { sym: "GC=F", name: "Gold", dp: 1, unit: "$", kind: "fut" },
-  XAUUSD: { sym: "GC=F", name: "Gold", dp: 1, unit: "$", kind: "fut" },
-  SI: { sym: "SI=F", name: "Silver", dp: 3, unit: "$", kind: "fut" },
-  NG: { sym: "NG=F", name: "Natural gas", dp: 3, unit: "$", kind: "fut" },
-  EURUSD: { sym: "EURUSD=X", name: "EUR/USD", dp: 5, unit: "pips", pip: 1e-4, kind: "fx", bias: "EURUSD" },
-  GBPUSD: { sym: "GBPUSD=X", name: "GBP/USD", dp: 5, unit: "pips", pip: 1e-4, kind: "fx" },
-  USDJPY: { sym: "USDJPY=X", name: "USD/JPY", dp: 3, unit: "pips", pip: 0.01, kind: "fx" },
-  BTC: { sym: "BTC-USD", name: "Bitcoin", dp: 0, unit: "$", kind: "crypto", bias: "BTC" },
-  ETH: { sym: "ETH-USD", name: "Ether", dp: 2, unit: "$", kind: "crypto" },
-  SOL: { sym: "SOL-USD", name: "Solana", dp: 2, unit: "$", kind: "crypto" }
+  NQ: { sym: "NQ=F", name: "NQ", dp: 2, tick: 0.25, unit: "pts", kind: "fut", bias: "NQ" },
+  MNQ: { sym: "NQ=F", name: "MNQ", dp: 2, tick: 0.25, unit: "pts", kind: "fut", bias: "NQ" },
+  ES: { sym: "ES=F", name: "ES", dp: 2, tick: 0.25, unit: "pts", kind: "fut" },
+  MES: { sym: "ES=F", name: "MES", dp: 2, tick: 0.25, unit: "pts", kind: "fut" },
+  YM: { sym: "YM=F", name: "YM", dp: 0, tick: 1, unit: "pts", kind: "fut" },
+  RTY: { sym: "RTY=F", name: "RTY", dp: 1, tick: 0.1, unit: "pts", kind: "fut" },
+  CL: { sym: "CL=F", name: "Crude oil", dp: 2, tick: 0.01, unit: "$", kind: "fut" },
+  GC: { sym: "GC=F", name: "Gold", dp: 1, tick: 0.1, unit: "$", kind: "fut" },
+  XAUUSD: { sym: "GC=F", name: "Gold", dp: 1, tick: 0.01, unit: "$", kind: "fut" },
+  SI: { sym: "SI=F", name: "Silver", dp: 3, tick: 0.005, unit: "$", kind: "fut" },
+  NG: { sym: "NG=F", name: "Natural gas", dp: 3, tick: 0.001, unit: "$", kind: "fut" },
+  EURUSD: { sym: "EURUSD=X", name: "EUR/USD", dp: 5, tick: 0.00001, unit: "pips", pip: 1e-4, kind: "fx", bias: "EURUSD" },
+  GBPUSD: { sym: "GBPUSD=X", name: "GBP/USD", dp: 5, tick: 0.00001, unit: "pips", pip: 1e-4, kind: "fx" },
+  USDJPY: { sym: "USDJPY=X", name: "USD/JPY", dp: 3, tick: 0.001, unit: "pips", pip: 0.01, kind: "fx" },
+  BTC: { sym: "BTC-USD", name: "Bitcoin", dp: 0, tick: 1, unit: "$", kind: "crypto", bias: "BTC" },
+  ETH: { sym: "ETH-USD", name: "Ether", dp: 2, tick: 0.01, unit: "$", kind: "crypto" },
+  SOL: { sym: "SOL-USD", name: "Solana", dp: 2, tick: 0.01, unit: "$", kind: "crypto" }
 };
 
 // Every strategy the setup questions offer, and how its session is replayed. Each replay follows the exact
@@ -159,6 +165,17 @@ function replay(kind, X) {
   const up = call === "up", dn = call === "down";
   const a1 = A[0], a2 = A[1], b1 = B[0], b2 = B[1];
   const none = (plan, why) => ({ plan, entered: false, text: why });
+  // rule 2: the first real sweep of a level. below = a run under it (sell-side), else a run over it (buy-side).
+  // If the session opens already beyond the level, that's a gap, not a grab: price must first close back on the
+  // starting side, and only a later run through the level counts. { i: -1 } when there was no sweep.
+  const sweepOf = (lev, below) => {
+    if (!lev) return { i: -1, gapped: false };
+    const past = (b) => below ? b.l < lev.v : b.h > lev.v;
+    const gapped = below ? sess[0].o < lev.v : sess[0].o > lev.v;
+    if (!gapped) return { i: sess.findIndex(past), gapped };
+    const back = sess.findIndex((b) => below ? b.c > lev.v : b.c < lev.v);
+    return { i: back < 0 ? -1 : sess.findIndex((b, k) => k > back && past(b)), gapped };
+  };
   const fill = (plan, side, i, entry, stop, targets, how, opts) => { const w = walk(sess, i, side, entry, stop, targets, opts); return w ? { plan, entered: true, side, i, entry, stop, how, w } : none(plan, "The setup had no room for a stop, so no trade."); };
 
   if (kind === "ict") {
@@ -166,8 +183,8 @@ function replay(kind, X) {
       const long = dir === "up", L1 = long ? b1 : a1, L2 = long ? b2 : a2, T = long ? A : B;
       if (!L1) return none("", "The plan had no level to watch on that side, so there was no setup.");
       const plan = `${long ? "Long" : "Short"} bias: expect a quick run ${long ? "below" : "above"} ${lvlName(L1)} (${fmt(L1.v)}) to grab ${long ? "sell" : "buy"}-side liquidity, then displacement ${long ? "up" : "down"} and a fair value gap to enter on the pullback.${T[0] ? ` Target ${lvlName(T[0])} (${fmt(T[0].v)})${T[1] ? `, then ${lvlName(T[1])}` : ""}.` : ""}`;
-      const gapped = long ? sess[0].o < L1.v : sess[0].o > L1.v;
-      const i = gapped ? 0 : sess.findIndex((b) => long ? b.l < L1.v : b.h > L1.v);
+      const { i, gapped } = sweepOf(L1, long);
+      if (i < 0 && gapped) return none(plan, `Price opened ${long ? "below" : "above"} ${lvlName(L1)} (${fmt(L1.v)}), so there was no liquidity grab to trade, and it never came back ${long ? "above" : "below"} it and swept it again. No trade was the right answer.`);
       if (i < 0) return none(plan, `Price never ran ${long ? "below" : "above"} ${lvlName(L1)}, so the liquidity grab the plan waited for didn’t happen. No trade was the right answer.`);
       // the plan's wrong-way line: if price keeps going and closes through the next level, step back
       const bust = L2 ? sess.findIndex((b, k) => k >= i && (long ? b.c < L2.v : b.c > L2.v)) : -1;
@@ -179,7 +196,7 @@ function replay(kind, X) {
         if (strong && (long ? c3.l > c1.h : c3.h < c1.l)) { k = j; break; }
       }
       if (bust >= 0 && (k < 0 || bust < k)) return none(plan, `The sweep came at ${tm(sess[i].t)}, but price kept going and closed ${long ? "below" : "above"} ${lvlName(L2)} (${fmt(L2.v)}) at ${tm(sess[bust].t)} instead of reversing. The plan said that means the bias is wrong: step back. No trade was the right answer.`);
-      if (k < 0) return none(plan, `${gapped ? `Price opened ${long ? "below" : "above"} ${lvlName(L1)}, so the liquidity was taken at the open` : `Price ran ${long ? "below" : "above"} ${lvlName(L1)} at ${tm(sess[i].t)}`}, but there was no clean displacement ${long ? "up" : "down"} leaving a fair value gap. Without that confirmation the plan says no entry.`);
+      if (k < 0) return none(plan, `Price ran ${long ? "below" : "above"} ${lvlName(L1)} at ${tm(sess[i].t)}${gapped ? ` (after opening beyond it and coming back)` : ""}, but there was no clean displacement ${long ? "up" : "down"} leaving a fair value gap. Without that confirmation the plan says no entry.`);
       const c1 = sess[k - 2], c3 = sess[k];
       const ext = long ? Math.min(...sess.slice(i, k + 1).map((b) => b.l)) : Math.max(...sess.slice(i, k + 1).map((b) => b.h));
       // entry model from the reader's ICT answers: fair value gap (default), order block, or OTE
@@ -201,7 +218,7 @@ function replay(kind, X) {
         if (sbOnly) { const m = nyParts(b.t).mins; if (m < 600 || m >= 660) continue; }
         if (long ? b.l <= entry : b.h >= entry) {
           const px = long ? Math.min(entry, b.o) : Math.max(entry, b.o);
-          return fill(plan, long ? "long" : "short", j, px, stop, T, `price ${gapped ? `opened ${long ? "below" : "above"}` : `ran ${long ? "below" : "above"}`} ${lvlName(L1)} (${fmt(L1.v)})${gapped ? "" : ` at ${tm(sess[i].t)}`}, displaced ${long ? "up" : "down"} at ${tm(c3.t)}, and pulled back into ${model} at ${tm(b.t)}`);
+          return fill(plan, long ? "long" : "short", j, px, stop, T, `price ${gapped ? `opened beyond ${lvlName(L1)}, came back, then ` : ""}ran ${long ? "below" : "above"} ${lvlName(L1)} (${fmt(L1.v)}) at ${tm(sess[i].t)}, displaced ${long ? "up" : "down"} at ${tm(c3.t)}, and pulled back into ${model} at ${tm(b.t)}`);
         }
       }
       return none(plan, `The sweep and displacement came (${tm(sess[i].t)}, ${tm(c3.t)}), but price never pulled back to ${model}${sbOnly ? " inside the Silver Bullet hour (10–11 AM)" : ""}, so there was no fill. Chasing it would have broken the plan.`);
@@ -209,8 +226,8 @@ function replay(kind, X) {
     if (up || dn) return one(up ? "up" : "down");
     // no bias: wait for one side to be swept and trade the displacement the other way
     const plan = `No bias: both ${lvlName(a1)} and ${lvlName(b1)} in play. Wait for one side to get swept, then trade the displacement the other way. If both get swept, stand aside.`;
-    const sU = a1 ? sess.findIndex((b) => b.h > a1.v) : -1, sD = b1 ? sess.findIndex((b) => b.l < b1.v) : -1;
-    if (sU < 0 && sD < 0) return none(plan, "Neither side was swept, so there was nothing to trade.");
+    const U = sweepOf(a1, false), D = sweepOf(b1, true), sU = U.i, sD = D.i;
+    if (sU < 0 && sD < 0) return none(plan, U.gapped || D.gapped ? `Price opened beyond ${lvlName(U.gapped ? a1 : b1)} (${fmt((U.gapped ? a1 : b1).v)}), so there was no liquidity grab to trade, and neither side was swept after that.` : "Neither side was swept, so there was nothing to trade.");
     const r = one(sD >= 0 && (sU < 0 || sD < sU) ? "up" : "down");
     // both sides swept before the entry: the plan says stand aside
     if (r.entered && sU >= 0 && sD >= 0 && Math.max(sU, sD) <= r.i) return none(plan, `Both sides were swept (${tm(sess[Math.min(sU, sD)].t)} and ${tm(sess[Math.max(sU, sD)].t)}) before any entry, so the day had no direction. The plan says stand aside.`);
@@ -320,7 +337,7 @@ function replay(kind, X) {
 // The whole analysis. Inputs are plain data so it can be tested without the network.
 function analyze({ instrument, bars, from, to, now, bias, strategies, events, followUps }) {
   const I = INSTR[instrument] || INSTR.NQ;
-  bars = (bars || []).filter((b) => b && isFinite(b.o) && isFinite(b.h) && isFinite(b.l) && isFinite(b.c)).sort((a, b) => a.t - b.t);
+  bars = (bars || []).filter((b) => b && isFinite(b.o) && isFinite(b.h) && isFinite(b.l) && isFinite(b.c) && b.o > 0 && b.h > 0 && b.l > 0 && b.c > 0).sort((a, b) => a.t - b.t);
   const S = pickSession(bars, from, to, now);
   if (!S) return { ready: false, why: "No finished session in the price history yet." };
   const { sess, start, end, date } = S;
@@ -330,22 +347,32 @@ function analyze({ instrument, bars, from, to, now, bias, strategies, events, fo
   const O = sess[0].o, C = sess[sess.length - 1].c;
   let H = sess[0], L = sess[0]; sess.forEach((b) => { if (b.h > H.h) H = b; if (b.l < L.l) L = b; });
   const range = H.h - L.l, net = C - O;
-  const avgBar = sess.reduce((x, b) => x + (b.h - b.l), 0) / sess.length;
-  const avgBody = sess.reduce((x, b) => x + Math.abs(b.c - b.o), 0) / sess.length;
-  const vols = sess.map((b) => b.v || 0), avgVol = vols.some((v) => v > 0) ? vols.reduce((x, y) => x + y, 0) / vols.length : 0;
-  const tick = I.pip ? I.pip : I.dp >= 2 ? 0.25 : 1;
+  // "normal" candle size and volume come from the bars BEFORE the session (about the last 3 sessions' worth, at
+  // least 60 bars), so nothing later in the session can change an earlier decision. Too little history: the
+  // session's opening bar is the only extra bar used.
+  const pre = bars.filter((b) => b.t < start), base = pre.length >= 12 ? pre.slice(-Math.max(60, sess.length * 3)) : pre.concat(sess.slice(0, 1));
+  const avgBar = base.reduce((x, b) => x + (b.h - b.l), 0) / base.length;
+  const avgBody = base.reduce((x, b) => x + Math.abs(b.c - b.o), 0) / base.length;
+  const vols = base.map((b) => b.v || 0), avgVol = vols.some((v) => v > 0) ? vols.reduce((x, y) => x + y, 0) / vols.length : 0;
+  const tick = I.tick || (I.pip ? I.pip / 10 : 0.01);
   const buf = Math.max(avgBar * 0.25, tick * 4);
+  // rule 4: the same New York clock window on earlier dates (so daylight-saving changes don't shift it), walking
+  // back over weekends and holidays until 5 sessions with data are found (12 days at most)
   const len = end - start, ranges = [];
-  for (let i = 1; i <= 6; i++) { const a = start - i * 864e5, r = bars.filter((b) => b.t >= a && b.t < a + len); if (r.length >= sess.length * 0.6) ranges.push(Math.max(...r.map((b) => b.h)) - Math.min(...r.map((b) => b.l))); }
+  for (let i = 1; i <= 12 && ranges.length < 5; i++) { const a = nyToMs(addDays(date, -i), from), r = bars.filter((b) => b.t >= a && b.t < a + len); if (r.length >= sess.length * 0.6) ranges.push(Math.max(...r.map((b) => b.h)) - Math.min(...r.map((b) => b.l))); }
   ranges.sort((a, b) => a - b);
   const typical = ranges.length >= 2 ? ranges[Math.floor(ranges.length / 2)] : null;
   const quiet = typical ? range < typical * 0.5 : false;
   const lv = planLevels(bars, start, I.kind);
 
-  // the saved bias counts only if it existed by the session's first 15 minutes, and is graded from the price when it was saved
+  // rule 1: the saved bias counts only if it was saved during the session's own New York trading day (futures roll
+  // at 6 PM, forex at 5 PM, crypto at midnight) and no later than 15 minutes into the session. If several, the latest.
+  const roll = I.kind === "fut" ? 18 * 60 : I.kind === "fx" ? 17 * 60 : 0, sp = nyParts(start);
+  const dayStart = !roll ? nyToMs(sp.date, 0) : sp.mins >= roll ? nyToMs(sp.date, roll) : nyToMs(addDays(sp.date, -1), roll);
+  const okBias = (x) => x && typeof x.at === "number" && x.at >= dayStart && x.at <= start + 15 * 6e4 && x.at < end - 30 * 6e4;
   let call = null, conf = null, graded = null, biasLate = false;
-  if (Array.isArray(bias)) bias = bias.filter((x) => x && x.at >= start - 20 * 36e5 && x.at < end).sort((a, b) => a.at - b.at)[0] || null;
-  if (bias && /^(up|down)$/.test(bias.call) && bias.at <= start + 15 * 6e4 && bias.at < end - 30 * 6e4 && bias.at >= start - 20 * 36e5) {
+  if (Array.isArray(bias)) { const all = bias.filter((x) => x && x.at >= dayStart && x.at < end); bias = all.filter(okBias).sort((a, b) => b.at - a.at)[0] || all[0] || null; }
+  if (bias && /^(up|down)$/.test(bias.call) && okBias(bias)) {
     call = bias.call; conf = bias.conf || null;
     const b0 = sess.find((b) => b.t + 3e5 > bias.at) || sess[0];
     const p0 = b0.t < bias.at ? b0.c : b0.o, mv = C - p0, flatPct = I.kind === "crypto" ? 0.3 : I.kind === "fx" ? 0.05 : 0.1;

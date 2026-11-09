@@ -193,3 +193,88 @@ test("on a weekend, the recap is Friday's session", () => {
   const r = R.analyze({ instrument: "NQ", bars: b, from: 570, to: 690, now: R.nyToMs("2026-11-07", 960), strategies: ["ict"] });
   assert.equal(r.date, "2026-11-06");
 });
+
+// ---------- fixes from the Nov 9, 2026 review ----------
+test("rule 2: a session that opens beyond the level is a gap, not a sweep (no trade, with or without a bias)", () => {
+  const lv = R.planLevels(session([[25000, 25005, 24995, 25000]]), R.nyToMs(DAY, 570), "fut");
+  const b1 = lv.below[0].v, a1 = lv.above[0].v;
+  // opens under the level, closes back above it, displaces up with a gap, pulls back, runs. Never sweeps again.
+  const c = [[b1 - 10, b1 - 8, b1 - 20, b1 - 15], [b1 - 15, b1 + 20, b1 - 16, b1 + 18], [b1 + 18, b1 + 40, b1 + 10, b1 + 35], [b1 + 35, b1 + 36, b1 + 5, b1 + 20], [b1 + 20, a1 + 10, b1 + 19, a1 + 5]];
+  const r = run(c, { call: "up" });
+  assert.equal(r.plans[0].result, "none");
+  assert.match(r.plans[0].text, /opened below .* no liquidity grab to trade/);
+  const nb = run(c.slice(0, 4), {}); // same open, without the later run to the high above
+  assert.equal(nb.plans[0].result, "none");
+  assert.match(nb.plans[0].text, /no liquidity grab/);
+});
+
+test("rule 2: after a gap, a later move back through the level and a real sweep still counts", () => {
+  const lv = R.planLevels(session([[25000, 25005, 24995, 25000]]), R.nyToMs(DAY, 570), "fut");
+  const b1 = lv.below[0].v, a1 = lv.above[0].v;
+  const r = run([
+    [b1 - 10, b1 - 8, b1 - 20, b1 - 15], [b1 - 15, b1 + 10, b1 - 16, b1 + 8], // gap below, then closes back above
+    [b1 + 8, b1 + 9, b1 - 6, b1 - 2],                                        // the real sweep
+    [b1 - 2, b1 + 40, b1 - 3, b1 + 38], [b1 + 38, b1 + 60, b1 + 20, b1 + 55], [b1 + 55, b1 + 56, b1 + 15, b1 + 25], [b1 + 25, a1 + 10, b1 + 24, a1 + 5]
+  ], { call: "up" });
+  assert.match(r.plans[0].text, /^Long at/);
+  assert.match(r.plans[0].text, /came back, then ran below/);
+});
+
+test("rule 7: later candles in the session can't change an earlier decision (normal size comes from before the session)", () => {
+  const lv = R.planLevels(session([[25000, 25005, 24995, 25000]]), R.nyToMs(DAY, 570), "fut");
+  const b1 = lv.below[0].v, a1 = lv.above[0].v;
+  const head = [[b1 + 3, b1 + 4, b1 - 6, b1 - 2], [b1 - 2, b1 + 40, b1 - 3, b1 + 38], [b1 + 38, b1 + 60, b1 + 20, b1 + 55], [b1 + 55, b1 + 56, b1 + 15, b1 + 25], [b1 + 25, a1 + 10, b1 + 24, a1 + 5]];
+  const p = a1 + 5, flat = Array.from({ length: 13 }, () => [p, p + 2, p - 2, p]);
+  const calm = flat.concat(Array.from({ length: 6 }, () => [p, p + 2, p - 2, p]));
+  const wild = flat.concat(Array.from({ length: 6 }, (_, i) => i % 2 ? [p + 400, p + 401, p - 1, p] : [p, p + 401, p - 1, p + 400]));
+  const a = run(head.concat(calm), { call: "up" }), z = run(head.concat(wild), { call: "up" });
+  assert.equal(a.plans[0].result, "win");
+  assert.deepEqual(z.plans[0], a.plans[0]);
+});
+
+test("rule 7: stop buffers use the instrument's real tick (crude oil isn't buffered by NQ's 0.25)", () => {
+  Object.entries(R.INSTR).forEach(([k, v]) => assert.ok(v.tick > 0, k + " has a tick"));
+  assert.equal(R.INSTR.CL.tick, 0.01);
+  const lv = R.planLevels(session([[25000, 25005, 24995, 25000]]), R.nyToMs(DAY, 570), "fut");
+  const b1 = lv.below[0].v, a1 = lv.above[0].v, k = 400;
+  const c = [[b1 + 3, b1 + 4, b1 - 6, b1 - 2], [b1 - 2, b1 + 40, b1 - 3, b1 + 38], [b1 + 38, b1 + 60, b1 + 20, b1 + 55], [b1 + 55, b1 + 56, b1 + 15, b1 + 25], [b1 + 25, a1 + 10, b1 + 24, a1 + 5]];
+  const cl = session(c).map((b) => ({ ...b, o: b.o / k, h: b.h / k, l: b.l / k, c: b.c / k }));
+  const r = R.analyze({ instrument: "CL", bars: cl, from: 570, to: 690, now: NOW, bias: { call: "up", at: R.nyToMs(DAY, 560) }, strategies: ["ict"] });
+  const m = r.plans[0].text.match(/^Long at ([\d.]+) .* Stop at ([\d.]+)/);
+  assert.ok(m, r.plans[0].text);
+  assert.ok(+m[1] - +m[2] < 0.3, `risk ${(+m[1] - +m[2]).toFixed(2)} on a ~$62 contract`);
+});
+
+test("rule 1: only a bias from the session's own trading day counts, and the latest one before the cutoff", () => {
+  const b = session([[25000, 25005, 24995, 25000]]);
+  // London session today must not use yesterday's 9:20 AM bias
+  const lon = R.analyze({ instrument: "NQ", bars: b, from: 180, to: 480, now: NOW, bias: [{ call: "down", at: R.nyToMs("2026-11-03", 560) }], strategies: ["ict"] });
+  assert.equal(lon.call, null);
+  // two biases saved before the 9:30 session: the later one is the one that counts
+  const ny = R.analyze({ instrument: "NQ", bars: b, from: 570, to: 690, now: NOW, bias: [{ call: "up", at: R.nyToMs(DAY, 480) }, { call: "down", at: R.nyToMs(DAY, 560) }], strategies: ["ict"] });
+  assert.equal(ny.call, "down");
+});
+
+test("New York time -> UTC is right on daylight-saving Sundays", () => {
+  assert.equal(R.nyToMs("2026-11-01", 180), Date.parse("2026-11-01T08:00:00Z")); // 3 AM EST, after fall-back
+  assert.equal(R.nyToMs("2026-11-01", 360), Date.parse("2026-11-01T11:00:00Z"));
+  assert.equal(R.nyToMs("2026-03-08", 240), Date.parse("2026-03-08T08:00:00Z")); // 4 AM EDT, after spring-forward
+  assert.equal(R.nyToMs("2026-11-04", 570), Date.parse("2026-11-04T14:30:00Z"));
+  assert.equal(R.nyToMs("2026-07-01", 570), Date.parse("2026-07-01T13:30:00Z"));
+});
+
+test("rule 4: the typical range uses the same clock window on earlier dates, across a weekend and a DST change", () => {
+  const win = (d, amp) => bars(d, 570, 690, (k) => 25000 + (k % 2 ? amp : 0));
+  const b = [...win("2026-10-28", 400), ...win("2026-10-29", 400), ...win("2026-10-30", 400), ...win("2026-11-02", 100), ...win("2026-11-03", 100), ...win(DAY, 50)];
+  const r = R.analyze({ instrument: "NQ", bars: b, from: 570, to: 690, now: NOW, strategies: ["ict"] });
+  assert.equal(r.date, DAY);
+  assert.equal(r.typical, 402, "median of 5 sessions (102, 102, 402, 402, 402)");
+});
+
+test("bars with a price of zero or below are ignored", () => {
+  const b = session([[25000, 25005, 24995, 25000]]);
+  const i = b.findIndex((x) => x.t === R.nyToMs(DAY, 595));
+  b[i] = { ...b[i], o: 0, h: 0, l: 0, c: 0 };
+  const r = R.analyze({ instrument: "NQ", bars: b, from: 570, to: 690, now: NOW, strategies: ["ict"] });
+  assert.ok(r.low > 20000, "low " + r.low);
+});

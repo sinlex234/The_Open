@@ -79,6 +79,9 @@ globalThis.fetch = async (url, opts) => {
   const u = String(url);
   const ok = (body, type = 'application/json') => new Response(typeof body === 'string' ? body : JSON.stringify(body), { status: 200, headers: { 'content-type': type } });
   await new Promise(r => setTimeout(r, 20));
+  if (u.includes('supabase.co/rest/v1/rpc/open_log')) { const b = JSON.parse(opts.body); globalThis.__logged = (globalThis.__logged || []).concat(b.rows.map((r) => ({ tbl: b.tbl, ...r }))); return ok(b.rows.length); }
+  if (u.includes('supabase.co/rest/v1/rpc/open_ai_check')) return ok({ ok: true, tier: 'pro', used: 3, limit: 250 });
+  if (u.includes('supabase.co/rest/v1/rpc/email_for_login')) return ok(null);
   if (u.includes('supabase.co/rest/v1/rpc/open_use_ai')) return ok({ ok: true, tier: 'pro', used: 4, limit: 250 });
   if (u.includes('supabase.co/rest/v1/rpc/open_my_plan')) return ok({ tier: 'pro' });
   if (u.includes('api.anthropic.com')) {

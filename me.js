@@ -529,10 +529,18 @@ function friendly(e) {
   if (/failed to fetch|network/i.test(m)) return 'Can’t reach the server. Check your connection.';
   return m;
 }
-async function resolveEmail(id) {
-  if (id.includes('@')) return id;
-  const { data, error } = await sb.rpc('email_for_username', { uname: id.toLowerCase() });
-  if (error) throw error; return data || null;
+// Username sign-in goes through the server, which checks the password and hands back a session
+async function usernameSignIn(username, password) {
+  let r, j = {};
+  try { r = await fetch('/api/data?fn=userlogin', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: username.toLowerCase(), password }) }); }
+  catch { throw new Error('Can’t reach the server. Check your connection.'); }
+  j = await r.json().catch(() => ({}));
+  if (!r.ok || j.error || !j.access_token || !j.refresh_token) {
+    if (r.status === 401 || r.status === 404 || /invalid|wrong|not found|no account|credentials/i.test(j.error || '')) throw new Error('Wrong username or password.');
+    throw new Error(j.error || 'Couldn’t sign in right now. Try again in a minute.');
+  }
+  const { error } = await sb.auth.setSession({ access_token: j.access_token, refresh_token: j.refresh_token });
+  if (error) throw error;
 }
 async function submit() {
   const b = $('#aSubmit'); if (b.disabled) return; b.disabled = true; msg('aMsg', '');
@@ -549,14 +557,15 @@ async function submit() {
       if (data.user && Array.isArray(data.user.identities) && !data.user.identities.length) return msg('aMsg', 'An account with that email already exists. Sign in instead.');
       if (!data.session) return showCode(email);
     } else if (authMode === 'forgot') {
-      const id = $('#aId').value.trim(); if (!id) return msg('aMsg', 'Enter your email or username.');
-      const email = await resolveEmail(id);
-      if (email) { const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: redirectURL() }); if (error) throw error; }
+      const id = $('#aId').value.trim(); if (!id) return msg('aMsg', 'Enter the email address on your account.');
+      if (!id.includes('@')) return msg('aMsg', 'Enter the email address on your account to reset your password.');
+      const { error } = await sb.auth.resetPasswordForEmail(id, { redirectTo: redirectURL() }); if (error) throw error;
       msg('aMsg', 'If that account exists, a reset link is on its way.', true);
     } else {
       const id = $('#aId').value.trim(), pass = $('#aPass').value;
       if (!id || !pass) return msg('aMsg', 'Enter your email or username and your password.');
-      const email = await resolveEmail(id); if (!email) return msg('aMsg', 'No account found with that username.');
+      if (!id.includes('@')) return await usernameSignIn(id, pass);
+      const email = id;
       const { error } = await sb.auth.signInWithPassword({ email, password: pass });
       if (error && /email not confirmed/i.test(error.message || '')) {
         // Signed up but never confirmed: send a fresh code and ask for it right here
@@ -918,7 +927,7 @@ function startWizardIfNeeded() {
   wizard(me.answers || {}, ready, { notice: old ? 'We’ve added more questions so your briefing fits you better. Your earlier answers are already filled in.' : '' });
 }
 async function afterSignIn(user) {
-  me.user = user;
+  me.user = user; window.dispatchEvent(new Event('open:user'));
   // Members from before the move get their setup, profile and plan back the first time they sign in
   try { await sb.rpc('open_claim_carry'); } catch {}
   await loadName();
@@ -950,7 +959,7 @@ export async function initMe(onReady) {
       if (handled === session.user.id) return; handled = session.user.id;
       setTimeout(() => afterSignIn(session.user), 0);
     } else if (event === 'INITIAL_SESSION' || event === 'SIGNED_OUT') {
-      handled = null; me.user = null; me.answers = null; loadPlan();
+      handled = null; me.user = null; me.answers = null; loadPlan(); window.dispatchEvent(new Event('open:user'));
       if (event === 'SIGNED_OUT') { readyFired = false; if (location.pathname !== '/') { history.pushState(null, '', '/'); dispatchEvent(new PopStateEvent('popstate')); } }
       showGate();
     }

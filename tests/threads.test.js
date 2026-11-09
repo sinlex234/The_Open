@@ -63,3 +63,32 @@ test("rule 4: the price line marks where the market was closed", () => {
   assert.deepEqual(s.breaks, [b]);
   assert.equal(s.pts.length, 40);
 });
+
+// ---------- Nov 9, 2026 review ----------
+test("rule 1b: a topic in a third of the story's headlines doesn't merge into it (10 election, 5 election+Iran, 4 Iran/oil)", () => {
+  const pool = [];
+  for (let i = 0; i < 10; i++) pool.push(H("Election item " + i, ["election", "votes" + i], i));
+  for (let i = 0; i < 5; i++) pool.push(H("Iran and the election " + i, ["election", "iran"], i + 1));
+  for (let i = 0; i < 4; i++) pool.push(H("Iran oil " + i, ["iran", "oil"], i + 2, "energy"));
+  for (let i = 0; i < 25; i++) pool.push(H("Other news " + i, ["other" + i], i, "macro"));
+  const th = T.findThreads(pool, new Set());
+  const election = th.find((t) => t.keys[0] === "election");
+  assert.ok(election, "election story exists");
+  assert.ok(!election.keys.includes("iran"), "iran merged: " + election.keys);
+  assert.ok(!election.members.some((h) => /Iran oil/.test(h.title)), "oil headline not in the election story");
+});
+
+test("rule 2: different numbers or a different direction are different headlines", () => {
+  assert.equal(T.sameHeadline("Gold up 2% as dollar eases after the Fed", "Gold down 2% as dollar eases after the Fed"), false);
+  assert.equal(T.sameHeadline("CPI rises 0.3% in October, matching forecasts", "CPI rises 0.5% in October, matching forecasts"), false);
+  assert.equal(T.sameHeadline("Stocks rally after the Fed holds rates", "Stocks fall after the Fed holds rates"), false);
+  assert.equal(T.sameHeadline("Treasury yields down following Democrats midterm win", "Treasury Yields Down Following Democrats’ Midterm Win Today"), true);
+  assert.equal(T.dedupe([{ title: "CPI rises 0.3% in October", t: 2 }, { title: "CPI rises 0.5% in October", t: 1 }]).length, 2);
+});
+
+test("rule 3: a fresh headline newer than the last bar counts as open when that bar is recent", () => {
+  const now = Date.parse("2026-11-09T15:00:00Z"), bars = [];
+  for (let t = now - 36e5 * 3; t <= now - 3 * 6e4; t += 5 * 6e4) bars.push({ t, c: 1 });
+  assert.equal(T.openAt(bars, now), true, "headline 3 minutes after the last 5-minute bar");
+  assert.equal(T.openAt(bars, now + 36e5), false, "an hour past the last bar: the feed stopped, so closed");
+});

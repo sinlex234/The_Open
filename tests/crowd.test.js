@@ -63,3 +63,14 @@ test("rule 1 and 3: releases still to come aren't graded, and a reader's own rec
   ], outcome);
   assert.deepEqual(me.tally, { right: 1, wrong: 1, flat: 0, pending: 2 });
 });
+
+test("rule 6: calls older than the price history are left out", () => {
+  const old = new Date(Date.now() - 45 * 864e5).toISOString();
+  const out = (mk, time) => (time < Date.now() - 40 * 864e5 ? { result: "expired" } : OUT[byTime[time]]);
+  const d = C.duel([{ event_key: "O", market: "NQ", up: 9, down: 1, released_at: old }, { event_key: "A", market: "NQ", up: 6, down: 2, released_at: T("A", 5) }], [], out);
+  assert.equal(d.rows.length, 1);
+  assert.deepEqual(d.crowd, { right: 1, wrong: 0, flat: 0, pending: 0 });
+  const me = C.myRecord([{ event_key: "O", market: "NQ", dir: "up", released_at: old }], out);
+  assert.equal(me.rows.length, 0);
+  assert.deepEqual(me.tally, { right: 0, wrong: 0, flat: 0, pending: 0 });
+});

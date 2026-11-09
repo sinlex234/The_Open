@@ -98,3 +98,24 @@ test("rule 4: the verdict compares the two", () => {
   assert.equal(S.verdict({ sized: false }, rBig, "NQ").kind, "unsized");
   assert.equal(S.verdict({ sized: false }, null, "NQ"), null);
 });
+
+test("rule 5: a gap in the feed never makes a bar from before the release the release price", () => {
+  const t = t830("2026-11-06"), b = [];
+  for (let x = t - 60 * 6e4; x < t - 5 * 6e4; x += M5) b.push({ t: x, o: 20000, h: 20000, l: 20000, c: 20000 });
+  b[b.length - 1] = { t: t - 10 * 6e4, o: 20000, h: 20100, l: 20000, c: 20100 }; // 8:20 bar; 8:25 and 8:30 are missing
+  for (let x = t + 5 * 6e4; x < t + 60 * 6e4; x += M5) b.push({ t: x, o: 20100, h: 20101, l: 20099, c: 20100 });
+  const s = S.swing(b, t, 15 * 6e4, t + 36e5);
+  assert.equal(s.p0, 20100, "first bar after the release, not the 8:20 bar");
+  assert.ok(s.pct < 0.01);
+  // a gap of more than 5 minutes after the release: no price at all
+  assert.equal(S.swing(b.filter((x) => x.t < t || x.t >= t + 10 * 6e4), t, 15 * 6e4, t + 36e5), null);
+});
+
+test("rule 4: a small surprise with a bigger-than-normal move isn't called a non-event", () => {
+  const sSmall = { sized: true, band: "small", word: "Small surprise" }, rMid = { band: "moved", ratio: 2.1, done: true };
+  const v = S.verdict(sSmall, rMid, "NQ");
+  assert.equal(v.kind, "mild");
+  assert.match(v.text, /moved more than usual \(2\.1× a normal 15 minutes\)/);
+  assert.doesNotMatch(v.text, /treated it that way/);
+  assert.equal(S.verdict({ sized: true, band: "inline", word: "In line" }, rMid, "NQ").kind, "mild");
+});

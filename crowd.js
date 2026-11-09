@@ -6,6 +6,7 @@
 //    release. A move too small to matter is "barely moved" and counts for nobody.
 // 4. The head-to-head score only counts releases where both the crowd and the site made a call on the same market.
 // 5. Individual readers are graded too: the share of all reader calls that were right.
+// 6. Calls older than the price history can't be graded honestly, so they're left out (not counted as waiting).
 "use strict";
 
 const MIN_CROWD = 3;
@@ -31,6 +32,7 @@ function duel(tallies, botCalls, outcome) {
     const time = Date.parse(t.released_at);
     if (!(time <= Date.now())) return null;
     const g = outcome(t.market, time);
+    if (g && g.result === "expired") return null; // older than the price history: can't be graded honestly
     const cc = crowdCall(t), b = bot[t.event_key + "|" + t.market] || null;
     const cr = cc.dir ? resultFor(g, cc.dir) : null, br = b ? resultFor(g, b.dir) : null;
     if (cr) crowd[cr]++;
@@ -51,9 +53,10 @@ function myRecord(calls, outcome) {
   const rows = (calls || []).map((c) => {
     const time = Date.parse(c.released_at);
     const r = time > Date.now() ? "pending" : resultFor(outcome(c.market, time), c.dir);
+    if (!(r in t)) return null;
     t[r]++;
     return { event_key: c.event_key, title: c.title, market: c.market, dir: c.dir, time, result: r };
-  }).sort((a, b) => b.time - a.time);
+  }).filter(Boolean).sort((a, b) => b.time - a.time);
   return { tally: t, rows };
 }
 

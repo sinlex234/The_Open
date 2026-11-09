@@ -16,3 +16,15 @@ test("crypto page: no gold or Fed-only stories", () => {
   assert.ok(!crypto({ title: "Gold hits a two-week high as dollar eases", theme: "gold" }));
   assert.ok(!crypto({ title: "Fed's Powell says rate cuts still likely", theme: "rates" }));
 });
+// Nov 9, 2026 review: words inside other words, government DOGE and meme stocks were counted as crypto
+test("crypto and memecoin pages: no false matches inside words, no government DOGE, no meme stocks", () => {
+  ["Fed's Powell weighs whether to cut rates", "US budget deficit widens", "Stocks and bonds sell off together", "DOGE cuts reach the Pentagon", "Meme stocks rally as GameStop jumps", "Officials define new tariff rules"].forEach((t) => {
+    assert.ok(!crypto({ title: t, theme: "macro" }), "crypto: " + t);
+    assert.ok(!memes({ title: t, theme: "macro" }), "memes: " + t);
+  });
+});
+test("crypto page: real crypto words still count, and DOGE with a crypto word is the coin", () => {
+  ["Ether ETF inflows hit a record", "Ethereum upgrade goes live", "DeFi lending hits a new high", "Dogecoin jumps 12%", "DOGE price jumps 10% after Musk post", "Bitcoin and DOGE rally"].forEach((t) => assert.ok(crypto({ title: t, theme: "macro" }), t));
+  assert.ok(memes({ title: "DOGE price jumps 10% after Musk post", theme: "macro" }));
+  assert.ok(memes({ title: "Traders dump meme coins after rally", theme: "macro" }));
+});

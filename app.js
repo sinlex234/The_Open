@@ -15,6 +15,7 @@ let TZ = userTZ();               // what the reader sees (Settings → Time zone
 const tzAbbr = (t = Date.now()) => (new Intl.DateTimeFormat('en-US', { timeZone: TZ, timeZoneName: 'short' }).formatToParts(new Date(t)).find(x => x.type === 'timeZoneName') || {}).value || '';
 const tzCity = () => TZ.split('/').pop().replace(/_/g, ' ');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const safeUrl = u => /^https?:\/\//i.test(String(u || '')) ? String(u) : '#';
 
 // ---------- per-viewer conveniences ----------
 const store = {
@@ -58,7 +59,7 @@ const cache = new Map();
 function api(path, maxAgeMs = 90e3) {
   const hit = cache.get(path);
   if (hit && Date.now() - hit.t < maxAgeMs) return hit.p;
-  const planRoute = isPaid() && /^(desk|brief|explain|memedesk)\b/.test(path);
+  const planRoute = isPaid() && /^(desk|brief|explain|memedesk|recap)\b/.test(path);
   const p = (planRoute ? authToken() : Promise.resolve(null)).then(tok => fetch('/api/data?fn=' + path.replace('?', '&') + (tok ? '&plan=' + plan.tier : ''), tok ? { headers: { Authorization: 'Bearer ' + tok } } : undefined)).then(async r => {
     const j = await r.json().catch(() => ({}));
     if (r.status === 404) throw new Error('the data service isn’t reachable');
@@ -71,12 +72,15 @@ function api(path, maxAgeMs = 90e3) {
 }
 const errBox = (what, m) => `<div class="err" role="alert"><span>Couldn’t load ${esc(what)} (${esc(m)}). It will try again in two minutes.</span><button class="btn-ghost" onclick="location.reload()">Reload now</button></div>`;
 const skel = (n = 4) => Array.from({ length: n }, (_, i) => `<div class="skel" style="width:${92 - i * 13}%"></div>`).join('');
+// Something the reader opened or is typing in: an AI read, an explanation, past headlines, a report form
+const busy = el => !!(el && (el.querySelector('.air-box, .repform, .wi-explain:not([hidden]), .rh-box:not([hidden])') || (el.contains(document.activeElement) && document.activeElement.matches('input, textarea, select, [contenteditable]'))));
 async function fill(el, what, promise, render) {
   if (typeof el === 'string') el = document.getElementById(el);
   if (!el) return;
+  const isRefresh = refreshing; // the automatic refresh leaves alone anything the reader has open
   if (!el.innerHTML.trim()) el.innerHTML = skel();
-  try { const d = await promise; if (el.isConnected) el.innerHTML = render(d); }
-  catch (e) { if (el.isConnected) el.innerHTML = errBox(what, e.message); }
+  try { const d = await promise; if (el.isConnected && !(isRefresh && busy(el))) el.innerHTML = render(d); }
+  catch (e) { if (el.isConnected && !(isRefresh && busy(el))) el.innerHTML = errBox(what, e.message); }
 }
 const stamp = d => `<p class="stamp">Updated ${fmtTime(d.updated || Date.now())}</p>`;
 
@@ -320,8 +324,9 @@ function marketShut(m, t = Date.now()) {
   const h = REOPEN_H[m]; if (h == null) return null;
   const off = nyOffset(t), ny = t + off, day = Math.floor(ny / 864e5) * 864e5, tod = (ny - day) / 36e5, dow = new Date(ny).getUTCDay();
   if (!(dow === 6 || (dow === 5 && tod >= 17) || (dow === 0 && tod < h))) return null;
-  const sun = day + ((7 - dow) % 7) * 864e5;
-  return sun + h * 36e5 - off;
+  // The Sunday reopen in New York wall time, so a clock change over the weekend doesn't put it an hour off
+  const sun = new Date(day + ((7 - dow) % 7) * 864e5).toISOString().slice(0, 10);
+  return wallMs(sun, `${h}:00`, 'America/New_York');
 }
 // null if any of these markets is open, otherwise the time the first one reopens
 function allShut(markets) {
@@ -332,11 +337,11 @@ function allShut(markets) {
 }
 const SHUT_NAME = { futures: 'futures', stocks: 'stock', options: 'options', forex: 'forex' };
 const showWeekendNews = () => { try { return sessionStorage.getItem('weekendNews') === '1'; } catch { return false; } };
+const hmLeft = left => { left = Math.max(0, left); const h = Math.floor(left / 36e5), m = Math.floor(left % 36e5 / 6e4); return `${h ? h + 'h ' : ''}${m}m`; };
 function closedHTML(reopen, label = 'The market') {
-  const left = reopen - Date.now(), h = Math.floor(left / 36e5), m = Math.floor(left % 36e5 / 6e4);
   const day = new Date(reopen).toLocaleDateString('en-US', { timeZone: TZ, weekday: 'long' });
   return `<div class="closed"><p class="closed-h"><span class="closed-dot"></span>No news. ${esc(label)} is closed.</p>
-    <p>Reopens ${esc(day)} at ${fmtTime(reopen)} ${tzAbbr(reopen)}, in ${h ? h + 'h ' : ''}${m}m. The briefing comes back before the open.</p>
+    <p>Reopens ${esc(day)} at ${fmtTime(reopen)} ${tzAbbr(reopen)}, in <span data-until="${reopen}">${hmLeft(reopen - Date.now())}</span>. The briefing comes back before the open.</p>
     <button class="linkbtn" type="button" data-weekend>Show weekend headlines anyway</button></div>`;
 }
 function bindWeekend() { main.querySelectorAll('[data-weekend]').forEach(b => b.onclick = () => { try { sessionStorage.setItem('weekendNews', '1'); } catch {} refreshing = false; route(); }); }
@@ -571,15 +576,23 @@ async function crowdVote(b) {
   const prev = CROWD.mine[id]; if (prev === dir) return;
   CROWD.mine[id] = dir; delete CROWD.err[key]; crowdPaint(key);
   const sb = sbClient();
-  const upd = () => sb.from('open_crowd').update({ dir }).eq('event_key', key).eq('market', mk).eq('user_id', me.user.id);
-  let { error } = prev ? await upd() : await sb.from('open_crowd').insert({ event_key: key, title: box.dataset.title.slice(0, 160), country: box.dataset.cc, released_at: new Date(t).toISOString(), market: mk, dir });
-  if (error && !prev && /duplicate|23505/i.test(error.message + (error.code || ''))) ({ error } = await upd());
+  // An update that matched no row (the call was never saved) counts as a miss, so insert instead
+  const upd = async () => { const r = await sb.from('open_crowd').update({ dir }).eq('event_key', key).eq('market', mk).eq('user_id', me.user.id).select(); return { error: r.error, n: (r.data || []).length }; };
+  const ins = () => sb.from('open_crowd').insert({ event_key: key, title: box.dataset.title.slice(0, 160), country: box.dataset.cc, released_at: new Date(t).toISOString(), market: mk, dir });
+  let error;
+  if (prev) { const u = await upd(); error = u.error; if (!error && !u.n) ({ error } = await ins()); }
+  else {
+    ({ error } = await ins());
+    if (error && /duplicate|23505/i.test(error.message + (error.code || ''))) { const u = await upd(); error = u.error || (u.n ? null : new Error('not saved')); }
+  }
   if (error) { if (prev) CROWD.mine[id] = prev; else delete CROWD.mine[id]; CROWD.err[key] = Date.now() >= t ? 'Too late, the number is out.' : 'Couldn’t save your call. Try again.'; }
   cache.delete('crowdtally?keys=' + encodeURIComponent(key));
   await crowdTallies([key]);
   crowdPaint(key);
 }
 document.addEventListener('click', e => { const b = e.target.closest('[data-cv]'); if (b) { e.preventDefault(); crowdVote(b); } });
+// Someone signed out or a different person signed in: forget the last person's calls
+addEventListener('open:user', () => { CROWD.mine = {}; CROWD.tally = {}; CROWD.loaded = false; CROWD.err = {}; document.querySelectorAll('[data-cwd]').forEach(el => { delete el.dataset.cwd; }); crowdHydrate(); crowdPaint(); });
 const relCallPill = e => `<span class="pill ${e.paused && e.how !== 'react' ? 'paused' : e.dir === 'up' ? 'up' : e.dir === 'down' ? 'down' : ''}"><b>${esc(e.label)}</b> ${e.paused && e.how !== 'react' ? '⏸ Call paused' : e.dir === 'up' ? '↑ Likely up' : e.dir === 'down' ? '↓ Likely down' : '… Waiting for the first move'}</span>`;
 function releasedHTML() {
   const now = Date.now(), gone = store.get('relDismissed', []);
@@ -616,6 +629,7 @@ async function pollResults() {
       const r = await fetch('/api/data?fn=results', { cache: 'no-store' });
       if (r.ok) {
         const j = await r.json(); let changed = false;
+        const roomWas = LS.room ? JSON.stringify(results.map[LS.room.key] || null) : '';
         (j.events || []).forEach(ev => {
           const prev = results.map[ev.key];
           if (ev.released && ev.actual && !(prev && prev.released && prev.actual)) {
@@ -629,7 +643,12 @@ async function pollResults() {
         });
         const now = Date.now();
         fast = (j.events || []).some(ev => !ev.actual && ev.time - now < 60e3 && now - ev.time < 30 * 60e3);
-        if (LS.room) { renderRoom(); if (!(results.map[LS.room.key] || {}).actual && LS.room.ev.time - now < 5 * 60e3) fast = 'room'; }
+        if (LS.room) {
+          // redraw the room only when its result changed; otherwise just move the countdown
+          renderRoom(roomWas === JSON.stringify(results.map[LS.room.key] || null));
+          // poll fast from 5 minutes before the release until 15 minutes after it, then go back to normal
+          if (!(results.map[LS.room.key] || {}).actual && LS.room.ev.time - now < 5 * 60e3 && now - LS.room.ev.time < 15 * 60e3) fast = 'room';
+        }
         results.loaded = true;
         renderReleased();
         if (changed && started && ['today', 'calendar', 'futures', 'forex'].includes(shownPage)) route(true);
@@ -641,7 +660,7 @@ async function pollResults() {
 
 // ---------- shared pieces ----------
 function withRefs(text, refs) {
-  return esc(text).replace(/\[(\d+)\]/g, (m, n) => { const r = refs[+n - 1]; return r ? `<a class="ref" href="${esc(r.link)}" target="_blank" rel="noopener" title="${esc(r.title)}, ${esc(r.source)}">${n}</a>` : ''; });
+  return esc(text).replace(/\[(\d+)\]/g, (m, n) => { const r = refs[+n - 1]; return r ? `<a class="ref" href="${esc(safeUrl(r.link))}" target="_blank" rel="noopener" title="${esc(r.title)}, ${esc(r.source)}">${n}</a>` : ''; });
 }
 function reactTxt(r) {
   if (!r) return '';
@@ -663,7 +682,7 @@ function storyItem(i, { why = true, explain = false, fy: showFy = true, mark = n
   const isMine = mark ?? !!fy;
   const showWhy = why && i.why && (depth() !== 'quick' || !fy);
   return `<li class="${isMine ? 'mine' : ''}" data-id="${esc(i.id)}">
-    <a class="t" href="${esc(i.link)}" target="_blank" rel="noopener">${esc(i.title)}</a>
+    <a class="t" href="${esc(safeUrl(i.link))}" target="_blank" rel="noopener">${esc(i.title)}</a>
     ${showWhy ? `<div class="why">${esc(i.why)}</div>` : ''}
     ${fy ? `<div class="fy"><b>For you</b>${esc(fy)}</div>` : ''}
     <div class="meta">${i.breaking ? '<span class="brk">Breaking</span>' : ''}<span class="imp ${esc(i.impact || 'low')}">${i.impact === 'high' ? 'Big story' : i.impact === 'medium' ? 'Notable' : 'Minor'}</span><span>${esc(SECTION_NAMES[i.section] || i.themeLabel || '')}</span><span>${esc(i.source)}${(i.outlets || i.count) > 1 ? ` and ${(i.outlets || i.count) - 1} more` : i.impact === 'high' && i.confirmed === false ? ' only <span class="unconf" title="Only one outlet has this so far">not yet confirmed</span>' : ''}</span><span>${ago(i.time)}</span>${reactTxt(i.reaction)}
@@ -724,10 +743,13 @@ function explainURL(i) {
   return 'explain?' + new URLSearchParams({ title: i.title, summary: (i.summary || '').slice(0, 400), source: i.source || '', reaction: r }).toString() + '&' + profileQuery();
 }
 function bindExplain(root, items) {
+  // Start from what is actually open on screen, so one click opens Explain after the list is redrawn
+  explainOpen.clear();
+  root.querySelectorAll('.wi-x').forEach(b => { const box = root.querySelector('#x-' + CSS.escape(b.dataset.x)); if (box && !box.hidden) explainOpen.add(b.dataset.x); });
   root.querySelectorAll('.wi-x').forEach(b => b.onclick = () => {
     const id = b.dataset.x, item = items.find(x => x.id === id), box = root.querySelector('#x-' + CSS.escape(id));
     if (!item || !box) return;
-    if (explainOpen.has(id)) { explainOpen.delete(id); box.hidden = true; b.textContent = 'Explain this'; b.setAttribute('aria-expanded', 'false'); return; }
+    if (explainOpen.has(id) && !box.hidden) { explainOpen.delete(id); box.hidden = true; b.textContent = 'Explain this'; b.setAttribute('aria-expanded', 'false'); return; }
     explainOpen.add(id); box.hidden = false; b.textContent = 'Hide explanation'; b.setAttribute('aria-expanded', 'true');
     box.innerHTML = skel(2);
     api(explainURL(item), 864e5).then(x => {
@@ -769,7 +791,9 @@ const shortName = a => a.short && !/^(NQ|ES|Oil|Gold|10Y)$/.test(a.short) ? a.sh
 // ================= pages =================
 const PAGES = {};
 let refreshing = false, shownPage = null, started = false;
-function layout(html) { if (refreshing && main.dataset.page === shownPage && main.innerHTML) return false; main.innerHTML = html; return true; }
+// state: what the page frame was drawn for (e.g. market open or closed); a refresh redraws the frame when it changes
+let layoutState = '';
+function layout(html, state = '') { if (refreshing && main.dataset.page === shownPage && main.innerHTML && state === layoutState) return false; layoutState = state; main.innerHTML = html; return true; }
 
 // ---------- Today: the front page ----------
 function leadHTML(d) {
@@ -779,11 +803,11 @@ function leadHTML(d) {
     <h1 class="lead-h">${esc(d.headline)}</h1>
     <p class="lead-sum">${withRefs(d.summary || '', d.refs)}</p>
     <ol class="stories">${(d.stories || []).map(s => { const r = d.refs[s.ref - 1] || {}; return `<li>
-      <h3><a href="${esc(r.link)}" target="_blank" rel="noopener">${esc(s.headline)}</a></h3>
+      <h3><a href="${esc(safeUrl(r.link))}" target="_blank" rel="noopener">${esc(s.headline)}</a></h3>
       ${s.why ? `<p>${esc(s.why)}</p>` : ''}${effects(s)}
       <p class="src">${esc(r.source || '')}${r.time ? ', ' + ago(r.time) : ''}${s.since ? ' ' + reactTxt(s.since) : ''}</p></li>`; }).join('')}</ol>
     ${(d.across || []).length ? `<dl class="across">${d.across.map(a => `<div><dt>${esc(a.area)}</dt><dd>${withRefs(a.text, d.refs)}</dd></div>`).join('')}</dl>` : ''}
-    ${used.length ? `<details class="sources"><summary>Sources (${used.length})</summary><ol>${used.map(n => { const r = d.refs[n - 1]; return `<li value="${n}"><a href="${esc(r.link)}" target="_blank" rel="noopener">${esc(r.title)}</a> <span class="faint">${esc(r.source)}, ${ago(r.time)}</span></li>`; }).join('')}</ol></details>` : ''}`;
+    ${used.length ? `<details class="sources"><summary>Sources (${used.length})</summary><ol>${used.map(n => { const r = d.refs[n - 1]; return `<li value="${n}"><a href="${esc(safeUrl(r.link))}" target="_blank" rel="noopener">${esc(r.title)}</a> <span class="faint">${esc(r.source)}, ${ago(r.time)}</span></li>`; }).join('')}</ol></details>` : ''}`;
 }
 function guideHTML() {
   if (store.get('guideDone', false)) return '';
@@ -934,7 +958,7 @@ function ictPhase(ph, call, mk) {
 }
 const ICT_PHASE = [[570, 600, ''], [600, 660, ''], [660, 720, 'Moves slow down into lunch'], [480, 510, 'Before the data: often a fake move'], [510, 540, 'Data reaction'], [540, 570, 'Pre-open positioning'], [720, 810, 'Lunch: usually quiet'], [810, 870, 'Afternoon session starts'], [870, 960, 'Into the close'], [120, 180, 'London open: Asia’s range often gets run'], [180, 300, 'London move']];
 // Highlight the half hour you're in; once the session is over, show what happened and what the plan would have done
-const nyNowMins = () => { const p = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: 'numeric', hourCycle: 'h23', weekday: 'short' }).formatToParts(new Date()); const g = k => (p.find(x => x.type === k) || {}).value; return { m: +g('hour') * 60 + +g('minute'), dow: g('weekday') }; };
+const nyNowMins = () => { const p = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit', hour: 'numeric', minute: 'numeric', hourCycle: 'h23', weekday: 'short' }).formatToParts(new Date()); const g = k => (p.find(x => x.type === k) || {}).value; return { m: +g('hour') * 60 + +g('minute'), dow: g('weekday'), date: `${g('year')}-${g('month')}-${g('day')}` }; };
 function dpNow(el) {
   if (!el || !el.isConnected) return;
   const from = +el.dataset.from, to = +el.dataset.to, { m, dow } = nyNowMins(), wk = dow === 'Sat' || dow === 'Sun';
@@ -1055,7 +1079,7 @@ function briefingHTML(d, { empty = 'No major stories for this market right now.'
     return `<li class="bc${isNew ? ' bc-new' : ''}">
     <span class="bn">${String(i + 1).padStart(2, '0')}</span>
     <div class="bb">
-      <a class="bh" href="${esc(b.link)}" target="_blank" rel="noopener">${isNew ? '<span class="newtag">New</span>' : ''}${esc(b.headline)}</a>
+      <a class="bh" href="${esc(safeUrl(b.link))}" target="_blank" rel="noopener">${isNew ? '<span class="newtag">New</span>' : ''}${esc(b.headline)}</a>
       <p class="bm">${srcLine(b)}${b.time ? ' · ' + ago(b.time) : ''}${b.topic ? ' · ' + esc(b.topic) : ''}${b.since ? ` · <span class="bm-moved">${reactTxt(b.since)}</span>` : ''}</p>
       ${showWhy && b.why ? `<p class="bwhy">${esc(b.why)}</p>` : ''}
       <div class="bfx" data-airh="${esc(b.headline)}">${b.effects && b.effects.length ? b.effects.map(e => `<div class="beff">${dirPill(e.label, e.dir, e.paused)}${b.when && e === b.effects[0] ? `<span class="pill when">⏱ ${esc(whenPill(b.when))}</span>` : ''}${e.by === 'ai' ? `<span class="pill by-ai" title="Read by AI because the headline alone doesn’t say">AI read${e.conf === 'high' ? ' · high confidence' : ''}</span>` : e.by === 'market' ? '<span class="pill by-mk" title="Based on how price has actually moved since the story">Market reaction</span>' : ''}<span class="br">${esc(e.reason)}</span></div>`).join('') : `<div class="beff">${b.when ? `<span class="pill when">⏱ ${esc(whenPill(b.when))}</span>` : ''}<span class="br">Little direct effect on your markets.</span></div>`}</div>
@@ -1088,12 +1112,12 @@ function marketBriefing(id, focus, label) {
   const nextP = `<div class="tab-links"><a class="more" href="/calendar">Full calendar</a></div><div id="${id}Next"></div>`;
   if (shut) {
     const brief = `<section class="mbrief t-news"><div class="sec-row"><h2 class="sec">Briefing for ${esc(label)}</h2></div>${closedHTML(shut, `The ${label} market`)}</section>`;
-    return { brief, next: nextP, play: '', html: brief + `<section class="mbrief"><div id="${id}Next"></div></section>`,
+    return { closed: true, brief, next: nextP, play: '', html: brief + `<section class="mbrief"><div id="${id}Next"></div></section>`,
       load: () => { fill(id + 'Next', 'what’s next', api('desk?' + profileQuery() + '&focus=' + focus, 5 * 60e3), nextHTML); bindWeekend(); } };
   }
   const brief = `<section class="mbrief t-news"><div class="sec-row"><h2 class="sec">Briefing for ${esc(label)}</h2><a href="/news">All news</a></div><ol class="bfeed" id="${id}">${'<li>' + skel(3) + '</li>'}</ol></section>`;
   const play = `<div class="tab-links"><button class="linkbtn" type="button" data-edit>Change strategies</button></div><div id="${id}Play"></div>`;
-  return { brief, next: nextP, play, html: brief,
+  return { closed: false, brief, next: nextP, play, html: brief,
     load: () => { const p = api('desk?' + profileQuery() + '&focus=' + focus, 5 * 60e3); fill(id, 'the briefing', Promise.all([p, api('calls', 5 * 60e3).catch(() => null)]), ([d, c]) => briefingHTML(d, { rec: c })); fill(id + 'Next', 'what’s next', p, nextHTML); fill(id + 'Play', 'your game plan', p, playbookHTML); main.querySelectorAll('[data-edit]').forEach(b => b.onclick = editSetup); } };
 }
 // ---------- One page frame for every section: news on the left; chart, your session and the Live read on the right; the rest in tabs ----------
@@ -1369,7 +1393,7 @@ function newsbotHTML(d) {
   const chip = x => x.paused ? `<span class="pill paused">${esc(x.market)} paused</span>` : x.dir === 'up' ? `<span class="pill up">${esc(x.market)} ↑</span>` : x.dir === 'down' ? `<span class="pill down">${esc(x.market)} ↓</span>` : `<span class="pill">${esc(x.market)} unclear</span>`;
   return `<ol class="nb">${items.map((n, i) => `<li${Date.now() - n.time < 15 * 60e3 ? ' class="nb-new"' : ''}>
     <span class="nb-t"><b class="nb-rank">${i + 1}</b>${esc(ago(n.time))}</span>
-    <span class="nb-h"><a href="${esc(n.link)}" target="_blank" rel="noopener">${esc(n.headline)}</a><small>${esc(n.source)}${n.outlets > 1 ? ` and ${n.outlets - 1} more` : ''}</small></span>
+    <span class="nb-h"><a href="${esc(safeUrl(n.link))}" target="_blank" rel="noopener">${esc(n.headline)}</a><small>${esc(n.source)}${n.outlets > 1 ? ` and ${n.outlets - 1} more` : ''}</small></span>
     <span class="nb-r">${n.reads.map(chip).join('')}</span></li>`).join('')}</ol>`;
 }
 function pulseHTML(d) {
@@ -1377,7 +1401,7 @@ function pulseHTML(d) {
   const tops = topThree(d);
   const ar = x => x.paused ? '⏸' : x.dir === 'up' ? '<i class="up">↑</i>' : x.dir === 'down' ? '<i class="down">↓</i>' : '<i>↕</i>';
   return `<div class="pl-grid n${reads.length}">${reads.map(pulseCard).join('')}</div>
-    ${tops.length ? `<div class="pl-src"><span>Based on the ${tops.length} strongest headlines for your markets</span>${tops.map(n => `<a href="${esc(n.link)}" target="_blank" rel="noopener"><span class="pl-ar">${n.reads.map(ar).join('')}</span><span class="pl-hl">${esc(n.headline)}</span></a>`).join('')}</div>` : ''}
+    ${tops.length ? `<div class="pl-src"><span>Based on the ${tops.length} strongest headlines for your markets</span>${tops.map(n => `<a href="${esc(safeUrl(n.link))}" target="_blank" rel="noopener"><span class="pl-ar">${n.reads.map(ar).join('')}</span><span class="pl-hl">${esc(n.headline)}</span></a>`).join('')}</div>` : ''}
     <p class="pl-fine">A lean for the next hour, not a promise. Every read is graded on the <a href="/scorecard">Scorecard</a>.</p>`;
 }
 // Scan timer: a new read at every 5-minute bar close (:00, :05, :10…), the same moment the chart's 5m bar closes.
@@ -1499,7 +1523,7 @@ PAGES.today = () => {
     const ks = timingKeys(); let tk = store.get('timingKey', ks[0]); if (!ks.includes(tk)) tk = ks[0];
     const draw = () => {
       const pk = $('#tmPick'); if (pk) pk.innerHTML = ks.length > 1 ? ks.map(k => `<button class="chip" data-tk="${k}" aria-pressed="${k === tk}">${TIMING_NAME[k]}</button>`).join('') : '';
-      main.querySelectorAll('[data-tk]').forEach(b => b.onclick = () => { tk = b.dataset.tk; store.set('timingKey', tk); const el = $('#timing'); if (el) el.innerHTML = ''; draw(); });
+      main.querySelectorAll('#tmPick [data-tk]').forEach(b => b.onclick = () => { tk = b.dataset.tk; store.set('timingKey', tk); const el = $('#timing'); if (el) el.innerHTML = ''; draw(); });
       fill('timing', 'when price usually moves', api('timing?m=' + tk, 15 * 60e3), timingHTML);
     };
     draw();
@@ -1559,7 +1583,7 @@ function newsroomHTML(items, ranked, mineFirst = true, cap = 10) {
   const fy = lead ? forYouHeadline(lead) : null;
   const leadHTML = lead ? `<article class="nr-lead${mine(lead) ? ' mine' : ''}">
       <p class="nr-eye">${mineFirst && mine(lead) ? 'Top story for your markets' : 'Most influential right now'} · ${ago(lead.time)}</p>
-      <a class="nr-h1" href="${esc(lead.link)}" target="_blank" rel="noopener">${esc(lead.title)}</a>
+      <a class="nr-h1" href="${esc(safeUrl(lead.link))}" target="_blank" rel="noopener">${esc(lead.title)}</a>
       ${why(lead) ? `<p class="nr-why">${esc(lead.why)}</p>` : ''}
       ${fy ? `<p class="nr-fy"><b>For you</b> ${esc(fy)}</p>` : ''}
       <div class="rel-nums nr-stats">${nrMarkets().map(k => { const d = (lead.dirs || {})[k] || 0; return `<div><small>${esc(NR_MK[k])}</small><b class="${d > 0 ? 'up' : d < 0 ? 'down' : 'flat'}">${d > 0 ? '↑' : d < 0 ? '↓' : '↕'} ${nrWord(d)}</b></div>`; }).join('')}
@@ -1568,7 +1592,7 @@ function newsroomHTML(items, ranked, mineFirst = true, cap = 10) {
       </div>
       ${nrMeta({ ...lead, reaction: null, dirs: {} }, true)}
     </article>` : '';
-  const sideHTML = side.map(i => `<article class="nr-side${mine(i) ? ' mine' : ''}"><p class="nr-eye">${ago(i.time)}</p><a class="nr-h2" href="${esc(i.link)}" target="_blank" rel="noopener">${esc(i.title)}</a>${why(i) ? `<p class="nr-why sm">${esc(i.why)}</p>` : ''}${nrMeta(i, true)}</article>`).join('');
+  const sideHTML = side.map(i => `<article class="nr-side${mine(i) ? ' mine' : ''}"><p class="nr-eye">${ago(i.time)}</p><a class="nr-h2" href="${esc(safeUrl(i.link))}" target="_blank" rel="noopener">${esc(i.title)}</a>${why(i) ? `<p class="nr-why sm">${esc(i.why)}</p>` : ''}${nrMeta(i, true)}</article>`).join('');
   // At most 10 stories in all: the 3 up top plus the 7 most important of the rest, shown newest first
   const restAll = items.filter(i => !topIds.has(i.id));
   const rest = (cap ? [...restAll].sort((a, b) => rank(b) - rank(a)).slice(0, Math.max(cap - top.length, 0)) : restAll).sort((a, b) => (b.time || 0) - (a.time || 0));
@@ -1578,7 +1602,7 @@ function newsroomHTML(items, ranked, mineFirst = true, cap = 10) {
   const feed = groups.map(([name, test]) => {
     const g = rest.filter(i => !used.has(i.id) && i.time && test(i)); g.forEach(i => used.add(i.id));
     if (!g.length) return '';
-    return `<section class="nr-group"><h3 class="nr-gh">${name}</h3><ol class="nr-list">${g.map(i => { const w = i.impact === 'high' ? why(i) : ''; return `<li class="nr-row${mine(i) ? ' mine' : ''}" data-id="${esc(i.id)}"><time>${fmtTime(i.time)}</time><div><a class="nr-t" href="${esc(i.link)}" target="_blank" rel="noopener">${esc(i.title)}</a>${w ? `<p class="nr-why sm">${w}</p>` : ''}${nrMeta(i, true)}</div></li>`; }).join('')}</ol></section>`;
+    return `<section class="nr-group"><h3 class="nr-gh">${name}</h3><ol class="nr-list">${g.map(i => { const w = i.impact === 'high' ? why(i) : ''; return `<li class="nr-row${mine(i) ? ' mine' : ''}" data-id="${esc(i.id)}"><time>${fmtTime(i.time)}</time><div><a class="nr-t" href="${esc(safeUrl(i.link))}" target="_blank" rel="noopener">${esc(i.title)}</a>${w ? `<p class="nr-why sm">${w}</p>` : ''}${nrMeta(i, true)}</div></li>`; }).join('')}</ol></section>`;
   }).join('');
   return `<div class="nr-top">${leadHTML}<div class="nr-sides">${sideHTML}</div></div>${feed}`;
 }
@@ -1722,12 +1746,12 @@ function tnUpcoming(events, n = 3) {
 }
 const leftTxt = ms => { const m = Math.max(0, Math.round(ms / 6e4)), d = Math.floor(m / 1440), h = Math.floor(m % 1440 / 60), mm = m % 60; return d ? `${d}d ${h}h` : h ? `${h}h ${mm}m` : `${mm}m`; };
 function expectHTML(cal, earn) {
-  const now = Date.now(), today = nyParts().date, nm = nyParts().mins;
+  const now = Date.now(), today = nyParts().date, ny = nyNowMins();
   const days = tnDays(cal.events).filter(d => d.known);
   if (!days.length) return '';
-  // Today, unless its big releases are all out or the US session is over; then the next trading day
+  // Today, unless its big releases are all out or the US session is over (New York time); then the next trading day
   let day = days[0];
-  if (day.date === today) { const r0 = tnRead(today, cal.events, earn); if ((r0.done && r0.level >= 2) || nm >= 16 * 60 + 15) day = days[1] || day; }
+  if (day.date === today) { const r0 = tnRead(today, cal.events, earn); if ((r0.done && r0.level >= 2) || ny.date > today || (ny.date === today && ny.m >= 16 * 60 + 15)) day = days[1] || day; }
   const r = tnRead(day.date, cal.events, earn);
   const when = day.date === today ? 'Today' : day.date === addDay(today, 1) ? 'Tomorrow' : dayFmt(day.date, { weekday: 'long' });
   const done = cal.events.filter(e => e.impact === 'High' && !e.allDay && tnCcys().has(e.country) && nyParts(e.time).date === today && e.time + REACTED_MS <= now);
@@ -1746,9 +1770,11 @@ function expectHTML(cal, earn) {
       <div class="tn-more" id="txMore" hidden>${tnExplain(r)}</div>
     </div>`;
 }
+let expectTimer = null;
 function mountExpect(id) {
-  let cal = null, earn = null, t = null;
-  const draw = () => { const box = document.getElementById(id); if (!box) { clearInterval(t); return; } if (!cal) return;
+  let cal = null, earn = null;
+  clearInterval(expectTimer);
+  const draw = () => { const box = document.getElementById(id); if (!box) { clearInterval(expectTimer); return; } if (!cal) return;
     const open = !!(box.querySelector('#txMore') && !box.querySelector('#txMore').hidden);
     const html = expectHTML(cal, earn); box.hidden = !html; box.innerHTML = html;
     const lv = (box.querySelector('.tn-body') || {}).className || ''; box.className = 'tn tn-today t-expect tn-tint ' + ((lv.match(/lv\d/) || [''])[0]);
@@ -1757,7 +1783,7 @@ function mountExpect(id) {
   };
   api('calendar', 10 * 60e3).then(d => { cal = d; draw(); api('earnings', 15 * 60e3).then(e => { earn = e; draw(); }).catch(() => {}); }).catch(() => {});
   // Re-check every minute so releases drop off once the market has reacted
-  t = setInterval(() => { if (document.visibilityState === 'visible') draw(); }, 60e3);
+  expectTimer = setInterval(() => { if (document.visibilityState === 'visible') draw(); }, 60e3);
 }
 
 PAGES.news = () => {
@@ -1822,14 +1848,14 @@ function sectorsHTML(s) {
   return `<div class="gbar">${s.map(x => { const w = Math.abs(x.pct) / mx * 50, up = x.pct >= 0; return `<div class="gb"><span>${esc(x.name)}</span><span class="bar"><i class="${up ? 'up' : 'down'}" style="${up ? `left:50%;width:${w}%` : `left:${50 - w}%;width:${w}%`}"></i></span><span class="v ${up ? 'up' : 'down'}">${up ? '+' : '−'}${Math.abs(x.pct).toFixed(2)}%</span></div>`; }).join('')}</div>`;
 }
 PAGES.markets = () => {
-  if (!layout(`<h1 class="page-h">Markets</h1>
+  layout(`<h1 class="page-h">Markets</h1>
     <p class="page-intro">Prices across the world’s main markets, what’s driving US stocks, and heatmaps. Your markets are highlighted.</p>
     <div id="world"></div>
     <div class="grid2 block">
       <section><h2 class="sec">What’s driving US stocks</h2><p class="muted" id="mvIntro"></p><div id="giants"></div></section>
       <section><h2 class="sec">Sectors today</h2><div id="sectors"></div></section>
     </div>
-    <a class="hm-link block" href="/heatmaps"><span><b>Heatmaps</b><small>See the whole S&amp;P 500, Nasdaq 100, crypto, currencies and ETFs at a glance.</small></span><span aria-hidden="true">→</span></a>`)) return;
+    <a class="hm-link block" href="/heatmaps"><span><b>Heatmaps</b><small>See the whole S&amp;P 500, Nasdaq 100, crypto, currencies and ETFs at a glance.</small></span><span aria-hidden="true">→</span></a>`);
   fill('world', 'world markets', api('world', 120e3), d => worldHTML(d) + stamp(d));
   const mv = api('movers', 2 * 60e3);
   fill('mvIntro', 'summary', mv, x => esc(x.lines.slice(0, 2).join(' ')));
@@ -1929,7 +1955,7 @@ const RECAP_NAMES = { NQ: 'Nasdaq futures', ES: 'S&P futures', EURUSD: 'EUR/USD'
 function recapHTML(d) {
   const cards = d.sessions.map(s => `<div class="rc ${s.status}"><h4>${esc(s.label)}<span>${s.status === 'live' ? 'Now' : s.status === 'done' ? 'Done' : s.status === 'upcoming' ? 'Later' : 'No data'}</span></h4><p>${esc(s.text)}</p></div>`).join('');
   const tl = d.timeline.filter(t => t.kind !== 'session');
-  return `<div class="rc-grid">${cards}</div>${tl.length ? `<ol class="tl">${tl.map(t => `<li><span class="tt">${fmtTime(t.t)}</span><div><b>${esc(t.text)}</b>${t.sub ? `<div class="tc">${esc(t.sub)}</div>` : ''}${t.cause ? `<div class="tc">${esc(t.cause)}</div>` : ''}${(t.news || []).map(n => `<a href="${esc(n.link)}" target="_blank" rel="noopener">${esc(n.title)} <span class="faint">${esc(n.source)}</span></a>`).join('')}</div></li>`).join('')}</ol>` : ''}${stamp(d)}`;
+  return `<div class="rc-grid">${cards}</div>${tl.length ? `<ol class="tl">${tl.map(t => `<li><span class="tt">${fmtTime(t.t)}</span><div><b>${esc(t.text)}</b>${t.sub ? `<div class="tc">${esc(t.sub)}</div>` : ''}${t.cause ? `<div class="tc">${esc(t.cause)}</div>` : ''}${(t.news || []).map(n => `<a href="${esc(safeUrl(n.link))}" target="_blank" rel="noopener">${esc(n.title)} <span class="faint">${esc(n.source)}</span></a>`).join('')}</div></li>`).join('')}</ol>` : ''}${stamp(d)}`;
 }
 function recapSection(boxId, pickId, keys) {
   const pick = document.getElementById(pickId), box = document.getElementById(boxId); if (!pick || !box) return;
@@ -1964,7 +1990,7 @@ PAGES.futures = () => {
       ['prices', 'Prices', '<div id="futQuotes"></div>'],
       ['levels', 'Levels', lv || recapBlock('futRecap') ? `${lv ? '<div id="futLevels"></div>' : ''}${recapBlock('futRecap')}` : ''],
       ['movers', 'Movers and calendar', '<div class="grid2"><section><h2 class="sec">What’s driving the indexes</h2><div id="futGiants"></div></section><section><h2 class="sec">US news this week</h2><div id="futCal"></div></section></div>'],
-      ['news', 'More news', '<div class="tab-links"><a class="more" href="/news">All news</a></div><ul class="slist" id="futNews"></ul>']]) })}`)) {
+      ['news', 'More news', '<div class="tab-links"><a class="more" href="/news">All news</a></div><ul class="slist" id="futNews"></ul>']]) })}`, fb.closed ? 'closed' : 'open')) {
     const mine = myAssets().filter(a => a.tv && !a.ccy && a.chain === undefined && !/^(BTC|ETH|SOL|XRP|BNB|DOGE|alts)$/.test(a.id));
     chartPicker('futChart', 'futChartPick', [...mine.map(a => ({ id: shortName(a), tv: a.tv })), { id: 'S&P 500', tv: 'OANDA:SPX500USD' }, { id: 'Nasdaq 100', tv: 'OANDA:NAS100USD' }, { id: 'Dow', tv: 'OANDA:US30USD' }, { id: 'Russell 2000', tv: 'OANDA:US2000USD' }]);
   }
@@ -1994,7 +2020,7 @@ PAGES.forex = () => {
       ['strength', 'Strongest to weakest', '<div class="grid2"><section><h2 class="sec">Strongest to weakest today</h2><div id="fxStrength"></div></section><section><h2 class="sec">Pairs</h2><div class="qgrid" id="fxQuotes"></div></section></div>'],
       ['levels', 'Levels', lv || recapBlock('fxRecap') ? `${lv ? '<div id="fxLevels"></div>' : ''}${recapBlock('fxRecap')}` : ''],
       ['cal', 'Central banks', '<div id="fxCal"></div>'],
-      ['news', 'Currency stories', '<div class="tab-links"><a class="more" href="/news">All news</a></div><ul class="slist" id="fxNews"></ul>']]) })}`)) {
+      ['news', 'Currency stories', '<div class="tab-links"><a class="more" href="/news">All news</a></div><ul class="slist" id="fxNews"></ul>']]) })}`, fb.closed ? 'closed' : 'open')) {
     const mine = myAssets().filter(a => a.ccy);
     chartPicker('fxChart', 'fxChartPick', [...mine.map(a => ({ id: a.short, tv: a.tv })), { id: 'EUR/USD', tv: 'FX:EURUSD' }, { id: 'GBP/USD', tv: 'FX:GBPUSD' }, { id: 'USD/JPY', tv: 'FX:USDJPY' }, { id: 'Gold', tv: 'OANDA:XAUUSD' }]);
   }
@@ -2049,7 +2075,7 @@ function thesisHTML(th, news) {
     <div class="th-sec"><h4>What it is</h4><p>${esc(th.what)}</p></div>
     <div class="th-sec"><h4>The story it rides</h4><p>${esc(th.narrative)}</p></div>
     <div class="th-sec"><h4>How it’s doing</h4><p>${esc(th.doing)}</p></div>
-    ${news && news.length ? `<div class="th-sec"><h4>Latest news</h4><ul class="tnews">${news.slice(0, 3).map(n => `<li><a href="${esc(n.link)}" target="_blank" rel="noopener">${esc(n.title)}</a><small>${esc(n.source)}, ${ago(n.time)}</small></li>`).join('')}</ul></div>` : ''}
+    ${news && news.length ? `<div class="th-sec"><h4>Latest news</h4><ul class="tnews">${news.slice(0, 3).map(n => `<li><a href="${esc(safeUrl(n.link))}" target="_blank" rel="noopener">${esc(n.title)}</a><small>${esc(n.source)}, ${ago(n.time)}</small></li>`).join('')}</ul></div>` : ''}
     <div class="th-cases"><div class="th-sec bull"><h4>Bull case</h4>${list(th.bull, 'th-list')}</div><div class="th-sec bear"><h4>Bear case</h4>${list(th.bear, 'th-list')}</div></div>
     <div class="th-sec"><h4>What to watch</h4><p>${esc(th.watch)}</p></div>
   </div>`;
@@ -2057,11 +2083,11 @@ function thesisHTML(th, news) {
 function tokenCard(t, news, mine, aiThesis) {
   const th = aiThesis || t.thesis;
   const icon = t.icon || t.image;
-  const links = (t.links || []).filter(l => /^https?:/.test(l.url)).map(l => `<a href="${esc(l.url)}" target="_blank" rel="noopener nofollow">${esc(LINK_NAMES[l.type] || l.label || 'Link')}</a>`).join('');
+  const links = (t.links || []).filter(l => /^https?:/.test(l.url)).map(l => `<a href="${esc(safeUrl(l.url))}" target="_blank" rel="noopener nofollow">${esc(LINK_NAMES[l.type] || l.label || 'Link')}</a>`).join('');
   const open = store.get('thesisOpen', true);
   return `<article class="tok${mine ? ' mine' : ''}">
     <div class="nm">${icon ? `<img class="coin" src="${esc(icon)}" alt="" loading="lazy">` : `<span class="ph">${esc((t.symbol || '?').slice(0, 3))}</span>`}
-      <div>${t.url ? `<a href="${esc(t.url)}" target="_blank" rel="noopener">${esc(t.name)}</a>` : `<b>${esc(t.name)}</b>`}<small>${esc(t.symbol)}${t.chain ? ' · ' + esc(t.chain) : ''}</small></div>
+      <div>${t.url ? `<a href="${esc(safeUrl(t.url))}" target="_blank" rel="noopener">${esc(t.name)}</a>` : `<b>${esc(t.name)}</b>`}<small>${esc(t.symbol)}${t.chain ? ' · ' + esc(t.chain) : ''}</small></div>
       <div class="r"><span class="pr">${usd(t.price)}</span>${chg(t.ch24)}</div></div>
     ${th ? `<p class="th-head">${esc(th.headline)}</p><div class="th-tags"><span class="pill ${RISK_CLASS[th.risk] || ''}">Risk: ${esc(th.risk)}</span>${th.stage ? `<span class="pill">${esc(th.stage)}</span>` : ''}${th.source === 'ai' ? '<span class="pill acc">Written by AI</span>' : ''}</div>` : ''}
     <div class="stats"><span>Value<b>${big(t.mcap)}</b></span>${t.liq != null ? `<span>Liquidity<b>${big(t.liq)}</b></span><span>Volume<b>${big(t.vol24)}</b></span>` : `<span>7 days<b>${t.ch7 != null ? (t.ch7 > 0 ? '+' : '') + t.ch7.toFixed(1) + '%' : '—'}</b></span>`}</div>
@@ -2105,7 +2131,7 @@ PAGES.options = () => {
       ['next', 'What’s next', fb.next], ['play', 'Your game plan', fb.play],
       ['em', 'Expected move', '<div id="oEM"></div>'],
       ['vol', 'Fear gauges', '<div class="grid2"><section><h2 class="sec">Fear gauges</h2><div class="qgrid" id="oVol"></div></section><section><h2 class="sec">Expiration dates</h2><div id="oOpex"></div></section></div>'],
-      ['news', 'More news', '<div class="tab-links"><a class="more" href="/news">All news</a></div><ul class="slist" id="oNews"></ul>']]) })}`)) chartPicker('oChart', 'oChartPick', [{ id: 'S&P 500', tv: 'OANDA:SPX500USD' }, { id: 'Nasdaq 100', tv: 'OANDA:NAS100USD' }]);
+      ['news', 'More news', '<div class="tab-links"><a class="more" href="/news">All news</a></div><ul class="slist" id="oNews"></ul>']]) })}`, fb.closed ? 'closed' : 'open')) chartPicker('oChart', 'oChartPick', [{ id: 'S&P 500', tv: 'OANDA:SPX500USD' }, { id: 'Nasdaq 100', tv: 'OANDA:NAS100USD' }]);
   fb.load();
   startNow();
   const d = api('markets?section=options');
@@ -2192,7 +2218,7 @@ function histHTML(d, fc, act) {
   const fmtV = v => (d.kind === 'jobs' || d.kind === 'claims' ? Math.round(v) : d.kind === 'jolts' ? v.toFixed(2) : v.toFixed(1)) + unit;
   let line = `Average over the last ${pts.length}: ${fmtV(avg)}. Latest official: ${last.txt} (${histLab(last.d, d.kind, d.id)}).`;
   if (f != null) line += ` The forecast of ${fc} is ${Math.abs(f - avg) < Math.abs(avg) * 0.15 + 0.05 ? 'close to' : f > avg ? 'above' : 'below'} the recent average.`;
-  return `<p class="hist-cap">Last ${pts.length} releases${f != null ? ' and this one’s forecast' : ''}</p><svg viewBox="0 0 ${W} ${H}" class="hist-svg" role="img" aria-label="Bar chart of the last ${pts.length} releases">${svg}</svg><p class="hist-note">${esc(line)} <a href="${esc(d.link)}" target="_blank" rel="noopener">Official data: FRED</a></p>`;
+  return `<p class="hist-cap">Last ${pts.length} releases${f != null ? ' and this one’s forecast' : ''}</p><svg viewBox="0 0 ${W} ${H}" class="hist-svg" role="img" aria-label="Bar chart of the last ${pts.length} releases">${svg}</svg><p class="hist-note">${esc(line)} <a href="${esc(safeUrl(d.link))}" target="_blank" rel="noopener">Official data: FRED</a></p>`;
 }
 function histLab(dt, kind, id) {
   const d = new Date(dt + 'T12:00:00Z');
@@ -2396,7 +2422,8 @@ PAGES.glossary = () => {
     <input class="search" id="glQ" type="search" placeholder="Search terms, for example “yield” or “liquidity”" aria-label="Search the glossary">
     <div class="chips" role="group" aria-label="Category"><button class="chip" data-c="" aria-pressed="true">All</button>${cats.map(c => `<button class="chip" data-c="${esc(c)}" aria-pressed="false">${esc(c)}</button>`).join('')}</div>
     <div id="glList"></div>`);
-  const hl = (s, needle) => { const e = esc(s); if (!needle) return e; const re = new RegExp('(' + needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'ig'); return e.replace(re, '<mark>$1</mark>'); };
+  // Split the plain text on matches, escape each piece, then wrap the matches (so "S&P" can't become "S&<mark>a</mark>mp;P")
+  const hl = (s, needle) => { if (!needle) return esc(s); const re = new RegExp('(' + needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'ig'); return String(s).split(re).map((x, i) => i % 2 ? `<mark>${esc(x)}</mark>` : esc(x)).join(''); };
   const draw = () => {
     const needle = q.trim();
     const html = cats.filter(c => !cat || c === cat).map(c => {
@@ -2557,7 +2584,7 @@ PAGES.scorecard = () => {
         <div class="sc-row sc-head" role="row"><span role="columnheader">Call</span><span role="columnheader">Story</span><span role="columnheader">After 1 hour</span><span role="columnheader">At the close</span></div>
         ${d.calls.map(c => `<div class="sc-row" role="row">
           <span role="cell"><span class="pill ${c.dir}"><b>${esc(c.market === 'EURUSD' ? 'EUR/USD' : c.market)}</b> ${c.dir === 'up' ? '↑ Likely up' : '↓ Likely down'}</span><small>${new Date(c.time).toLocaleDateString('en-US', { timeZone: TZ, month: 'short', day: 'numeric' })}, ${fmtTime(c.time)}${c.price != null ? ` · at ${num(c.price, c.market === 'EURUSD' ? 4 : c.market === 'BTC' ? 0 : 2)}` : ''}</small></span>
-          <span role="cell" class="sc-story"><a href="${esc(c.link)}" target="_blank" rel="noopener">${esc(c.headline)}</a><small>${esc(c.source || '')}${c.outlets > 1 ? ` and ${c.outlets - 1} more` : ' · one outlet'}</small></span>
+          <span role="cell" class="sc-story"><a href="${esc(safeUrl(c.link))}" target="_blank" rel="noopener">${esc(c.headline)}</a><small>${esc(c.source || '')}${c.outlets > 1 ? ` and ${c.outlets - 1} more` : ' · one outlet'}</small></span>
           <span role="cell" class="sc-g">${gradeCell(c.hour)}</span>
           <span role="cell" class="sc-g">${gradeCell(c.close)}</span></div>`).join('')}
       </div>${stamp(d)}`;
@@ -3154,7 +3181,7 @@ async function openThread(id) {
       <div class="th-ai"><button type="button" class="ai-btn" id="thAiBtn">${SPARK}AI read on this story</button><div id="thAiOut"></div></div>
       ${thChart(d)}
       <p class="hist-cap">Timeline</p>
-      <ol class="th-tl">${d.items.map(x => `<li><span class="th-when">${new Date(x.t).toLocaleDateString('en-US', { timeZone: TZ, month: 'short', day: 'numeric' })}<small>${fmtTime(x.t)}</small></span><span class="th-it">${x.link ? `<a href="${esc(x.link)}" target="_blank" rel="noopener">${esc(x.title)}</a>` : esc(x.title)}<small>${esc(x.source || '')}</small></span><span class="th-mv ${x.next ? (x.next.way === 'up' ? 'up' : x.next.way === 'down' ? 'down' : '') : ''}">${x.next ? esc(rhymeMove(x.next.move, x.next.unit)) : x.closed ? '<small class="faint">Market closed</small>' : ''}</span></li>`).join('')}</ol>
+      <ol class="th-tl">${d.items.map(x => `<li><span class="th-when">${new Date(x.t).toLocaleDateString('en-US', { timeZone: TZ, month: 'short', day: 'numeric' })}<small>${fmtTime(x.t)}</small></span><span class="th-it">${x.link ? `<a href="${esc(safeUrl(x.link))}" target="_blank" rel="noopener">${esc(x.title)}</a>` : esc(x.title)}<small>${esc(x.source || '')}</small></span><span class="th-mv ${x.next ? (x.next.way === 'up' ? 'up' : x.next.way === 'down' ? 'down' : '') : ''}">${x.next ? esc(rhymeMove(x.next.move, x.next.unit)) : x.closed ? '<small class="faint">Market closed</small>' : ''}</span></li>`).join('')}</ol>
       <p class="rh-foot">Grouped automatically from the headlines the site has saved. The number on the right is how ${esc(d.name)} moved in the hour after each headline (none when the market was closed). Follow a story to get an alert when a new headline lands.</p>`;
     const ab = $('#thAiBtn'); if (ab) ab.onclick = async () => {
       const out = $('#thAiOut'); ab.disabled = true; out.innerHTML = skel(2);
@@ -3232,6 +3259,8 @@ $('#bellBtn').onclick = () => { if (started) openAlerts(); };
 // Privacy and terms show straight away, signed in or not
 if (/^\/(privacy|terms)\/?$/.test(location.pathname)) { const k = location.pathname.replace(/\W/g, ''); shownPage = k; main.dataset.page = k; PAGES[k](); }
 initMe(() => {
+  // Signing out and back in without a reload calls this again: only refresh the page, don't start a second set of timers
+  if (started) { dispatchEvent(new Event('open:profile')); return; }
   started = true;
   orderTabs(); mountStrip(); route(); pollResults(); lastRefresh = Date.now(); mStatus();
   startLive();
@@ -3264,7 +3293,12 @@ function mStatus() {
   }
   el.hidden = false;
 }
-setInterval(() => { if (document.visibilityState === 'visible') mStatus(); }, 1000);
+setInterval(() => {
+  if (document.visibilityState !== 'visible') return;
+  mStatus();
+  // keep "Reopens … in 3h 12m" counting down
+  main.querySelectorAll('[data-until]').forEach(x => { const t = hmLeft(+x.dataset.until - Date.now()); if (x.textContent !== t) x.textContent = t; });
+}, 1000);
 
 // Headlines: check for new stories every 30 seconds on the News page
 setInterval(() => {

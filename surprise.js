@@ -6,7 +6,10 @@
 // 2. Reaction = the biggest swing away from the price at the release inside the first 15 minutes, measured
 //    against a normal 15 minutes starting at the same time of day on earlier days (8+ days needed).
 // 3. Nothing after the first 15 minutes counts. Inside the 15 minutes it says "so far".
-// 4. The verdict compares the two: shock treated as a shock, shrugged off, overreaction, or non-event.
+// 4. The verdict compares the two: shock treated as a shock, shrugged off, measured, overreaction, a mild surprise
+//    that moved the market more than usual (1.5-3x normal), or non-event (only when the market also moved normally).
+// 5. The release price is the bar that contains the release time, or the first bar up to 5 minutes after it.
+//    A bar from before a gap in the feed is never used.
 "use strict";
 
 const NY = "America/New_York";
@@ -59,9 +62,12 @@ function sizeSurprise({ actual, forecast, history, past }) {
 // Biggest swing away from the starting price within [t, t+win), as a % of that price. Bars: {t,o,h,l,c}, any spacing.
 function swing(bars, t, win, now) {
   const end = Math.min(t + win, now == null ? Infinity : now);
-  // the bar that contains t (or the first one after it, if the feed has a gap of under 5 minutes)
-  const i0 = bars.findIndex((b, i) => b.t + ((i + 1 < bars.length ? bars[i + 1].t : b.t + 6e4) - b.t) > t);
-  if (i0 < 0 || bars[i0].t - t > 5 * 6e4) return null;
+  // the bar that contains t (bar.t <= t < bar.t + the feed's usual spacing); if the feed has a gap there, the first
+  // bar starting at or after t, at most 5 minutes later. Never a bar that started before a gap (stale price).
+  const gaps = bars.slice(1, 200).map((b, i) => b.t - bars[i].t).filter((g) => g > 0), step = median(gaps) || 6e4;
+  let i0 = bars.findIndex((b) => b.t <= t && t < b.t + step);
+  if (i0 < 0) i0 = bars.findIndex((b) => b.t >= t && b.t - t <= 5 * 6e4);
+  if (i0 < 0) return null;
   const p0 = bars[i0].o;
   let hi = p0, lo = p0, last = p0, any = false;
   for (let i = i0; i < bars.length && bars[i].t < end; i++) { hi = Math.max(hi, bars[i].h); lo = Math.min(lo, bars[i].l); last = bars[i].c; any = true; }
@@ -103,6 +109,7 @@ function verdict(S, R, mkName) {
   if (bigS && R.band === "normal") return { kind: "shrug", head: "Big surprise, market shrugged", text: `The miss was large, but ${mkName} barely moved${so}. Traders may not believe it, other parts of the report may cancel it out, or it was already priced in. Shrugged-off surprises sometimes get a second, slower move.` };
   if (bigS) return { kind: "measured", head: "Big surprise, measured reaction", text: `${mkName} moved more than usual (${R.ratio}× a normal 15 minutes${so}), but less than a miss this size can cause.` };
   if (bigR) return { kind: "over", head: "Small surprise, big reaction", text: `The headline number was close to forecast, yet ${mkName} moved ${R.ratio}× a normal 15 minutes${so}. Something else drove it: revisions to past months, the details inside the report, or traders positioned the wrong way.` };
+  if (R.band === "moved") return { kind: "mild", head: "Small surprise, bigger move", text: `Close to forecast, but ${mkName} moved more than usual (${R.ratio}× a normal 15 minutes${so}). Something beyond the headline number may be in play.` };
   return { kind: "quiet", head: "Non-event", text: `Close to what was expected, and ${mkName} treated it that way${so}.` };
 }
 
