@@ -3927,11 +3927,11 @@ async function buildBackground(q) {
     subject = hit.title; heads = [hit.title + (aboutOf(hit) ? " — " + aboutOf(hit) : "")];
   }
   const raw = await claudeRaw({ web: true, searches: 2, model: process.env.ANTHROPIC_MODEL || "claude-haiku-5-5", maxTokens: 700, timeout: 45e3,
-    system: `You find out what a news story is actually about and explain it to someone who doesn't follow the news. Search the web once or twice (major outlets: Reuters, AP, Bloomberg, CNBC, WSJ, BBC, FT), then write 4 to 6 short, simple sentences in plain prose: who is involved and who they are, what actually happened, the key details, and why it's a big deal. Real specifics, never vague words like "a scandal" or "troubles". Only state what your search results support. If something isn't confirmed, say so in one sentence. No markdown, no headings, no lists, no advice, nothing about where prices go next.`,
+    system: `You find out what a news story is actually about and explain it to someone who doesn't follow the news. Search the web once or twice (major outlets: Reuters, AP, Bloomberg, CNBC, WSJ, BBC, FT), then write 4 to 6 short, simple sentences in plain prose. The FIRST sentence names the main person or company and says who they are (e.g. "Jensen Huang co-founded Nvidia, the chip company behind most AI, and has run it for over 30 years."). Then: who else is involved, what actually happened, the key details, and why it's a big deal. Real specifics, never vague words like "a scandal" or "troubles". Only state what your search results support. If something isn't confirmed, say so in one sentence. No markdown, no headings, no lists, no advice, nothing about where prices go next.`,
     messages: [{ role: "user", content: `Story: ${subject}\nRecent headlines:\n- ${heads.join("\n- ")}` }] });
   if (!raw || !raw.text) throw new HttpErr(502, "Couldn’t look that up right now.");
   // keep sentences whose numbers appear in the headlines or in the passages the search returned
-  const ok = heads.join(" ") + " " + subject + " " + raw.cited;
+  const ok = heads.join(" ") + " " + subject + " " + raw.cited + " " + raw.sources.map((x) => x.title).join(" ");
   const text = factClean(raw.text.replace(/\s+/g, " ").trim(), ok, 1200);
   return { kind, subject, text, sources: raw.sources.slice(0, 5), updated: Date.now() };
 }
