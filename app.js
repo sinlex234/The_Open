@@ -2693,12 +2693,18 @@ document.addEventListener('click', e => {
 function mountChatFab() {
   if (document.getElementById('chatFab')) return;
   const fab = document.createElement('button'); fab.id = 'chatFab'; fab.type = 'button'; fab.className = 'chat-fab'; fab.setAttribute('aria-expanded', 'false'); fab.setAttribute('aria-controls', 'chatPanel');
-  fab.innerHTML = `${SPARK}<span>Ask the market</span>`;
+  fab.innerHTML = `${SPARK}<span>Ask the market</span>`; fab.title = 'Ask the market';
   const panel = document.createElement('section'); panel.id = 'chatPanel'; panel.className = 'chat-panel'; panel.hidden = true; panel.setAttribute('aria-label', 'Ask the market');
-  document.body.append(fab, panel);
-  const open = (on) => { panel.hidden = !on; fab.setAttribute('aria-expanded', String(on)); if (on) { panel.innerHTML = `<div class="chat-ph"><b>${SPARK}Ask the market</b><button type="button" class="linkbtn" data-chatclose aria-label="Close">✕</button></div>${chatHTML('general', 'general')}`; panel.querySelector('input')?.focus(); } };
+  const tools = document.querySelector('.mast-tools');
+  if (tools) tools.insertBefore(fab, tools.firstChild); else document.body.append(fab);
+  document.body.append(panel);
+  // the panel drops down from the header, under the button
+  const place = () => { const r = fab.getBoundingClientRect(); panel.style.top = Math.round(r.bottom + 8) + 'px'; panel.style.right = Math.max(8, Math.round(window.innerWidth - r.right)) + 'px'; };
+  window.addEventListener('resize', () => { if (!panel.hidden) place(); });
+  const open = (on) => { panel.hidden = !on; fab.setAttribute('aria-expanded', String(on)); if (on) { place(); panel.innerHTML = `<div class="chat-ph"><b>${SPARK}Ask the market</b><button type="button" class="linkbtn" data-chatclose aria-label="Close">✕</button></div>${chatHTML('general', 'general')}`; panel.querySelector('input')?.focus(); } };
   fab.onclick = () => open(panel.hidden);
   panel.addEventListener('click', e => { if (e.target.closest('[data-chatclose]')) open(false); });
+  document.addEventListener('click', e => { if (!panel.hidden && !panel.contains(e.target) && !fab.contains(e.target) && e.target.isConnected) open(false); });
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && !panel.hidden) open(false); });
   const show = () => { fab.hidden = !signedIn(); if (fab.hidden) open(false); };
   show(); window.addEventListener('open:plan', show); window.addEventListener('open:user', show);
@@ -3353,7 +3359,7 @@ async function openThread(id) {
       <p class="rh-foot">Grouped automatically from the headlines the site has saved. The number on the right is how ${esc(d.name)} moved in the hour after each headline (none when the market was closed). Follow a story to get an alert when a new headline lands.</p>`;
     const ab = $('#thAiBtn'); if (ab) ab.onclick = async () => {
       const out = $('#thAiOut'); ab.disabled = true; out.innerHTML = skel(2);
-      try { const x = await postAI('threadai', { id, markets: airMarkets() }); plan.used = x.used; x.id = id; out.innerHTML = x.v === 2 ? storyAIHTML(x, d.title) : airResultHTML(x, d.title); }
+      try { const x = await postAI('threadai', { id, markets: airMarkets() }); plan.used = x.used; x.id = id; out.innerHTML = x.v === 2 ? storyAIHTML(x, d.title) : airResultHTML(x, d.title); ab.hidden = true; }
       catch (e) { out.innerHTML = upsellHTML(e.why, /switched on/.test(e.message) ? 'AI reads aren’t switched on yet. The story read above is from the site’s rules.' : e.message); }
       ab.disabled = false;
     };
