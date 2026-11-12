@@ -3169,6 +3169,24 @@ async function sbRpc(fn, args) {
   if (!r.ok) { const e = new Error(`Supabase ${r.status}: ${txt.slice(0, 120)}`); e.missing = /PGRST202|Could not find the function/i.test(txt); throw e; }
   try { return JSON.parse(txt); } catch { return txt; }
 }
+// ---------- Live watch: what the always-on watcher (Railway) found ----------
+async function buildWatch() {
+  const now = Date.now(), iso = (ms) => new Date(now - ms).toISOString();
+  const q = (path) => sb(path).catch(() => null);
+  const [moves, radar, speech, beat] = await Promise.all([
+    q(`open_moves?select=*&t=gte.${iso(24 * 36e5)}&order=t.desc&limit=20`),
+    q(`open_radar?select=*&t=gte.${iso(3 * 36e5)}&order=t.desc&limit=200`),
+    q(`open_speech?select=*&t=gte.${iso(7 * 864e5)}&order=t.desc&limit=8`),
+    q(`open_beat?select=t,stats&order=t.desc&limit=1`)]);
+  // latest row per coin, best scores first
+  const seen = new Set(), coins = [];
+  (radar || []).forEach((r) => { const k = r.chain + ":" + r.address; if (seen.has(k)) return; seen.add(k); coins.push(r); });
+  coins.sort((a, b) => b.score - a.score);
+  const last = beat && beat[0] ? Date.parse(beat[0].t) : null;
+  return { on: !!(last && now - last < 25 * 6e4), lastBeat: last, ai: !!(beat && beat[0] && beat[0].stats && beat[0].stats.ai),
+    moves: (moves || []).map((m) => ({ ...m, t: Date.parse(m.t) })), radar: coins.slice(0, 12).map((r) => ({ ...r, t: Date.parse(r.t) })),
+    speeches: (speech || []).map((x) => ({ ...x, t: Date.parse(x.t) })), updated: now };
+}
 var CALL_MKTS = { NQ: { m: "futures", assets: ["NQ"], sym: "NQ=F", dp: 2, unit: "pts", flat: 0.1 }, BTC: { m: "crypto", assets: ["BTC"], sym: "BTC-USD", dp: 0, unit: "$", flat: 0.3 }, EURUSD: { m: "forex", assets: ["EURUSD"], sym: "EURUSD=X", dp: 5, unit: "pips", pip: 1e-4, flat: 0.05 } };
 // The calls a reader of each market sees: the top 3 briefing stories for that market, up or down only
 function callsToLog(allStories, upcoming, pick, px) {
@@ -4399,6 +4417,7 @@ var ROUTES = {
   adjust: [() => memo("adjust", 10 * 6e4, computeAdjust).then((v) => { _adj.v = v; _adj.t = Date.now(); return v; }), 300],
   rhyme: [(q) => buildRhyme(q), 600],
   threads: [() => buildThreads(), 300],
+  watch: [() => buildWatch(), 30],
   // "How today has played out" (sym=) and the session recap (i=) share this name; each gets its own data
   recap: [(q) => q.sym && !q.i ? build10(String(q.sym).toUpperCase()) : buildRecap(q), 300],
   thread: [(q) => buildThread(String(q.id || "").slice(0, 80)), 300],

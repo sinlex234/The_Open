@@ -125,6 +125,18 @@ globalThis.fetch = async (url, opts) => {
   }
   if (u.includes('ff_calendar_thisweek')) return ok(calendar());
   if (u.includes('ff_calendar_nextweek')) return ok([]);
+  // the always-on watcher's tables (Railway writes them; the site reads them)
+  if (u.includes('supabase.co/rest/v1/open_moves')) { const n = Date.now(); return ok([
+    { id: 'NQ:1', t: new Date(n - 12 * 6e4).toISOString(), mkt: 'NQ', name: 'Nasdaq 100 futures', pct: -0.62, ratio: 7.4, price: 20841.5, price_from: 20971.25, cause_kind: 'release', cause: 'CPI m/m came out at 0.5% (forecast 0.3%)', cause_source: null, why: null },
+    { id: 'CL:1', t: new Date(n - 95 * 6e4).toISOString(), mkt: 'CL', name: 'Crude oil', pct: 1.31, ratio: 6.2, price: 71.84, price_from: 70.91, cause_kind: 'headline', cause: 'Iran says it will close talks on the Strait of Hormuz', cause_source: 'Reuters', why: 'Any threat to Hormuz shipping raises the risk of less oil reaching the market, so prices jumped.' },
+    { id: 'BTC:1', t: new Date(n - 5 * 36e5).toISOString(), mkt: 'BTC', name: 'Bitcoin', pct: -1.4, ratio: 5.6, price: 101240, price_from: 102680, cause_kind: 'none', cause: "No clear news behind it yet. Moves like this can come from big orders, stop-loss runs or news that hasn't hit the wires.", cause_source: null, why: null }]); }
+  if (u.includes('supabase.co/rest/v1/open_radar')) { const n = Date.now(); return ok([
+    { id: 'a', t: new Date(n - 4 * 6e4).toISOString(), chain: 'solana', address: 'So1aaa', symbol: 'HAMSTER', name: 'Hamster Wheel', url: 'https://dexscreener.com/solana/x', price: 0.0042, mcap: 4.2e6, liq: 3.1e5, vol_h1: 1.9e6, chg_h1: 64.2, chg_h6: 140, chg_h24: 210, buys_h1: 2400, sells_h1: 1700, age_h: 9, score: 81, flags: [{ tone: 'warn', text: 'Brand new: trading for 9h' }, { tone: 'info', text: 'Frenzy: this hour\'s trading is over 5x its liquidity' }, { tone: 'info', text: 'Someone paid to promote it on DexScreener' }, { tone: 'warn', text: 'RugCheck: Top 10 holders own a large share' }] },
+    { id: 'b', t: new Date(n - 9 * 6e4).toISOString(), chain: 'base', address: '0xbbb', symbol: 'TOSHI2', name: 'Toshi Two', url: 'https://dexscreener.com/base/y', price: 0.00031, mcap: 1.2e7, liq: 9.8e5, vol_h1: 6.4e5, chg_h1: 22.5, chg_h6: 48, chg_h24: 75, buys_h1: 820, sells_h1: 900, age_h: 140, score: 58, flags: [{ tone: 'warn', text: 'More sellers than buyers this hour' }] }]); }
+  if (u.includes('supabase.co/rest/v1/open_speech')) { const n = Date.now(); return ok([
+    { id: 'https://www.federalreserve.gov/x.htm', t: new Date(n - 3 * 36e5).toISOString(), bank: 'Federal Reserve', kind: 'speech', title: 'The Economic Outlook', speaker: 'Governor Waller', url: 'https://www.federalreserve.gov/x.htm', tone: 'hawkish', summary: 'Waller says inflation progress has stalled and he is not ready to support another cut yet. That pushes back against a December cut.',
+      lines: [{ quote: 'I am not yet confident that inflation is on a sustainable path back to 2 percent.', means: 'He wants more proof before cutting again.', markets: ['Treasury yields', 'US dollar'], dir: 'hawkish' }, { quote: 'The labor market remains solid, which gives us time to be patient.', means: 'No rush to cut while jobs hold up.', markets: ['US stocks'], dir: 'hawkish' }] }]); }
+  if (u.includes('supabase.co/rest/v1/open_beat')) return ok([{ t: new Date().toISOString(), stats: { ai: true } }]);
   if (u.includes('supabase.co/rest/v1/open_calls')) {
     if (opts && opts.method === 'POST') { globalThis.__posted = (globalThis.__posted || []).concat(JSON.parse(opts.body)); return new Response('', { status: 201 }); }
     const H = 36e5, now = Date.now();

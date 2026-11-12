@@ -1502,7 +1502,7 @@ PAGES.today = () => {
     </div>
     <div class="since" id="since" hidden></div>
     <div class="ls-soon" id="liveSoon" hidden></div>
-    <section class="th-strip" id="thStrip" hidden></section><section class="sec-ai th-ai-sec" id="thAiSec" hidden><button type="button" class="ai-btn" data-secai="stories" aria-expanded="false">${SPARK}AI read on the developing stories</button><div class="sec-ai-out"></div></section>
+    <section class="mv-strip" id="mvStrip" hidden></section><section class="th-strip" id="thStrip" hidden></section><section class="sec-ai th-ai-sec" id="thAiSec" hidden><button type="button" class="ai-btn" data-secai="stories" aria-expanded="false">${SPARK}AI read on the developing stories</button><div class="sec-ai-out"></div></section>
     <div class="front3">
       <div class="t-left">
         <section class="briefing t-news"><div class="sec-row"><h2 class="sec">Briefing for ${esc(sessionDay().long)}</h2><a href="/news">All news</a></div><ol class="bfeed" id="bfeed">${'<li>' + skel(3) + '</li>'}</ol></section>
@@ -1822,7 +1822,7 @@ PAGES.news = () => {
     <div class="chips" role="group" aria-label="Market"><span class="chips-label">Market</span>${[['all', 'Everything'], ['futures', 'Stocks and futures'], ['forex', 'Forex'], ['crypto', 'Crypto'], ['memes', 'Memecoins']].map(([k, l]) => `<button class="chip" data-mk="${k}" aria-pressed="${f.market === k}">${l}</button>`).join('')}</div>
     <div class="chips" role="group" aria-label="Topic"><span class="chips-label">Topic</span><button class="chip" data-tp="" aria-pressed="${!f.topic}">All topics</button>${Object.entries(SECTION_NAMES).map(([k, l]) => `<button class="chip" data-tp="${k}" aria-pressed="${f.topic === k}">${l}</button>`).join('')}</div>
     <div class="chips" role="group" aria-label="Show"><span class="chips-label">Show</span>${[['matters', 'Market-moving'], ['high', 'Big stories only'], ['all', 'Everything']].map(([k, l]) => `<button class="chip" data-im="${k}" aria-pressed="${f.impact === k}">${l}</button>`).join('')}<button class="chip" id="mineFirst" aria-pressed="${f.mine}">My markets first</button></div>
-    ${shellHTML({ noChart: true, left: '<a class="tn-slim" id="tradeNews" href="/calendar" hidden></a><section class="sec-ai"><button type="button" class="ai-btn" data-secai="news" aria-expanded="false">' + SPARK + 'AI read on today’s news</button><div class="sec-ai-out"></div></section><section class="th-strip" id="thStrip" hidden></section><section class="sec-ai th-ai-sec" id="thAiSec" hidden><button type="button" class="ai-btn" data-secai="stories" aria-expanded="false">' + SPARK + 'AI read on the developing stories</button><div class="sec-ai-out"></div></section><div class="newbar" id="newBar" hidden></div><div class="newsroom" id="wireList"></div><p class="stale-note" id="staleNote" hidden></p>' })}`);
+    ${shellHTML({ noChart: true, left: '<a class="tn-slim" id="tradeNews" href="/calendar" hidden></a><section class="sec-ai"><button type="button" class="ai-btn" data-secai="news" aria-expanded="false">' + SPARK + 'AI read on today’s news</button><div class="sec-ai-out"></div></section><section class="mv-strip" id="mvStrip" hidden></section><section class="sp-sec" id="spSec" hidden></section><section class="th-strip" id="thStrip" hidden></section><section class="sec-ai th-ai-sec" id="thAiSec" hidden><button type="button" class="ai-btn" data-secai="stories" aria-expanded="false">' + SPARK + 'AI read on the developing stories</button><div class="sec-ai-out"></div></section><div class="newbar" id="newBar" hidden></div><div class="newsroom" id="wireList"></div><p class="stale-note" id="staleNote" hidden></p>' })}`);
   startNow();
   mountTradeSlim('tradeNews');
   const rer = () => { store.set('newsFilter', f); refreshing = false; PAGES.news(); };
@@ -2132,6 +2132,7 @@ PAGES.memes = () => {
       ['next', 'What’s next', fb.next], ['play', 'Your game plan', fb.play],
       ['for', 'What it means for you', '<ul class="fyl" id="mFor"></ul><p class="small faint" id="mIntro" style="margin-top:14px"></p>'],
       ['majors', 'Established names', '<div class="tab-links"><button class="linkbtn" id="thToggle" type="button"></button></div><div class="mgrid" id="mMajors"></div>'],
+      ['radar', 'Taking off now', '<div id="mRadar"><p class="empty">Loading the radar…</p></div>'],
       ['hot', 'Getting attention', '<p class="small faint" style="margin:0 0 14px">“Promoted” tokens are ones someone paid to put in front of buyers on DexScreener. That’s attention, not quality.</p><div class="mgrid" id="mHot"></div>']]) })}`)) chartPicker('mChart', 'mChartPick', [{ id: 'Bitcoin', tv: 'BINANCE:BTCUSDT' }, { id: 'Ethereum', tv: 'BINANCE:ETHUSDT' }, { id: 'Dogecoin', tv: 'BINANCE:DOGEUSDT' }, { id: 'Pepe', tv: 'BINANCE:PEPEUSDT' }, { id: 'Bonk', tv: 'BINANCE:BONKUSDT' }, { id: 'Dogwifhat', tv: 'BINANCE:WIFUSDT' }]); // Bitcoin leads: memecoins mostly follow it
   // The Live read only covers Bitcoin, NQ and EUR/USD, so it isn't shown on the memecoin page
   { const pb = $('#pulseBlock'); if (pb) pb.remove(); }
@@ -3251,6 +3252,51 @@ function thToggle(id) {
   document.querySelectorAll(`[data-thf="${CSS.escape(id)}"]`).forEach(b => { const on = thFollowing(id); b.classList.toggle('on', on); b.textContent = on ? '★ Following' : '☆ Follow'; b.setAttribute('aria-pressed', on); });
 }
 const thMoveTxt = x => x ? `${x.mk === 'EURUSD' ? 'EUR/USD' : x.mk === 'BTC' ? 'Bitcoin' : 'NQ'} ${rhymeMove(x.change, x.unit)} since this round began` : '';
+// ---------- Live watch: sudden moves, memecoin radar and central bank speeches, from the always-on watcher ----------
+const WATCH = { d: null };
+const wHM = t => new Date(t).toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' });
+const wDay = t => new Date(t).toLocaleDateString('en-US', { timeZone: 'America/New_York', weekday: 'short', month: 'short', day: 'numeric' });
+const wUsd = v => v == null ? '–' : v >= 1e9 ? '$' + (v / 1e9).toFixed(1) + 'B' : v >= 1e6 ? '$' + (v / 1e6).toFixed(1) + 'M' : v >= 1e3 ? '$' + Math.round(v / 1e3) + 'K' : '$' + Math.round(v);
+const wPct = v => v == null ? '–' : (v > 0 ? '+' : '') + (Math.abs(v) >= 100 ? Math.round(v) : v.toFixed(1)) + '%';
+function moveHTML(m) {
+  const up = m.pct > 0, today = new Date(m.t).toDateString() === new Date().toDateString();
+  const cause = m.cause_kind === 'release' ? `<b>Behind it:</b> ${esc(m.cause)}` : m.cause_kind === 'headline' ? `<b>Behind it:</b> ${esc(m.cause)}${m.cause_source ? ` <span class="faint">· ${esc(m.cause_source)}</span>` : ''}${m.why ? `<br><span class="faint">${esc(m.why)}</span>` : ''}` : `<span class="faint">${esc(m.cause)}</span>`;
+  return `<li class="mv-row"><span class="mv-t">${today ? '' : esc(wDay(m.t)) + ' · '}${esc(wHM(m.t))} ET</span>
+    <p class="mv-h"><b>${esc(m.name)}</b> <span class="${up ? 'up' : 'down'}">${up ? 'jumped' : 'dropped'} ${Math.abs(m.pct).toFixed(2)}%</span> in 5 minutes <span class="mv-x">${m.ratio}× a normal 5 minutes</span></p>
+    <p class="mv-c">${cause}</p></li>`;
+}
+function renderMoves() {
+  const el = $('#mvStrip'); if (!el || !WATCH.d) return;
+  const list = WATCH.d.moves.slice(0, shownPage === 'news' ? 8 : 4);
+  el.innerHTML = `<div class="sec-row"><h2 class="sec">Sudden moves</h2><span class="faint small">${WATCH.d.on ? '<i class="live-dot"></i>Watching 8 markets every minute' : 'Watcher offline'}</span></div>
+    ${list.length ? `<ul class="mv-list">${list.map(moveHTML).join('')}</ul>` : '<p class="small faint mv-none">No sudden moves in the last 24 hours. When Nasdaq, the S&amp;P, gold, oil, EUR/USD, USD/JPY, Bitcoin or Ethereum moves 5× more than normal in 5 minutes, it shows up here with the news behind it.</p>'}`;
+  el.hidden = !WATCH.d.on && !list.length;
+}
+const TONE_TXT = { hawkish: 'Leans to higher rates', dovish: 'Leans to rate cuts', neutral: 'No clear lean' };
+function renderSpeeches() {
+  const el = $('#spSec'); if (!el || !WATCH.d) return;
+  const list = WATCH.d.speeches.slice(0, 4);
+  if (!list.length) { el.hidden = true; return; }
+  el.innerHTML = `<div class="sec-row"><h2 class="sec">Central bank speeches</h2><span class="faint small">Read the moment they’re posted</span></div>
+    <div class="sp-list">${list.map(x => `<article class="sp-card"><div class="sp-top"><span class="sp-k">${esc(x.bank)} · ${esc(wDay(x.t))} ${esc(wHM(x.t))} ET</span><span class="sp-tone ${esc(x.tone)}">${esc(TONE_TXT[x.tone] || x.tone)}</span></div>
+      <b class="sp-title">${esc(x.speaker ? x.speaker + ': ' : '')}${esc(x.title)}</b>
+      ${x.summary ? `<p class="sp-sum">${esc(x.summary)}</p>` : ''}
+      ${(x.lines || []).length ? `<ul class="sp-lines">${x.lines.map(l => `<li><q>${esc(l.quote)}</q><span>${esc(l.means)}${(l.markets || []).length ? ` <em class="faint">· ${esc(l.markets.join(', '))}</em>` : ''}</span></li>`).join('')}</ul>` : '<p class="small faint">Nothing in it that should move markets.</p>'}
+      <a class="sp-link" href="${esc(safeUrl(x.url))}" target="_blank" rel="noopener">Read the full text</a></article>`).join('')}</div>`;
+  el.hidden = false;
+}
+function renderRadar() {
+  const el = $('#mRadar'); if (!el || !WATCH.d) return;
+  const list = WATCH.d.radar;
+  el.innerHTML = `<p class="small faint" style="margin:0 0 14px">Coins jumping right now with real trading behind them, found by our watcher every 3 minutes. Most runs like this reverse, often fast. Every coin shows its warning signs.${WATCH.d.on ? '' : ' <b>The watcher is offline right now.</b>'}</p>
+    ${list.length ? `<div class="rd-list">${list.map(r => `<article class="rd-card"><div class="rd-top"><b>${esc(r.symbol)}</b><span class="faint">${esc(r.name)} · ${esc(r.chain)}</span><span class="rd-up ${r.chg_h1 >= 0 ? 'up' : 'down'}">${wPct(r.chg_h1)} <small>1h</small></span></div>
+      <div class="rd-stats"><span>${wPct(r.chg_h24)} <small>24h</small></span><span>${wUsd(r.vol_h1)} <small>traded this hour</small></span><span>${wUsd(r.liq)} <small>liquidity</small></span><span>${wUsd(r.mcap)} <small>value</small></span>${r.age_h != null ? `<span>${r.age_h < 24 ? Math.max(1, Math.round(r.age_h)) + 'h' : Math.round(r.age_h / 24) + 'd'} <small>old</small></span>` : ''}</div>
+      ${(r.flags || []).length ? `<ul class="rd-flags">${r.flags.map(f => `<li class="${esc(f.tone)}">${esc(f.text)}</li>`).join('')}</ul>` : ''}
+      <div class="rd-foot"><span class="faint">Spotted ${esc(ago(r.t))}</span><a href="${esc(safeUrl(r.url))}" target="_blank" rel="noopener">Chart on DexScreener</a></div></article>`).join('')}</div>`
+      : '<p class="empty">Nothing is taking off right now. Coins show up here when they’re up 20%+ in an hour with real money trading.</p>'}`;
+}
+function renderWatch() { renderMoves(); renderSpeeches(); renderRadar(); }
+async function loadWatch() { try { WATCH.d = await api('watch', 30e3); renderWatch(); } catch {} }
 async function loadThreads() {
   try { const d = await api('threads', 5 * 60e3); TH.list = d.threads || []; TH.byStory = {}; TH.list.forEach(t => (t.live || []).forEach(id => { if (!TH.byStory[id]) TH.byStory[id] = t; })); TH.loaded = true; } catch {}
   renderThreadStrip(); markThreads();
@@ -3380,8 +3426,9 @@ initMe(() => {
   started = true;
   orderTabs(); mountStrip(); route(); pollResults(); lastRefresh = Date.now(); mStatus();
   startLive();
-  new MutationObserver(() => { if (LS.loaded && main.querySelector('.ff-row[data-k]:not([data-lsd])')) { main.querySelectorAll('.ff-row[data-k]').forEach(r => r.dataset.lsd = 1); lsMarkCalendar(); } if (TH.loaded) { if (main.querySelector('[data-id]:not([data-thd])')) markThreads(); const st = $('#thStrip'); if (st && st.hidden && TH.list.length && !st.dataset.done) { st.dataset.done = 1; renderThreadStrip(); } } }).observe(main, { childList: true, subtree: true });
+  new MutationObserver(() => { if (LS.loaded && main.querySelector('.ff-row[data-k]:not([data-lsd])')) { main.querySelectorAll('.ff-row[data-k]').forEach(r => r.dataset.lsd = 1); lsMarkCalendar(); } if (WATCH.d) { const w = main.querySelector('#mvStrip:not([data-done]), #spSec:not([data-done]), #mRadar:not([data-done])'); if (w) { main.querySelectorAll('#mvStrip, #spSec, #mRadar').forEach(x => x.dataset.done = 1); renderWatch(); } } if (TH.loaded) { if (main.querySelector('[data-id]:not([data-thd])')) markThreads(); const st = $('#thStrip'); if (st && st.hidden && TH.list.length && !st.dataset.done) { st.dataset.done = 1; renderThreadStrip(); } } }).observe(main, { childList: true, subtree: true });
   loadThreads(); setInterval(() => { if (document.visibilityState === 'visible') loadThreads(); }, 5 * 60e3);
+  loadWatch(); setInterval(() => { if (document.visibilityState === 'visible') loadWatch(); }, 60e3);
   api('calendar', 10 * 60e3).then(d => { calendarCache = d.events; }).catch(() => {});
   startAlerts({ threads: () => TH.list, openThread, calendar: () => (LS.cal && LS.cal.length ? LS.cal : calendarCache), live: lsFor, open: x => { if (x.kind === 'stream') { const ch = lsChan(x.src); openPlayer(x.src, { title: `${x.ev.name || x.ev.title} · ${ch.name}` }); } else openRoom(x); }, wire: () => api('wire?section=all', 60e3).then(d => d.items), levels: levelRows });
 });

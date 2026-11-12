@@ -1,0 +1,7 @@
+{
+  "name": "the-open-one-watcher",
+  "private": true,
+  "description": "The Open One's always-on watcher: sudden moves, memecoin radar, central bank speeches",
+  "scripts": { "start": "node index.mjs" },
+  "engines": { "node": ">=20" }
+}
