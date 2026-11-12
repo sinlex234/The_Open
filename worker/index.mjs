@@ -35,11 +35,16 @@ async function save(tbl, rows) {
 }
 async function ask(system, user, maxTokens = 900) {
   if (!AI_KEY) return null;
-  const call = (model) => fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": AI_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-    body: JSON.stringify({ model, max_tokens: maxTokens, thinking: { type: "disabled" }, system, messages: [{ role: "user", content: user }] }) });
-  let r = await call(process.env.ANTHROPIC_WATCH_MODEL || "claude-sonnet-5-5");
-  if (!r.ok && r.status !== 400 && r.status !== 401) r = await call(process.env.ANTHROPIC_MODEL || "claude-haiku-5-5");
-  const j = await r.json();
+  const call = (model, thinking = { type: "disabled" }) => fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers: { "x-api-key": AI_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+    body: JSON.stringify({ model, max_tokens: maxTokens, thinking, system, messages: [{ role: "user", content: user }] }) });
+  // each model wants "thinking off" said its own way: if one refuses the setting, use the way its error names
+  const run = async (model) => {
+    let r = await call(model), j = await r.json();
+    if (r.status === 400 && /thinking/i.test(j.error && j.error.message || "")) { r = await call(model, { type: "between_tools" }); j = await r.json(); }
+    return { r, j };
+  };
+  let { r, j } = await run(process.env.ANTHROPIC_WATCH_MODEL || "claude-sonnet-5-5");
+  if (!r.ok && r.status !== 401) { log("watch model", r.status, j.error && j.error.message); ({ r, j } = await run(process.env.ANTHROPIC_MODEL || "claude-haiku-5-5")); }
   if (!r.ok) throw new Error("Claude: " + (j.error && j.error.message || r.status));
   const text = (j.content || []).filter((c) => c.type === "text").map((c) => c.text).join("");
   const m = text.match(/\{[\s\S]*\}/);

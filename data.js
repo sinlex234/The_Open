@@ -4183,16 +4183,22 @@ async function chatAI(req) {
   const ctrl = new AbortController(), timer = setTimeout(() => ctrl.abort(), 25e3);
   let text = "";
   try {
-    const call = (model) => fetch("https://api.anthropic.com/v1/messages", { method: "POST", signal: ctrl.signal,
+    const call = (model, thinking = { type: "disabled" }) => fetch("https://api.anthropic.com/v1/messages", { method: "POST", signal: ctrl.signal,
       headers: { "x-api-key": process.env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-      body: JSON.stringify({ model, max_tokens: 700, thinking: { type: "disabled" },
+      body: JSON.stringify({ model, max_tokens: 700, thinking,
         system: [{ type: "text", text: VOICE + "\nYou are “Ask the market”, the AI on The Open One, a market-news site that explains what is happening in the world and how it moves markets.\n" + CHAT_RULES + "\n" + CHAT_GUIDE + "\nAnswer in under 170 words. Short paragraphs, or a few “- ” bullets when listing. No headings, no bold.", cache_control: { type: "ephemeral" } },
           { type: "text", text: (kind === "story" ? "The reader is asking about one developing story (see story).\n" : kind === "headline" ? "The reader is asking about one headline (see asked_about_headline).\n" : kind === "news" ? "The reader is on the News page asking about today's news.\n" : kind === "stories" ? "The reader is asking about the developing stories.\n" : "") + "What the site knows right now:\n" + JSON.stringify(facts) }],
         messages: msgs }) });
-    let r = await call(process.env.ANTHROPIC_CHAT_MODEL || "claude-sonnet-5-5"), j = await r.json();
-    // if the bigger model is busy or unavailable, answer with the fast one instead of failing
-    if (!r.ok && r.status !== 401 && r.status !== 400) { r = await call(process.env.ANTHROPIC_MODEL || "claude-haiku-5-5"); j = await r.json(); }
-    if (!r.ok) throw new Error(j.error && j.error.message || "Claude API " + r.status);
+    // each model wants "thinking off" said its own way: if one refuses the setting, use the way its error names
+    const run = async (model) => {
+      let r = await call(model), j = await r.json();
+      if (r.status === 400 && /thinking/i.test(j.error && j.error.message || "")) { r = await call(model, { type: "between_tools" }); j = await r.json(); }
+      return { r, j };
+    };
+    let { r, j } = await run(process.env.ANTHROPIC_CHAT_MODEL || "claude-sonnet-5-5");
+    // if the bigger model fails for any reason but the key, answer with the fast one instead of failing
+    if (!r.ok && r.status !== 401) { console.error("chat model:", r.status, j.error && j.error.message); ({ r, j } = await run(process.env.ANTHROPIC_MODEL || "claude-haiku-5-5")); }
+    if (!r.ok) { console.error("chat fallback:", r.status, j.error && j.error.message); throw new HttpErr(502, "The AI is having trouble right now. Try again in a minute."); }
     text = (j.content || []).filter((c) => c.type === "text").map((c) => c.text).join("\n");
   } finally { clearTimeout(timer); }
   // keep lines and bullets, drop any sentence whose numbers aren't in the facts
