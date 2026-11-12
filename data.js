@@ -4078,6 +4078,120 @@ Give at most 3 levels, nearest to the current price first.`,
   const use = await gate.charge();
   return { ...out, market: d.short, call: d.call, conf: d.conf, used: use.used, limit: use.limit, tier: use.tier };
 }
+// ---------- AI chat ("Ask the market") and AI reads on the whole News section and the developing stories ----------
+// Everything comes from what the site knows right now; sentences with numbers that aren't in those facts are dropped.
+var nyClock = (t) => new Date(t).toLocaleString("en-US", { timeZone: "America/New_York", weekday: "short", hour: "numeric", minute: "2-digit" });
+var MK_SECTION = { futures: "futures", stocks: "futures", options: "futures", forex: "forex", crypto: "crypto", memes: "crypto" };
+async function chatFacts(kind, b) {
+  const q = Object.fromEntries(new URLSearchParams(String(b.q || "").slice(0, 1500))); delete q.focus; delete q.__tier;
+  const mine = [...new Set(parseProfile(q.p).map((x) => x.m))];
+  const secs = [...new Set((mine.length ? mine : ["futures"]).map((m) => MK_SECTION[m]).filter(Boolean))];
+  const quotes = (await Promise.all(secs.map((sct) => memo("chatq:" + sct, 2 * 6e4, () => build2(sct)).catch(() => null)))).flatMap((m) => (m && m.quotes || []).slice(0, 6))
+    .map((x) => ({ market: x.name || x.short, price: +(+x.price).toFixed(x.dp != null ? x.dp : 2), change_today_pct: +(+x.changePct).toFixed(2) }));
+  const now = Date.now();
+  const cal = await memo("calendar", 6e4, () => build()).catch(() => null);
+  const events = (cal && cal.events || []).filter((e) => e.impact === "High" && !e.allDay && e.time > now - 3 * 36e5 && e.time < now + 2 * 864e5)
+    .slice(0, 8).map((e) => ({ event: e.name || e.title, country: e.country, when_ny: nyClock(e.time), forecast: e.forecast || null, actual: e.actual || null }));
+  const f = { now_ny: nyClock(now), reader_trades: mine, prices: quotes, big_events: events };
+  if (kind === "story" && b.id) {
+    const th = await buildThread(String(b.id).slice(0, 80)).catch(() => null);
+    if (th && !th.missing) f.story = { title: th.title, summary: th.summary, headlines_newest_first: th.items.slice(0, 15).map((x) => ({ when_ny: nyClock(x.t), headline: x.title, source: x.source, [th.name + "_in_the_hour_after"]: x.closed ? "market closed" : x.next ? (x.next.move > 0 ? "+" : "") + x.next.move + " " + th.unit : "not measured" })) };
+  }
+  if (kind === "stories" || kind === "general") {
+    const ts = await memo("chat:threads", 5 * 6e4, () => buildThreads()).catch(() => null);
+    f.developing_stories = (ts && ts.threads || []).slice(0, 8).map((t) => ({ title: t.title, status: t.statusTxt, headlines: t.count, latest: t.latest && t.latest.title, market: t.since && t.since.mk, move_since_it_began: t.since ? (t.since.change > 0 ? "+" : "") + t.since.change + " " + t.since.unit : null }));
+  }
+  if (kind === "news" || kind === "general" || kind === "headline") {
+    const w = await memo("chat:wire", 2 * 6e4, () => build8("all")).catch(() => null);
+    f.latest_headlines = (w && w.items || []).slice(0, 15).map((h) => ({ when_ny: nyClock(h.time), headline: h.title, source: h.source, topic: h.themeLabel, why_it_matters: h.why || null }));
+  }
+  if (kind === "headline" && b.headline) f.asked_about_headline = String(b.headline).slice(0, 300);
+  if (kind === "general") {
+    const desk = await memo("dayai-desk:" + hashKey(JSON.stringify(q)), 5 * 6e4, () => build11(q)).catch(() => null);
+    f.todays_bias = (desk && desk.dayplan || []).map((d) => ({ market: d.short, bias: d.call === "range" ? "no bias" : d.call, confidence: d.conf, reasons: d.why, wrong_if: d.flip }));
+  }
+  return f;
+}
+var CHAT_RULES = `Plain English, like a smart friend who follows markets. Short sentences. No jargon: never write "lean", "risk-on", "risk-off", "priced in", "sentiment" or "catalyst".
+Use ONLY the facts given for anything about today: prices, moves, times, events, headlines. If the facts don't cover it, say you don't have that on the site right now. Copy any number exactly as written in the facts.
+Never tell the reader to buy, sell or size a trade. You can explain what a setup or the news usually means. This is education, not financial advice.`;
+async function gateOrAdmin(tok, cost, need, key) {
+  try { return await aiGate(tok, cost, need, key); }
+  catch (e) {
+    if (!(e && e.status === 402) && !(e && /plan|Pro|Plus/i.test(e.message || ""))) throw e;
+    const admin = await rpcAs(tok, "open_is_admin", {}).catch(() => false);
+    if (admin === true) return { use: { used: 0, limit: 0, tier: "admin" }, charge: async () => ({ used: 0, limit: 0, tier: "admin" }) };
+    throw e;
+  }
+}
+async function chatAI(req) {
+  const tok = bearer(req);
+  if (!tok) throw new HttpErr(401, "Sign in to chat.", { why: "signin" });
+  if (!hasAI()) throw new HttpErr(503, "AI chat isn’t switched on yet.");
+  const b = await readBody(req);
+  const kind = ["general", "news", "stories", "story", "headline"].includes(b.kind) ? b.kind : "general";
+  const msgs = (Array.isArray(b.messages) ? b.messages : []).filter((m) => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string")
+    .slice(-10).map((m) => ({ role: m.role, content: m.content.slice(0, 1200) }));
+  if (!msgs.length || msgs[msgs.length - 1].role !== "user") throw new HttpErr(400, "Type a question first.");
+  const gate = await gateOrAdmin(tok, 1, "pro", "chat:" + Date.now() + Math.random());
+  const facts = await chatFacts(kind, b);
+  const factTxt = JSON.stringify(facts).replace(/,(?=\d{3})/g, "");
+  const ctrl = new AbortController(), timer = setTimeout(() => ctrl.abort(), 25e3);
+  let text = "";
+  try {
+    const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", signal: ctrl.signal,
+      headers: { "x-api-key": process.env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+      body: JSON.stringify({ model: process.env.ANTHROPIC_MODEL || "claude-haiku-5-5", max_tokens: 600, thinking: { type: "disabled" },
+        system: VOICE + "\nYou are “Ask the market” on The Open One, a market-news site.\n" + CHAT_RULES + "\nAnswer in under 170 words. Use short paragraphs, or a few “- ” bullets when listing. No headings.\nWhat the site knows right now:\n" + JSON.stringify(facts),
+        messages: msgs }) });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error && j.error.message || "Claude API " + r.status);
+    text = (j.content || []).filter((c) => c.type === "text").map((c) => c.text).join("\n");
+  } finally { clearTimeout(timer); }
+  // keep lines and bullets, drop any sentence whose numbers aren't in the facts
+  const reply = text.replace(/^#+\s*/gm, "").split("\n").map((line) => { const bullet = /^\s*[-•]\s+/.test(line); const body = line.replace(/^\s*[-•]\s+/, ""); const c = factClean(body, factTxt + " " + msgs.map((m) => m.content).join(" "), 600); return c ? (bullet ? "- " : "") + c : ""; })
+    .filter((l, i, a) => l || (a[i - 1] && a[i - 1] !== "")).join("\n").trim();
+  if (!reply) throw new HttpErr(502, "The AI didn’t give a usable answer. Try asking another way.");
+  const use = await gate.charge();
+  return { reply, used: use.used, limit: use.limit, tier: use.tier };
+}
+// One AI read on the whole News section or on all the developing stories
+async function sectionAI(req) {
+  const tok = bearer(req);
+  if (!tok) throw new HttpErr(401, "Sign in to use AI reads.", { why: "signin" });
+  if (!hasAI()) throw new HttpErr(503, "AI reads aren’t switched on yet.");
+  const b = await readBody(req);
+  const kind = b.kind === "stories" ? "stories" : "news";
+  const facts = await chatFacts(kind, b);
+  delete facts.big_events;
+  const factTxt = JSON.stringify(facts).replace(/,(?=\d{3})/g, "");
+  const key = "sai:" + kind + ":" + hashKey(factTxt);
+  const gate = await gateOrAdmin(tok, 1, "free", key);
+  const shape = kind === "news"
+    ? `{"summary": "2 short sentences: what today's news adds up to for the markets the reader trades",
+ "top": [{"headline": "copy one headline exactly from latest_headlines", "why": "one short sentence: why it matters, and for which market"}],
+ "ignore": "one short sentence: what in today's news probably doesn't matter for the reader's markets",
+ "watch": ["up to 3 things to watch next"]}
+Pick the 3 headlines that matter most for the reader's markets.`
+    : `{"summary": "2 short sentences: which developing stories are driving markets right now and which have gone quiet",
+ "stories": [{"title": "copy a title exactly from developing_stories", "stage": "one of: just starting, building, peaking, fading, over", "why": "one short sentence: what it's doing to markets, using move_since_it_began when given"}],
+ "watch": ["up to 3 things to watch next"]}
+Cover the 4 stories that matter most for the reader's markets.`;
+  const res = await memo(key, 15 * 6e4, () => askClaude({ system: VOICE + "\n" + CHAT_RULES + "\nReturn JSON only:\n" + shape, user: "Facts:\n" + JSON.stringify(facts), maxTokens: 900 }));
+  const clean = (t, n) => factClean(t, factTxt, n);
+  const out = { kind, summary: clean(res && res.summary, 380), watch: (Array.isArray(res && res.watch) ? res.watch : []).map((x) => clean(x, 180)).filter(Boolean).slice(0, 3) };
+  if (kind === "news") {
+    const real = new Set((facts.latest_headlines || []).map((h) => h.headline));
+    out.top = (Array.isArray(res && res.top) ? res.top : []).filter((x) => x && real.has(x.headline)).map((x) => ({ headline: x.headline, why: clean(x.why, 220) })).filter((x) => x.why).slice(0, 3);
+    out.ignore = clean(res && res.ignore, 220);
+  } else {
+    const real = new Set((facts.developing_stories || []).map((t) => t.title));
+    out.stories = (Array.isArray(res && res.stories) ? res.stories : []).filter((x) => x && real.has(x.title)).map((x) => ({ title: x.title, stage: ["just starting", "building", "peaking", "fading", "over"].includes(String(x.stage).toLowerCase()) ? String(x.stage).toLowerCase() : "", why: clean(x.why, 220) })).filter((x) => x.why).slice(0, 4);
+  }
+  if (!out.summary && !(out.top || out.stories || []).length) throw new HttpErr(502, "The AI didn’t give a usable answer. Try again in a minute.");
+  const use = await gate.charge();
+  return { ...out, used: use.used, limit: use.limit, tier: use.tier };
+}
 // AI read: one click on a story, how each of your markets most likely reacts
 async function aiRead(req) {
   const tok = bearer(req);
@@ -4215,7 +4329,7 @@ async function stripeHook(req) {
     .then(async (r) => { if (!r.ok) throw new HttpErr(502, "Couldn’t save the plan: " + (await r.text()).slice(0, 120)); });
   return { ok: true };
 }
-var POST_ROUTES = { dayai: dayAI, userlogin: userLogin, crowdme: crowdMe, threadai: threadAI, airead: aiRead, aideep: aiDeep, checkout, portal, stripe: stripeHook };
+var POST_ROUTES = { chat: chatAI, sectionai: sectionAI, dayai: dayAI, userlogin: userLogin, crowdme: crowdMe, threadai: threadAI, airead: aiRead, aideep: aiDeep, checkout, portal, stripe: stripeHook };
 // Routes whose answer depends on the reader's plan
 var PLAN_ROUTES = new Set(["desk", "brief", "explain", "memedesk", "recap"]);
 // Read-only audit of every logged call: what drove it and how it turned out (for tuning the call engine)

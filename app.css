@@ -1852,3 +1852,35 @@ img,svg,video,canvas,iframe,table{max-width:100%}
 .dai-lv li{display:grid;grid-template-columns:6.5rem 1fr;gap:0.75rem;align-items:baseline;padding:0.375rem 0.625rem;border-radius:var(--r-sm);background:var(--bg-2);font-size:0.84rem;line-height:1.5}
 .dai-lv b{font-variant-numeric:tabular-nums;color:var(--ink)} .dai-lv span{color:var(--ink-2)}
 @media (max-width:480px){.dai-lv li{grid-template-columns:1fr;gap:0.125rem}}
+
+/* AI chat ("Ask the market") and section AI reads */
+.chat{margin-top:0.5rem}
+.chat-log{display:flex;flex-direction:column;gap:0.5rem;max-height:22rem;overflow-y:auto;padding:0.125rem 0;margin-bottom:0.625rem}
+.cm{max-width:92%;border-radius:0.625rem;padding:0.5rem 0.75rem;font:400 0.875rem/1.5 var(--sans)}
+.cm p{margin:0 0 0.375rem}.cm p:last-child{margin:0}
+.cm ul{margin:0.25rem 0 0.375rem;padding-left:1.1rem}.cm li{margin:0.125rem 0}
+.cm.me{align-self:flex-end;background:color-mix(in srgb,var(--acc) 18%,transparent);color:var(--ink)}
+.cm.ai{align-self:flex-start;background:var(--bg-2,rgba(255,255,255,.04));border:1px solid var(--rule);color:var(--ink-2)}
+.cm.typing p{color:var(--ink-3);animation:chatPulse 1.2s ease-in-out infinite}
+@keyframes chatPulse{50%{opacity:.45}}
+.chat-start{display:flex;flex-wrap:wrap;gap:0.375rem}
+.chat-f{display:flex;gap:0.5rem}
+.chat-f input{flex:1;min-width:0;background:transparent;border:1px solid var(--rule-2);border-radius:0.5rem;color:var(--ink);padding:0.5rem 0.75rem;font:400 0.875rem var(--sans)}
+.chat-f input:focus{outline:none;border-color:var(--acc)}
+.chat-f .btn-primary{padding:0.5rem 1rem}
+.chat-fine{margin:0.5rem 0 0;font:400 0.7188rem/1.4 var(--sans);color:var(--ink-3)}
+.chat-fab{position:fixed;right:1.25rem;bottom:1.25rem;z-index:60;display:flex;align-items:center;gap:0.5rem;padding:0.625rem 1rem;border-radius:99rem;border:1px solid color-mix(in srgb,var(--acc) 55%,transparent);background:var(--panel);color:var(--ink);font:500 0.8438rem var(--sans);cursor:pointer;box-shadow:0 8px 28px rgba(0,0,0,.45)}
+.chat-fab:hover{border-color:var(--acc)}
+.chat-fab[hidden]{display:none}
+.chat-fab svg{width:1rem;height:1rem;color:var(--acc-2)}
+.chat-panel{position:fixed;right:1.25rem;bottom:4.75rem;z-index:61;width:min(25rem,calc(100vw - 2rem));max-height:min(36rem,calc(100vh - 6.5rem));overflow-y:auto;background:var(--panel);border:1px solid var(--rule-2);border-radius:0.875rem;padding:0.875rem 1rem;box-shadow:0 18px 48px rgba(0,0,0,.55)}
+.chat-ph{display:flex;align-items:center;justify-content:space-between;margin-bottom:0.25rem}
+.chat-ph b{display:flex;align-items:center;gap:0.375rem;font:600 0.9375rem var(--sans)}
+.chat-ph svg{width:1rem;height:1rem;color:var(--acc-2)}
+@media (max-width:640px){.chat-fab{right:1rem;bottom:1rem}.chat-fab span{display:none}.chat-panel{right:0.5rem;left:0.5rem;bottom:4rem;width:auto}}
+.sec-ai{margin:0 0 1rem}
+.sec-ai-out.air-box{margin-top:0.625rem}
+.sec-ai-l{list-style:none;margin:0 0 0.5rem;padding:0;display:flex;flex-direction:column;gap:0.5rem}
+.sec-ai-l li{display:flex;flex-direction:column;gap:0.125rem;font:400 0.8438rem/1.45 var(--sans);color:var(--ink-2)}
+.sec-ai-l b{color:var(--ink);font-weight:600}
+.sec-ai-out .hist-cap,.chat-panel .hist-cap{margin-top:0.875rem}
