@@ -171,6 +171,13 @@ Pick at most 4 lines that could move markets: hints about the next rate decision
   }
 }
 
+// ---------- story explainers: look up the top 3 developing stories ahead of time so AI reads are instant ----------
+async function explainTick() {
+  const d = await get(`${SITE}/api/data?fn=threads`).catch(() => null);
+  for (const t of (d && d.threads || []).slice(0, 3)) {
+    await get(`${SITE}/api/data?fn=bg&kind=story&id=${encodeURIComponent(t.id)}`, { timeout: 50e3 }).then((x) => log("explainer", t.title, x && x.text ? "ready" : "empty")).catch((e) => log("explainer", t.title, e.message));
+  }
+}
 // ---------- loop ----------
 async function beat() {
   await save("open_beat", [{ id: new Date(Math.floor(Date.now() / 6e5) * 6e5).toISOString(), t: new Date().toISOString(), stats: { ...stats, ai: !!AI_KEY } }]).catch((e) => log("beat", e.message));
@@ -186,4 +193,5 @@ every(60e3, "movers", moverTick);
 every(180e3, "radar", radarTick);
 every(120e3, "speeches", speechTick);
 every(600e3, "beat", beat);
+every(20 * 60e3, "explainers", explainTick);
 process.on("unhandledRejection", (e) => { stats.errors++; log("unhandled", e && e.message); });

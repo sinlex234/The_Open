@@ -2750,7 +2750,7 @@ document.addEventListener('click', async e => {
     if (box) { box.remove(); b.setAttribute('aria-expanded', 'false'); return; }
     box = document.createElement('div'); box.className = 'air-box'; host.after(box); b.setAttribute('aria-expanded', 'true');
     if (!signedIn()) { box.innerHTML = upsellHTML('signin'); return; }
-    box.innerHTML = `<div class="air-head">${SPARK}<b>AI read</b><span>Looking into the story… (can take 15–20 seconds)</span></div>${skel(2)}`;
+    box.innerHTML = `<div class="air-head">${SPARK}<b>AI read</b><span>Reading the story…</span></div>${skel(2)}`;
     try { const x = await postAI('airead', { headline: b.dataset.air, markets: airMarkets() }); plan.used = x.used; box.innerHTML = airResultHTML(x, b.dataset.air); }
     catch (err) { box.innerHTML = upsellHTML(err.why, err.message); }
     return;
