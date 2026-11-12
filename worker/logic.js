@@ -8,7 +8,7 @@
 // 4. The cause is an economic release out in the last 10 minutes if there is one; otherwise a headline from the
 //    20 minutes before the move that is about that market. If nothing fits, it says there's no clear news yet.
 // Memecoin radar
-// 5. Taking off = up 20%+ in the last hour (or 50%+ in 6 hours) with real trading behind it: $50K+ traded this hour,
+// 5. Taking off = up 20%+ in the last hour (or 50%+ in 6 hours and still up 5%+ this hour) with real trading behind it: $50K+ traded this hour,
 //    $25K+ liquidity and 40+ buys this hour. Anything smaller is noise.
 // 6. Every coin on the radar carries its warning signs; none of them is hidden because the coin is going up.
 // Speech scanner
@@ -70,7 +70,8 @@ function findCause(move, key, events, heads) {
 function radarScore(p) {
   const pc = p.priceChange || {}, vol = p.volume || {}, tx = (p.txns && p.txns.h1) || {}, liq = p.liquidity && p.liquidity.usd;
   const h1 = pc.h1, h6 = pc.h6, v1 = vol.h1 || 0, buys = tx.buys || 0;
-  const rising = (h1 != null && h1 >= 20) || (h6 != null && h6 >= 50);
+  // a 6-hour run only counts while it is still going up this hour
+  const rising = (h1 != null && h1 >= 20) || (h6 != null && h6 >= 50 && h1 != null && h1 >= 5);
   if (!rising || v1 < 5e4 || !(liq >= 2.5e4) || buys < 40) return null;
   const s = Math.log10(1 + Math.max(h1 || 0, (h6 || 0) / 3)) * 30 + Math.log10(v1 / 5e4 + 1) * 25 + Math.log10(buys / 40 + 1) * 15;
   return Math.round(Math.min(100, s));

@@ -60,7 +60,8 @@ test("rule 5: taking off needs a real rise with real trading behind it", () => {
   assert.equal(W.radarScore(pair({ volume: { h1: 2e4 } })), null, "too little traded");
   assert.equal(W.radarScore(pair({ liquidity: { usd: 1e4 } })), null, "too thin");
   assert.equal(W.radarScore(pair({ txns: { h1: { buys: 10, sells: 5 } } })), null, "too few buyers");
-  assert.ok(W.radarScore(pair({ priceChange: { h1: 2, h6: 60 } })) > 0, "a 6-hour run counts");
+  assert.ok(W.radarScore(pair({ priceChange: { h1: 8, h6: 60 } })) > 0, "a 6-hour run still going counts");
+  assert.equal(W.radarScore(pair({ priceChange: { h1: -5, h6: 300 } })), null, "a 6-hour run that is falling this hour doesn't");
 });
 
 test("rule 6: warning signs are always shown", () => {

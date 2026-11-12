@@ -3182,6 +3182,7 @@ async function buildWatch() {
   const seen = new Set(), coins = [];
   (radar || []).forEach((r) => { const k = r.chain + ":" + r.address; if (seen.has(k)) return; seen.add(k); coins.push(r); });
   coins.sort((a, b) => b.score - a.score);
+  for (let i = coins.length - 1; i >= 0; i--) if (!(coins[i].chg_h1 >= 5)) coins.splice(i, 1);
   const last = beat && beat[0] ? Date.parse(beat[0].t) : null;
   return { on: !!(last && now - last < 25 * 6e4), lastBeat: last, ai: !!(beat && beat[0] && beat[0].stats && beat[0].stats.ai),
     moves: (moves || []).map((m) => ({ ...m, t: Date.parse(m.t) })), radar: coins.slice(0, 12).map((r) => ({ ...r, t: Date.parse(r.t) })),
