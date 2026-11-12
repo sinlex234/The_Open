@@ -753,7 +753,7 @@ function bindExplain(root, items) {
     explainOpen.add(id); box.hidden = false; b.textContent = 'Hide explanation'; b.setAttribute('aria-expanded', 'true');
     box.innerHTML = skel(2);
     api(explainURL(item), 864e5).then(x => {
-      box.innerHTML = `<dl class="xp"><dt>What happened</dt><dd>${esc(x.what)}</dd><dt>Why markets care</dt><dd>${esc(x.why)}</dd><dt>How markets reacted</dt><dd>${esc(x.reaction)}</dd>${x.for_you ? `<dt>For you</dt><dd><mark>${esc(x.for_you)}</mark></dd>` : ''}</dl><p class="aifoot">Source: ${esc(item.source || 'unknown')}${x.source === 'ai' ? ' · Summary written by AI, fact-checked against the headline' : ''} · ${reportBtn(item.title, item.link, 'news')}</p>`;
+      box.innerHTML = `<dl class="xp"><dt>What’s going on</dt><dd>${esc(x.what)}</dd><dt>How it hits markets</dt><dd>${esc(x.why)}</dd><dt>How markets reacted</dt><dd>${esc(x.reaction)}</dd>${x.for_you ? `<dt>For you</dt><dd><mark>${esc(x.for_you)}</mark></dd>` : ''}</dl>${srcHTML(x.sources)}<p class="aifoot">Source: ${esc(item.source || 'unknown')}${x.source === 'ai' ? ' · Written by AI from the headline' + ((x.sources || []).length ? ' and the sources above' : '') + ', numbers fact-checked' : ''} · ${reportBtn(item.title, item.link, 'news')}</p>`;
     }).catch(e => { box.innerHTML = errBox('the explanation', e.message); });
   });
 }
@@ -2659,7 +2659,7 @@ function chatMsgHTML(m) {
   const flush = () => { if (list.length) { html += `<ul>${list.map(x => `<li>${esc(x)}</li>`).join('')}</ul>`; list = []; } };
   lines.forEach(l => { if (/^- /.test(l)) list.push(l.slice(2)); else { flush(); if (l.trim()) html += `<p>${esc(l)}</p>`; } });
   flush();
-  return `<div class="cm ai">${html}</div>`;
+  return `<div class="cm ai">${html}${srcHTML(m.sources)}</div>`;
 }
 function chatInner(key, kind) {
   if (!signedIn()) return `<p class="air-up">Sign in to ask questions. <a href="/plans">See plans</a></p>`;
@@ -2667,7 +2667,7 @@ function chatInner(key, kind) {
   const msgs = CHATS[key] || [];
   return `<div class="chat-log" aria-live="polite">${msgs.map(chatMsgHTML).join('') || `<div class="chat-start">${(CHAT_START[kind] || CHAT_START.general).map(q => `<button type="button" class="chip" data-chatq="${esc(q)}">${esc(q)}</button>`).join('')}</div>`}</div>
     <form class="chat-f"><label class="sr-only" for="ci-${esc(key)}">Your question</label><input id="ci-${esc(key)}" name="q" autocomplete="off" maxlength="500" placeholder="Ask about ${kind === 'story' ? 'this story' : kind === 'headline' ? 'this headline' : kind === 'news' ? 'today’s news' : kind === 'stories' ? 'these stories' : 'the markets today'}…"><button class="btn-primary" type="submit">Ask</button></form>
-    <p class="chat-fine">Answers use only today’s headlines, prices and events on the site. Not financial advice.${msgs.length ? ' <button type="button" class="linkbtn" data-chatclear>Start over</button>' : ''}</p>`;
+    <p class="chat-fine">Answers use the site’s live prices and headlines, plus major news outlets for the background. Not financial advice.${msgs.length ? ' <button type="button" class="linkbtn" data-chatclear>Start over</button>' : ''}</p>`;
 }
 function chatHTML(key, kind, opts = {}) {
   return `<div class="chat" data-chat="${esc(key)}" data-kind="${kind}" data-id="${esc(opts.id || '')}" data-head="${esc(opts.headline || '')}">${chatInner(key, kind)}</div>`;
@@ -2679,8 +2679,8 @@ async function chatSend(box, text) {
   msgs.push({ role: 'user', content: text.slice(0, 500) }); box.dataset.busy = 1; chatPaint(box);
   const log = box.querySelector('.chat-log'); if (log) { log.insertAdjacentHTML('beforeend', '<div class="cm ai typing"><p>Thinking…</p></div>'); log.scrollTop = log.scrollHeight; }
   try {
-    const x = await postAI('chat', { kind: box.dataset.kind, id: box.dataset.id, headline: box.dataset.head, q: profileQuery(), messages: msgs.slice(-10) });
-    msgs.push({ role: 'assistant', content: x.reply }); if (x.tier !== 'admin') plan.used = x.used;
+    const x = await postAI('chat', { kind: box.dataset.kind, id: box.dataset.id, headline: box.dataset.head, q: profileQuery(), messages: msgs.slice(-10).map(m => ({ role: m.role, content: m.content })) });
+    msgs.push({ role: 'assistant', content: x.reply, sources: (x.sources || []).slice(0, 3) }); if (x.tier !== 'admin') plan.used = x.used;
   } catch (err) { msgs.pop(); delete box.dataset.busy; chatPaint(box); box.querySelector('.chat-fine')?.insertAdjacentHTML('afterbegin', `<span class="cw-err">${esc(err.message)}</span> `); return; }
   delete box.dataset.busy; saveChats(); chatPaint(box); box.querySelector('input')?.focus();
 }
@@ -2729,10 +2729,17 @@ document.addEventListener('click', async e => {
   catch (err) { out.innerHTML = upsellHTML(err.why, err.message); }
   b.disabled = false;
 });
+// where the AI looked things up (shown under any read that searched the web)
+function srcHTML(list) {
+  const l = (list || []).filter(x => x && /^https?:\/\//.test(x.url)).slice(0, 4);
+  if (!l.length) return '';
+  const host = u => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return ''; } };
+  return `<p class="air-src">Sources: ${l.map(x => `<a href="${esc(safeUrl(x.url))}" target="_blank" rel="noopener" title="${esc(x.title || '')}">${esc(host(x.url))}</a>`).join(' · ')}</p>`;
+}
 function airResultHTML(x, headline) {
   const rows = x.reads.map(r => `<div class="air-r"><span class="pill ${r.dir === 'up' ? 'up' : r.dir === 'down' ? 'down' : ''}"><b>${esc(r.label)}</b> ${DIR_TXT[r.dir] || '↕ Unclear'}</span><span class="air-c">${esc(r.conf)} confidence</span><p>${esc(r.why)}</p></div>`).join('');
   const deep = plan.tier === 'pro' ? `<button type="button" class="linkbtn air-deep" data-deep="${esc(headline)}">Deep dive</button>` : `<a class="linkbtn air-deep-up" href="/plans">Deep dive is part of Pro${PAYMENTS_OPEN ? '' : ' (coming soon)'}</a>`;
-  return `<div class="air-head">${SPARK}<b>AI read</b><span>${x.used} of ${x.limit} used today</span></div>${rows}${x.take ? `<p class="air-take">${esc(x.take)}</p>` : ''}<p class="hist-cap">Ask a follow-up</p>${chatHTML('h:' + headline.slice(0, 120), 'headline', { headline })}<div class="air-foot">${deep}<span>A lean, not a promise. Not financial advice.</span></div><div class="air-deepbox" hidden></div>`;
+  return `<div class="air-head">${SPARK}<b>AI read</b><span>${x.used} of ${x.limit} used today</span></div>${x.what ? `<p class="hist-cap">What’s going on</p><p class="sai-now">${esc(x.what)}</p><p class="hist-cap">What it means for your markets</p>` : ''}${rows}${x.take ? `<p class="air-take">${esc(x.take)}</p>` : ''}${srcHTML(x.sources)}<p class="hist-cap">Ask a follow-up</p>${chatHTML('h:' + headline.slice(0, 120), 'headline', { headline })}<div class="air-foot">${deep}<span>A lean, not a promise. Not financial advice.</span></div><div class="air-deepbox" hidden></div>`;
 }
 document.addEventListener('click', async e => {
   const b = e.target.closest && e.target.closest('[data-air]');
@@ -2743,7 +2750,7 @@ document.addEventListener('click', async e => {
     if (box) { box.remove(); b.setAttribute('aria-expanded', 'false'); return; }
     box = document.createElement('div'); box.className = 'air-box'; host.after(box); b.setAttribute('aria-expanded', 'true');
     if (!signedIn()) { box.innerHTML = upsellHTML('signin'); return; }
-    box.innerHTML = `<div class="air-head">${SPARK}<b>AI read</b><span>Reading the story…</span></div>${skel(2)}`;
+    box.innerHTML = `<div class="air-head">${SPARK}<b>AI read</b><span>Looking into the story… (can take 15–20 seconds)</span></div>${skel(2)}`;
     try { const x = await postAI('airead', { headline: b.dataset.air, markets: airMarkets() }); plan.used = x.used; box.innerHTML = airResultHTML(x, b.dataset.air); }
     catch (err) { box.innerHTML = upsellHTML(err.why, err.message); }
     return;
@@ -2755,7 +2762,7 @@ document.addEventListener('click', async e => {
     dbox.hidden = false; dbox.innerHTML = skel(3);
     try {
       const x = await postAI('aideep', { headline: d.dataset.deep, markets: airMarkets(), p: (profileQuery().match(/(?:^|&)p=([^&]*)/) || [])[1] ? decodeURIComponent(profileQuery().match(/(?:^|&)p=([^&]*)/)[1]) : '' });
-      dbox.innerHTML = `<dl class="air-dl"><dt>If it plays out bullish</dt><dd>${esc(x.bull)}</dd><dt>If it plays out bearish</dt><dd>${esc(x.bear)}</dd><dt>What would change the read</dt><dd>${esc(x.flip)}</dd>${x.watch.length ? `<dt>Watch next</dt><dd><ul>${x.watch.map(w => `<li>${esc(w)}</li>`).join('')}</ul></dd>` : ''}${x.fit ? `<dt>For your strategies</dt><dd>${esc(x.fit)}</dd>` : ''}</dl>`;
+      dbox.innerHTML = `<dl class="air-dl">${x.what ? `<dt>What’s going on</dt><dd>${esc(x.what)}</dd>` : ''}<dt>If it plays out bullish</dt><dd>${esc(x.bull)}</dd><dt>If it plays out bearish</dt><dd>${esc(x.bear)}</dd><dt>What would change the read</dt><dd>${esc(x.flip)}</dd>${x.watch.length ? `<dt>Watch next</dt><dd><ul>${x.watch.map(w => `<li>${esc(w)}</li>`).join('')}</ul></dd>` : ''}${x.fit ? `<dt>For your strategies</dt><dd>${esc(x.fit)}</dd>` : ''}</dl>${srcHTML(x.sources)}`;
     } catch (err) { dbox.innerHTML = upsellHTML(err.why, err.message); }
   }
 });
@@ -3365,11 +3372,11 @@ function storyAIHTML(x, title) {
       ${r.up_if || r.down_if ? `<ul class="sai-if">${r.up_if ? `<li class="up"><b>↑ Higher if</b> ${esc(r.up_if.replace(/^(it |if )/i, ''))}</li>` : ''}${r.down_if ? `<li class="down"><b>↓ Lower if</b> ${esc(r.down_if.replace(/^(it |if )/i, ''))}</li>` : ''}</ul>` : ''}
     </div>`).join('');
   return `<div class="air-head">${SPARK}<b>AI read</b><span>${x.used} of ${x.limit} used today</span></div>
-    ${x.now ? `<p class="sai-now">${esc(x.now)}</p>` : ''}
+    ${x.now ? `<p class="hist-cap">What’s going on</p><p class="sai-now">${esc(x.now)}</p><p class="hist-cap">What it means for your markets</p>` : ''}
     ${reads}
     ${x.stage ? `<p class="sai-stage"><b>Where the story is: ${esc(SAI_STAGE[x.stage] || x.stage)}.</b> ${esc(x.stage_why || '')}</p>` : ''}
     ${x.watch && x.watch.length ? `<p class="hist-cap">What to watch next</p><ul class="sai-watch">${x.watch.map(w => `<li>${esc(w)}</li>`).join('')}</ul>` : ''}
-    <p class="hist-cap">Ask about this story</p>${chatHTML('story:' + (x.id || title), 'story', { id: x.id })}
+    ${srcHTML(x.sources)}<p class="hist-cap">Ask about this story</p>${chatHTML('story:' + (x.id || title), 'story', { id: x.id })}
     <div class="air-foot">${deep}<span>For the next day. A best guess from the headlines and prices, not a promise or financial advice.</span></div><div class="air-deepbox" hidden></div>`;
 }
 function thLeanHTML(d) {
