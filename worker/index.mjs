@@ -57,8 +57,9 @@ const VOICE = `You write for The Open One, a market-news site for everyday trade
 // ---------- mover watch ----------
 const lastAlert = {};
 async function bars1m(sym) {
-  const j = await get(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?range=1d&interval=1m&includePrePost=true`);
-  const r = j.chart && j.chart.result && j.chart.result[0]; if (!r) return [];
+  // two days, so right after midnight (when "today" has no bars yet) there's still a full day to compare with
+  const j = await get(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?range=2d&interval=1m&includePrePost=true`);
+  const r = j.chart && j.chart.result && j.chart.result[0]; if (!r || !r.timestamp || !r.indicators || !r.indicators.quote) return [];
   const c = r.indicators.quote[0].close;
   return r.timestamp.map((t, i) => ({ t: t * 1000, c: c[i] })).filter((b) => b.c != null);
 }
