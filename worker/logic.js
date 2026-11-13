@@ -6,7 +6,8 @@
 // 2. The latest price must be fresh (under 3 minutes old): a feed that stopped is never a move.
 // 3. One alert per market per 30 minutes, unless the move keeps going to twice the size already reported.
 // 4. The cause is an economic release out in the last 10 minutes if there is one; otherwise a headline from the
-//    20 minutes before the move that is about that market. If nothing fits, it says there's no clear news yet.
+//    20 minutes before the move that is about that market itself. A headline about general news (the Fed, yields, a war)
+//    is only a possible cause. If nothing fits, it says there's no clear news yet.
 // Memecoin radar
 // 5. Taking off = up 20%+ in the last hour (or 50%+ in 6 hours and still up 5%+ this hour) with real trading behind it: $50K+ traded this hour,
 //    $25K+ liquidity and 40+ buys this hour. Anything smaller is noise.
@@ -18,15 +19,18 @@
 const median = (a) => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
 
 // Markets watched for sudden moves: Yahoo symbol, name, smallest move that counts (%), topics that explain it
+// "key" words are about that market itself; "wide" words can move it but also everything else, so a headline that only
+// matches wide words is shown as a possible cause, not the cause. Whole words only ("rate" never matches "generate").
+const W = (list) => new RegExp("\\b(" + list + ")", "i");
 const MOVERS = {
-  NQ: { sym: "NQ=F", name: "Nasdaq 100 futures", min: 0.25, dp: 2, topics: /fed|rate|inflation|cpi|ppi|jobs|payroll|yield|treasur|tariff|trade|chip|nvidia|apple|microsoft|tech|ai\b|stock|nasdaq|earnings|powell|recession|gdp|china|war|iran|israel|russia/i },
-  ES: { sym: "ES=F", name: "S&P 500 futures", min: 0.2, dp: 2, topics: /fed|rate|inflation|cpi|ppi|jobs|payroll|yield|treasur|tariff|trade|stock|s&p|earnings|powell|recession|gdp|china|war|iran|israel|russia|bank/i },
-  GC: { sym: "GC=F", name: "Gold", min: 0.3, dp: 1, topics: /gold|fed|rate|inflation|dollar|yield|war|iran|israel|russia|central bank|safe haven|tariff/i },
-  CL: { sym: "CL=F", name: "Crude oil", min: 0.6, dp: 2, topics: /oil|crude|opec|iran|israel|saudi|russia|energy|gasoline|inventor|hormuz|pipeline|refiner|sanction|war/i },
-  EURUSD: { sym: "EURUSD=X", name: "EUR/USD", min: 0.12, dp: 5, topics: /euro|ecb|lagarde|dollar|fed|rate|inflation|cpi|jobs|payroll|germany|eurozone|tariff|yield/i },
-  USDJPY: { sym: "JPY=X", name: "USD/JPY", min: 0.15, dp: 3, topics: /yen|japan|boj|ueda|dollar|fed|rate|yield|intervention|treasur/i },
-  BTC: { sym: "BTC-USD", name: "Bitcoin", min: 0.8, dp: 0, topics: /bitcoin|btc|crypto|etf|sec\b|binance|coinbase|stablecoin|saylor|strategy|fed|rate|hack|liquidat/i },
-  ETH: { sym: "ETH-USD", name: "Ethereum", min: 1.0, dp: 0, topics: /ether|eth\b|crypto|etf|sec\b|binance|coinbase|stablecoin|hack|liquidat|fed/i }
+  NQ: { sym: "NQ=F", name: "Nasdaq 100 futures", min: 0.25, dp: 2, key: W("nasdaq|tech stocks?|chip|semiconductor|nvidia|apple|microsoft|alphabet|google|amazon|meta|tesla|broadcom|magnificent|ai stocks?|wall street|stocks|futures"), wide: W("fed\\b|fomc|powell|rate (cut|hike)s?|interest rates?|inflation|cpi|ppi|jobs report|payrolls?|unemployment|treasury yields?|yields|tariffs?|recession|gdp|war|iran|israel|china|russia") },
+  ES: { sym: "ES=F", name: "S&P 500 futures", min: 0.2, dp: 2, key: W("s&p|wall street|stocks|futures|dow|banks?\\b|earnings"), wide: W("fed\\b|fomc|powell|rate (cut|hike)s?|interest rates?|inflation|cpi|ppi|jobs report|payrolls?|unemployment|treasury yields?|yields|tariffs?|recession|gdp|war|iran|israel|china|russia") },
+  GC: { sym: "GC=F", name: "Gold", min: 0.3, dp: 1, key: W("gold|bullion|precious metals?|safe.haven"), wide: W("fed\\b|fomc|powell|rate (cut|hike)s?|inflation|cpi|dollar|treasury yields?|war|iran|israel|russia|central banks?|tariffs?") },
+  CL: { sym: "CL=F", name: "Crude oil", min: 0.6, dp: 2, key: W("oil|crude|brent|wti|opec|gasoline|refiner|hormuz|pipeline|barrels?|eia|inventor"), wide: W("iran|israel|saudi|russia|sanctions?|war|energy|middle east|houthis?|red sea") },
+  EURUSD: { sym: "EURUSD=X", name: "EUR/USD", min: 0.12, dp: 5, key: W("euro\\b|eur/usd|ecb|lagarde|eurozone|euro area|germany|german|france|french|bund"), wide: W("dollar|dxy|fed\\b|fomc|powell|rate (cut|hike)s?|inflation|cpi|jobs report|payrolls?|tariffs?|treasury yields?") },
+  USDJPY: { sym: "JPY=X", name: "USD/JPY", min: 0.15, dp: 3, key: W("yen|japan|japanese|boj|bank of japan|ueda|intervention|katayama|takaichi|jgbs?"), wide: W("dollar|dxy|fed\\b|fomc|powell|rate (cut|hike)s?|treasury yields?") },
+  BTC: { sym: "BTC-USD", name: "Bitcoin", min: 0.8, dp: 0, key: W("bitcoin|btc|crypto|stablecoins?|binance|coinbase|saylor|microstrategy|bitcoin etfs?|spot etfs?|liquidat|exchange hack|tether|usdt|mt\\.? gox"), wide: W("fed\\b|fomc|powell|rate (cut|hike)s?|sec\\b|regulat|tariffs?") },
+  ETH: { sym: "ETH-USD", name: "Ethereum", min: 1.0, dp: 0, key: W("ether\\b|ethereum|eth\\b|crypto|stablecoins?|binance|coinbase|vitalik|staking|liquidat|exchange hack|defi"), wide: W("bitcoin|btc|fed\\b|fomc|powell|rate (cut|hike)s?|sec\\b|regulat") }
 };
 
 // rule 1 + 2: bars [{t, c}] at 1 minute, oldest first
@@ -60,9 +64,11 @@ function findCause(move, key, events, heads) {
   const rel = (events || []).filter((e) => e && e.time && e.actual != null && e.actual !== "" && move.t - e.time >= -60e3 && move.t - e.time <= 10 * 6e4 && (e.impact === "High" || e.impact === "Medium"))
     .sort((a, b) => b.time - a.time)[0];
   if (rel) return { kind: "release", text: `${rel.title} came out at ${rel.actual}${rel.forecast ? ` (forecast ${rel.forecast})` : ""}`, title: rel.title };
-  const near = (heads || []).filter((h) => h && h.time && move.t - h.time >= -2 * 6e4 && move.t - h.time <= 20 * 6e4 && cfg.topics.test(h.title + " " + (h.themeLabel || "")))
-    .sort((a, b) => b.time - a.time);
-  if (near.length) return { kind: "headline", text: near[0].title, source: near[0].source || "", candidates: near.slice(0, 6) };
+  const inWin = (heads || []).filter((h) => h && h.time && h.title && move.t - h.time >= -2 * 6e4 && move.t - h.time <= 20 * 6e4).sort((a, b) => b.time - a.time);
+  const strong = inWin.filter((h) => cfg.key.test(h.title)), weak = inWin.filter((h) => !cfg.key.test(h.title) && cfg.wide.test(h.title));
+  if (strong.length) return { kind: "headline", text: strong[0].title, source: strong[0].source || "", candidates: strong.concat(weak).slice(0, 6) };
+  // only general news (the Fed, yields, a war) in the window: it might be why, so it's labelled as possible
+  if (weak.length) return { kind: "maybe", text: weak[0].title, source: weak[0].source || "", candidates: weak.slice(0, 6) };
   return { kind: "none", text: "No clear news behind it yet. Moves like this can come from big orders, stop-loss runs or news that hasn't hit the wires." };
 }
 

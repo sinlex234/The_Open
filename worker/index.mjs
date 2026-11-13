@@ -16,7 +16,9 @@ const SECRET = process.env.OPEN_SYNC_SECRET;
 const AI_KEY = process.env.ANTHROPIC_API_KEY;
 const UA = "Mozilla/5.0 (compatible; TheOpenOne/1.0; +https://the-open-one.vercel.app)";
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
-const stats = { moves: 0, radar: 0, speeches: 0, errors: 0, started: Date.now() };
+const stats = { moves: 0, radar: 0, speeches: 0, errors: 0, started: Date.now(), last: [] };
+// the last few problems, saved with the heartbeat so they can be read without the Railway logs
+const oops = (where, e) => { stats.errors++; stats.last.unshift(new Date().toISOString().slice(5, 16) + " " + where + ": " + String(e && e.message || e).slice(0, 160)); stats.last.length = Math.min(stats.last.length, 8); };
 
 async function get(url, { json = true, timeout = 12e3, headers = {} } = {}) {
   const ctrl = new AbortController(), t = setTimeout(() => ctrl.abort(), timeout);
@@ -66,7 +68,7 @@ async function moverTick() {
     try {
       const mv = L.detectMove(await bars1m(cfg.sym), cfg);
       if (L.shouldAlert(mv, lastAlert[key])) found.push([key, cfg, mv]);
-    } catch (e) { stats.errors++; log("bars", key, e.message); }
+    } catch (e) { oops("bars " + key, e); log("bars", key, e.message); }
   }
   if (!found.length) return;
   const [res, wire] = await Promise.all([get(`${SITE}/api/data?fn=results`).catch(() => null), get(`${SITE}/api/data?fn=wire`).catch(() => null)]);
@@ -75,12 +77,12 @@ async function moverTick() {
     const cause = L.findCause(mv, key, res && res.events, wire && wire.items);
     let why = "";
     // with several possible headlines, the AI picks the one that fits (or none) and says why in one sentence
-    if (cause.kind === "headline" && cause.candidates.length && AI_KEY) {
-      const pick = await ask(VOICE + `\nReturn JSON only: {"pick": index of the headline that most likely caused the move, or -1 if none fits, "why": "one short sentence linking it to the move"}`,
-        JSON.stringify({ market: cfg.name, move: `${mv.pct > 0 ? "+" : ""}${mv.pct}% in 5 minutes`, headlines: cause.candidates.map((h, i) => ({ i, headline: h.title, source: h.source })) }), 200).catch(() => null);
+    if ((cause.kind === "headline" || cause.kind === "maybe") && cause.candidates.length && AI_KEY) {
+      const pick = await ask(VOICE + `\nA market just made a sudden move. Pick the headline that most likely caused it ONLY if it is clearly about this market or something that directly moves it right now (a rate decision, an intervention, a hack). A general headline that happened to come out at the same time is not a cause: then pick -1.\nReturn JSON only: {"pick": index of the headline that most likely caused the move, or -1 if none fits, "why": "one short sentence linking it to the move"}`,
+        JSON.stringify({ market: cfg.name, move: `${mv.pct > 0 ? "+" : ""}${mv.pct}% in 5 minutes`, headlines: cause.candidates.map((h, i) => ({ i, headline: h.title, source: h.source })) }), 200).catch((e) => { oops("cause AI", e); return null; });
       if (pick && Number.isInteger(pick.pick)) {
         if (pick.pick < 0) { cause.kind = "none"; cause.text = "No clear news behind it yet. Moves like this can come from big orders, stop-loss runs or news that hasn't hit the wires."; }
-        else if (cause.candidates[pick.pick]) { cause.text = cause.candidates[pick.pick].title; cause.source = cause.candidates[pick.pick].source || ""; why = String(pick.why || "").slice(0, 240); }
+        else if (cause.candidates[pick.pick]) { cause.kind = "headline"; cause.text = cause.candidates[pick.pick].title; cause.source = cause.candidates[pick.pick].source || ""; why = String(pick.why || "").slice(0, 240); }
       }
     }
     lastAlert[key] = { t: mv.t, pct: mv.pct };
@@ -146,7 +148,7 @@ async function speechTick() {
   if (!AI_KEY) return;
   for (const [bank, kind, url] of FEEDS) {
     let items = [];
-    try { items = L.parseFeed(await get(url, { json: false })); } catch (e) { stats.errors++; log("feed", bank, e.message); continue; }
+    try { items = L.parseFeed(await get(url, { json: false })); } catch (e) { oops("feed " + bank, e); log("feed", bank, e.message); continue; }
     for (const it of items.filter((x) => x.t && Date.now() - x.t < 48 * 36e5 && !seen.has(x.link)).slice(0, 3)) {
       seen.add(it.link);
       const have = await fetch(`${SB_URL}/rest/v1/open_speech?select=id&id=eq.${encodeURIComponent(it.link)}`, { headers: { apikey: SB_KEY, Authorization: "Bearer " + SB_KEY } }).then((r) => r.ok ? r.json() : []).catch(() => []);
@@ -161,7 +163,7 @@ Return JSON only:
  "tone": "hawkish (leaning to higher rates or holding them high), dovish (leaning to cuts), or neutral",
  "lines": [{"quote": "copy the sentence WORD FOR WORD from the text", "means": "one short sentence in plain English", "markets": ["which of: US stocks, Treasury yields, US dollar, euro, gold, Bitcoin"], "dir": "hawkish or dovish or neutral"}]}
 Pick at most 4 lines that could move markets: hints about the next rate decision, inflation, jobs, the balance sheet, or financial stability. Skip greetings, history and thanks. If nothing in it matters for markets, return "lines": [].`,
-        `${bank} ${kind}: ${it.title}\n\n${text}`, 1400).catch((e) => { stats.errors++; log("speech AI", e.message); return null; });
+        `${bank} ${kind}: ${it.title}\n\n${text}`, 1400).catch((e) => { oops("speech AI", e); log("speech AI", e.message); return null; });
       if (!out) continue;
       const lines = L.keepQuotes(out.lines, text).slice(0, 4).map((l) => ({ quote: l.quote.slice(0, 400), means: String(l.means || "").slice(0, 240), markets: (Array.isArray(l.markets) ? l.markets : []).slice(0, 4), dir: /hawk/i.test(l.dir) ? "hawkish" : /dov/i.test(l.dir) ? "dovish" : "neutral" }));
       const tone = /hawk/i.test(out.tone) ? "hawkish" : /dov/i.test(out.tone) ? "dovish" : "neutral";
@@ -184,7 +186,7 @@ async function beat() {
 }
 function every(ms, name, fn) {
   let busy = false;
-  const run = async () => { if (busy) return; busy = true; try { await fn(); } catch (e) { stats.errors++; log(name, "failed:", e.message); } finally { busy = false; } };
+  const run = async () => { if (busy) return; busy = true; try { await fn(); } catch (e) { oops(name, e); log(name, "failed:", e.message); } finally { busy = false; } };
   run(); setInterval(run, ms);
 }
 if (!SECRET) { console.error("OPEN_SYNC_SECRET is missing. Add it in Railway > Variables (the same value as in Vercel)."); process.exit(1); }
@@ -194,4 +196,4 @@ every(180e3, "radar", radarTick);
 every(120e3, "speeches", speechTick);
 every(600e3, "beat", beat);
 every(20 * 60e3, "explainers", explainTick);
-process.on("unhandledRejection", (e) => { stats.errors++; log("unhandled", e && e.message); });
+process.on("unhandledRejection", (e) => { oops("unhandled", e); log("unhandled", e && e.message); });

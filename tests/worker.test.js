@@ -90,3 +90,13 @@ test("feeds and pages are read safely", () => {
   assert.equal(items[0].t, Date.parse("2026-11-11T18:00:00Z"));
   assert.equal(W.htmlText("<script>x()</script><p>Rates&nbsp;will</p><p>stay</p>"), "Rates will\nstay");
 });
+
+test("rule 4: only a headline about the market itself is the cause; general news is only possible (Nov 12 cases)", () => {
+  const at = (title) => [{ title, time: NOW - 3 * 6e4, source: "FinancialJuice" }];
+  const mv = { t: NOW, pct: 1 };
+  assert.equal(W.findCause(mv, "USDJPY", [], at("FinancialJuice: Suspected Yen Intervention")).kind, "headline");
+  assert.equal(W.findCause(mv, "ETH", [], at("FinancialJuice: Fed's Hammack: Financial conditions are supportive of growth.")).kind, "maybe");
+  assert.equal(W.findCause(mv, "EURUSD", [], at("Treasury yields hold near 2-week highs as traders await next signal")).kind, "maybe");
+  assert.equal(W.findCause(mv, "ETH", [], at("Morning Minute: Tokenized Stock Venues Are Launching Without Big Tech’s Approval")).kind, "none");
+  assert.equal(W.findCause(mv, "NQ", [], at("Retailers generate separate revenue streams")).kind, "none", "whole words: 'rate' inside 'generate' doesn't count");
+});

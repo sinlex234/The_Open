@@ -3273,7 +3273,7 @@ const wUsd = v => v == null ? '–' : v >= 1e9 ? '$' + (v / 1e9).toFixed(1) + 'B
 const wPct = v => v == null ? '–' : (v > 0 ? '+' : '') + (Math.abs(v) >= 100 ? Math.round(v) : v.toFixed(1)) + '%';
 function moveHTML(m) {
   const up = m.pct > 0, today = new Date(m.t).toDateString() === new Date().toDateString();
-  const cause = m.cause_kind === 'release' ? `<b>Behind it:</b> ${esc(m.cause)}` : m.cause_kind === 'headline' ? `<b>Behind it:</b> ${esc(m.cause)}${m.cause_source ? ` <span class="faint">· ${esc(m.cause_source)}</span>` : ''}${m.why ? `<br><span class="faint">${esc(m.why)}</span>` : ''}` : `<span class="faint">${esc(m.cause)}</span>`;
+  const cause = m.cause_kind === 'release' ? `<b>Behind it:</b> ${esc(m.cause)}` : m.cause_kind === 'headline' || m.cause_kind === 'maybe' ? `<b>${m.cause_kind === 'maybe' ? 'Possibly linked:' : 'Behind it:'}</b> ${esc(m.cause)}${m.cause_source ? ` <span class="faint">· ${esc(m.cause_source)}</span>` : ''}${m.why ? `<br><span class="faint">${esc(m.why)}</span>` : ''}` : `<span class="faint">${esc(m.cause)}</span>`;
   return `<li class="mv-row"><span class="mv-t">${today ? '' : esc(wDay(m.t)) + ' · '}${esc(wHM(m.t))} ET</span>
     <p class="mv-h"><b>${esc(m.name)}</b> <span class="${up ? 'up' : 'down'}">${up ? 'jumped' : 'dropped'} ${Math.abs(m.pct).toFixed(2)}%</span> in 5 minutes <span class="mv-x">${m.ratio}× a normal 5 minutes</span></p>
     <p class="mv-c">${cause}</p></li>`;
