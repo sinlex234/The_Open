@@ -49,7 +49,7 @@
       }
     },
     {
-      "src": "/(today|news|markets|futures|forex|crypto|memes|memecoins|options|calendar|economy|earnings|glossary|heatmaps|movers|scorecard|plans|profile|privacy|terms)/?",
+      "src": "/(today|news|markets|futures|forex|crypto|memes|memecoins|options|calendar|economy|earnings|glossary|heatmaps|movers|scorecard|plans|profile|privacy|terms|alerts)/?",
       "dest": "/index.html"
     },
     {

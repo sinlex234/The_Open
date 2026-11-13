@@ -8,6 +8,7 @@
 import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 const L = require("./logic.js");
+const AL = require("./alerts.js");
 
 const SB_URL = "https://jcuimqwbhxzwrnpukgra.supabase.co";
 const SB_KEY = "sb_publishable__TMrzNDk1EE7EZI0gv0xaQ_KyDcGH6r";
@@ -91,6 +92,7 @@ async function moverTick() {
     log("MOVE", key, mv.pct + "%", mv.ratio + "x", cause.kind, cause.text.slice(0, 60));
   }
   stats.moves += await save("open_moves", rows);
+  rows.forEach((r) => alertMove(r).catch((e) => oops("alert move", e)));
 }
 
 // ---------- memecoin radar ----------
@@ -134,6 +136,7 @@ async function radarTick() {
   }
   // a coin already saved this hour is skipped by the database; it gets a fresh row next hour if it's still running
   stats.radar += await save("open_radar", rows);
+  rows.filter((r) => r.score >= 80 && !(r.flags || []).some((f) => /RugCheck rates it high risk/.test(f.text))).slice(0, 1).forEach((r) => alertMeme(r).catch((e) => oops("alert meme", e)));
   if (rows.length) log("RADAR", rows.length, "taking off:", rows.map((r) => r.symbol).join(" "));
 }
 
@@ -167,7 +170,9 @@ Pick at most 4 lines that could move markets: hints about the next rate decision
       if (!out) continue;
       const lines = L.keepQuotes(out.lines, text).slice(0, 4).map((l) => ({ quote: l.quote.slice(0, 400), means: String(l.means || "").slice(0, 240), markets: (Array.isArray(l.markets) ? l.markets : []).slice(0, 4), dir: /hawk/i.test(l.dir) ? "hawkish" : /dov/i.test(l.dir) ? "dovish" : "neutral" }));
       const tone = /hawk/i.test(out.tone) ? "hawkish" : /dov/i.test(out.tone) ? "dovish" : "neutral";
-      stats.speeches += await save("open_speech", [{ id: it.link, t: new Date(it.t).toISOString(), bank, kind, title: it.title.slice(0, 240), speaker: String(out.speaker || "").slice(0, 120), url: it.link, summary: String(out.summary || "").slice(0, 500), tone, lines }]);
+      const sp = { id: it.link, t: new Date(it.t).toISOString(), bank, kind, title: it.title.slice(0, 240), speaker: String(out.speaker || "").slice(0, 120), url: it.link, summary: String(out.summary || "").slice(0, 500), tone, lines };
+      const n = await save("open_speech", [sp]); stats.speeches += n;
+      if (n) alertSpeech(sp).catch((e) => oops("alert speech", e));
       log("SPEECH", bank, tone, lines.length, "lines:", it.title.slice(0, 60));
     }
   }
@@ -180,6 +185,158 @@ async function explainTick() {
     await get(`${SITE}/api/data?fn=bg&kind=story&id=${encodeURIComponent(t.id)}`, { timeout: 50e3 }).then((x) => log("explainer", t.title, x && x.text ? "ready" : "empty")).catch((e) => log("explainer", t.title, e.message));
   }
 }
+// ---------- Smart alerts on Telegram ----------
+const TG = process.env.TELEGRAM_BOT_TOKEN;
+const MK_NAME = { NQ: "NQ", ES: "ES", GC: "Gold", CL: "Oil", EURUSD: "EUR/USD", USDJPY: "USD/JPY", BTC: "Bitcoin", ETH: "Ethereum", MEME: "memecoins" };
+async function tg(method, body) {
+  const r = await fetch(`https://api.telegram.org/bot${TG}/${method}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (!j.ok) throw new Error(`telegram ${method}: ${j.description || r.status}`);
+  return j.result;
+}
+async function rpc(fn, args) {
+  const r = await fetch(`${SB_URL}/rest/v1/rpc/${fn}`, { method: "POST", headers: { apikey: SB_KEY, Authorization: "Bearer " + SB_KEY, "Content-Type": "application/json" }, body: JSON.stringify({ secret: SECRET, ...args }) });
+  const t = await r.text();
+  if (!r.ok) throw new Error(`${fn}: ${r.status} ${t.slice(0, 120)}`);
+  return t ? JSON.parse(t) : null;
+}
+let targets = [], targetsAt = 0;
+async function loadTargets(force) {
+  if (!force && Date.now() - targetsAt < 20e3) return targets;
+  targets = (await rpc("open_alert_targets", {})) || []; targetsAt = Date.now();
+  return targets;
+}
+const kb = (rows) => ({ inline_keyboard: rows });
+const openBtn = (path = "/") => ({ text: "Open on The Open One", url: SITE + path });
+const muteBtn = (m) => ({ text: `Mute ${MK_NAME[m] || m} today`, callback_data: "mute:" + m });
+// send one event to everyone it fits; the saved row (unique per reader + event) stops repeats, even after a restart
+async function dispatch(ev, html, buttons) {
+  if (!TG) return 0;
+  let n = 0;
+  for (const u of await loadTargets()) {
+    if (AL.decide(ev, u, Date.now()) !== "send") continue;
+    const fresh = await save("open_alert_sent", [{ id: (u.user + ":" + ev.key).slice(0, 200), user_id: u.user, kind: ev.kind, title: ev.title.slice(0, 200) }]).catch((e) => { oops("alert log", e); return 0; });
+    if (!fresh) continue;
+    try { await tg("sendMessage", { chat_id: u.chat, text: html, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: kb(buttons(u)) }); u.sent24 = (u.sent24 || 0) + 1; n++; }
+    catch (e) { oops("alert send", e); if (/blocked|chat not found|deactivated/i.test(e.message)) rpc("open_alert_chat", { chat: u.chat, action: "unlink" }).catch(() => {}); }
+  }
+  if (n) log("ALERT", ev.key, "sent to", n);
+  stats.alerts = (stats.alerts || 0) + n;
+  return n;
+}
+const E = AL.tgEsc;
+async function alertMove(m) {
+  const cfg = L.MOVERS[m.mkt]; if (!cfg) return;
+  const big = m.ratio >= 8 || Math.abs(m.pct) >= 2 * cfg.min;
+  const cause = m.cause_kind === "release" || m.cause_kind === "headline" ? `<b>Behind it:</b> ${E(m.cause)}${m.why ? `\n${E(m.why)}` : ""}`
+    : m.cause_kind === "maybe" ? `<b>Possibly linked:</b> ${E(m.cause)}` : E(m.cause);
+  const html = `${m.pct > 0 ? "🟢" : "🔻"} <b>${E(m.name)} ${m.pct > 0 ? "jumped" : "dropped"} ${Math.abs(m.pct).toFixed(2)}% in 5 minutes</b> (${m.ratio}× a normal move)\n${cause}`;
+  await dispatch({ key: "move:" + m.id, kind: "moves", level: big ? "big" : "normal", markets: [m.mkt], title: `${m.name} ${m.pct}%` }, html, () => [[openBtn("/"), muteBtn(m.mkt)]]);
+}
+async function alertSpeech(sp) {
+  const statement = /statement|decision|fomc/i.test(sp.title);
+  const lean = sp.tone === "hawkish" ? "leans to higher rates" : sp.tone === "dovish" ? "leans to rate cuts" : "no clear lean on rates";
+  const lines = (sp.lines || []).slice(0, 2).map((l) => `“${E(l.quote)}”\n${E(l.means)}`).join("\n\n");
+  const html = `🏛 <b>${E(sp.speaker || sp.bank)}: ${E(lean)}</b>\n${E(sp.summary)}${lines ? "\n\n" + lines : ""}`;
+  await dispatch({ key: "speech:" + sp.id, kind: "speeches", level: statement ? "big" : sp.tone === "neutral" || !(sp.lines || []).length ? "minor" : "normal", markets: AL.BANK_MKTS[sp.bank] || [], title: sp.title },
+    html, () => [[{ text: "Read it", url: sp.url }, openBtn("/news")]]);
+}
+async function alertMeme(r) {
+  const warn = (r.flags || []).slice(0, 3).map((f) => "⚠️ " + E(f.text)).join("\n");
+  const html = `🚀 <b>${E(r.symbol)} is taking off</b> (${E(r.name)} on ${E(r.chain)})\nUp ${Math.round(r.chg_h1)}% in the last hour, $${Math.round((r.vol_h1 || 0) / 1e3)}K traded this hour.\n${warn || "No major warning signs found, but most runs like this reverse."}\n<i>High risk. Not advice.</i>`;
+  await dispatch({ key: "meme:" + r.chain + ":" + r.address + ":" + new Date().toISOString().slice(0, 10), kind: "memes", level: "normal", markets: [], title: r.symbol },
+    html, () => [[{ text: "Chart on DexScreener", url: r.url }, openBtn("/memecoins")]]);
+}
+// economic releases: a heads-up about 10 minutes before, then the result
+async function releaseTick() {
+  if (!TG) return;
+  const d = await get(`${SITE}/api/data?fn=results`).catch(() => null);
+  const now = Date.now();
+  for (const e of (d && d.events) || []) {
+    if (e.impact !== "High" || !AL.BY_CUR[e.country]) continue;
+    const huge = /cpi|consumer price|nonfarm|non-farm|payroll|fomc|interest rate|fed funds|gdp|pce/i.test(e.title);
+    const mk = AL.BY_CUR[e.country];
+    const when = new Date(e.time).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" });
+    if (!e.released && e.time - now > 8 * 6e4 && e.time - now <= 11 * 6e4) {
+      const html = `📅 <b>${E(e.title)} in 10 minutes</b> (${when} ET)${e.forecast ? `\nForecast ${E(e.forecast)}${e.previous ? `, last time ${E(e.previous)}` : ""}.` : ""}${e.text ? `\n${E(String(e.text).split(/(?<=\.)\s/)[0])}` : ""}`;
+      await dispatch({ key: "pre:" + e.key, kind: "pre", level: huge ? "big" : "normal", markets: mk, title: e.title }, html, () => [[openBtn("/calendar")]]);
+    }
+    if (e.released && e.actual && now - e.time < 20 * 6e4) {
+      const v = e.meter && e.meter.v;
+      const html = `📊 <b>${E(e.title)} came out at ${E(e.actual)}</b>${e.forecast ? ` (forecast ${E(e.forecast)}${e.previous ? `, last ${E(e.previous)}` : ""})` : ""}${e.label ? `\n<b>${E(e.label)}</b>` : ""}${e.text ? `\n${E(e.text)}` : ""}${v ? `\n<i>${E(v.head)}${v.text ? ": " + E(v.text) : ""}</i>` : ""}`;
+      await dispatch({ key: "rel:" + e.key, kind: "releases", level: huge || (v && /shock|big/i.test(v.kind || v.head)) ? "big" : "normal", markets: mk, title: e.title }, html, () => [[openBtn("/calendar")]]);
+    }
+  }
+}
+// morning summary at 8 AM in each reader's time zone on weekdays (doesn't count toward the daily limit)
+async function summaryTick() {
+  if (!TG) return;
+  const due = (await loadTargets()).filter((u) => { const p = u.prefs || {}, lp = AL.localParts(Date.now(), p.tz); return p.summary && lp.mins >= 480 && lp.mins < 495 && lp.wd !== "Sat" && lp.wd !== "Sun"; });
+  if (!due.length) return;
+  const [res, th] = await Promise.all([get(`${SITE}/api/data?fn=results`).catch(() => null), get(`${SITE}/api/data?fn=threads`).catch(() => null)]);
+  const evs = ((res && res.events) || []).filter((e) => e.impact === "High" && !e.released).slice(0, 5)
+    .map((e) => `• ${new Date(e.time).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" })} ET: ${E(e.title)}${e.forecast ? ` (forecast ${E(e.forecast)})` : ""}`);
+  const stories = ((th && th.threads) || []).slice(0, 3).map((t) => `• ${E(t.title)}${t.latest ? `: ${E(t.latest.title || t.latest)}` : ""}`);
+  const html = `☀️ <b>Good morning. Here's today.</b>\n\n<b>Big events</b>\n${evs.join("\n") || "No big releases today."}\n\n<b>Stories moving markets</b>\n${stories.join("\n") || "Quiet so far."}`;
+  for (const u of due) {
+    const lp = AL.localParts(Date.now(), u.prefs.tz);
+    const fresh = await save("open_alert_sent", [{ id: u.user + ":summary:" + lp.date, user_id: u.user, kind: "summary", title: "Morning summary" }]).catch(() => 0);
+    if (fresh) await tg("sendMessage", { chat_id: u.chat, text: html, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: kb([[openBtn("/")]]) }).catch((e) => oops("summary", e));
+  }
+}
+// "Send me a test alert" on the site
+async function testTick() {
+  if (!TG) return;
+  for (const u of await loadTargets(true)) {
+    const t = u.prefs && u.prefs.test_at && Date.parse(u.prefs.test_at);
+    if (!t || Date.now() - t > 10 * 6e4) continue;
+    await tg("sendMessage", { chat_id: u.chat, parse_mode: "HTML", disable_web_page_preview: true, text: `✅ <b>Test alert</b>\nThis is what alerts look like. You'll get them for: ${(u.prefs.markets || []).map((m) => MK_NAME[m] || m).join(", ")}.\nChange anything on the Alerts page. Send /stop to turn alerts off.`, reply_markup: kb([[openBtn("/alerts")]]) }).catch((e) => oops("test", e));
+    await rpc("open_alert_chat", { chat: u.chat, action: "tested" }).catch((e) => oops("test done", e));
+  }
+}
+// the bot itself: /start <code> links the chat, /stop unlinks it, "Mute" buttons
+let tgOffset = 0;
+async function botLoop() {
+  if (!TG) { log("Telegram alerts off: add TELEGRAM_BOT_TOKEN in Railway > Variables."); return; }
+  try { const me = await tg("getMe", {}); log("Telegram bot @" + me.username + " ready"); stats.bot = me.username; } catch (e) { oops("bot", e); }
+  for (;;) {
+    try {
+      const ups = await tg("getUpdates", { offset: tgOffset, timeout: 25, allowed_updates: ["message", "callback_query"] });
+      for (const up of ups) {
+        tgOffset = up.update_id + 1;
+        await handleUpdate(up).catch((e) => oops("bot update", e));
+      }
+    } catch (e) { oops("bot poll", e); await new Promise((r) => setTimeout(r, 5e3)); }
+  }
+}
+async function handleUpdate(up) {
+  if (up.callback_query) {
+    const q = up.callback_query, m = /^mute:([A-Z]{2,8})$/.exec(q.data || "");
+    if (!m) return tg("answerCallbackQuery", { callback_query_id: q.id });
+    const u = (await loadTargets()).find((x) => String(x.chat) === String(q.message && q.message.chat.id));
+    const until = new Date(AL.endOfDay(Date.now(), (u && u.prefs && u.prefs.tz) || "America/New_York")).toISOString();
+    await rpc("open_alert_chat", { chat: q.message.chat.id, action: "mute", mkt: m[1], until });
+    targetsAt = 0;
+    return tg("answerCallbackQuery", { callback_query_id: q.id, text: `Muted ${MK_NAME[m[1]] || m[1]} until tomorrow` });
+  }
+  const msg = up.message; if (!msg || !msg.text || msg.chat.type !== "private") return;
+  const chat = msg.chat.id, text = msg.text.trim();
+  const start = /^\/start(?:\s+([a-f0-9]{16,64}))?$/i.exec(text);
+  if (start && start[1]) {
+    const ok = await rpc("open_alert_link", { code: start[1].toLowerCase(), chat, name: msg.from.username ? "@" + msg.from.username : (msg.from.first_name || "you") });
+    targetsAt = 0;
+    return tg("sendMessage", { chat_id: chat, parse_mode: "HTML", text: ok
+      ? "✅ <b>Connected!</b> You'll get alerts for your markets here, with what happened and why.\nChange what you get any time on the Alerts page. Send /stop to turn alerts off."
+      : "That link has expired. Go back to the Alerts page on The Open One and tap <b>Connect Telegram</b> again.", reply_markup: kb([[openBtn("/alerts")]]) });
+  }
+  if (start) return tg("sendMessage", { chat_id: chat, parse_mode: "HTML", text: "👋 This is the alerts bot for <b>The Open One</b>.\nTo get alerts, sign in on the site, open the Alerts page and tap <b>Connect Telegram</b>.", reply_markup: kb([[openBtn("/alerts")]]) });
+  if (/^\/stop\b/i.test(text)) {
+    await rpc("open_alert_chat", { chat, action: "unlink" }); targetsAt = 0;
+    return tg("sendMessage", { chat_id: chat, text: "Alerts are off and this chat is disconnected. You can reconnect any time from the Alerts page." });
+  }
+  return tg("sendMessage", { chat_id: chat, parse_mode: "HTML", text: "I only send alerts. Change them on the Alerts page, or send /stop to turn them off.", reply_markup: kb([[openBtn("/alerts")]]) });
+}
+
 // ---------- loop ----------
 async function beat() {
   await save("open_beat", [{ id: new Date(Math.floor(Date.now() / 6e5) * 6e5).toISOString(), t: new Date().toISOString(), stats: { ...stats, ai: !!AI_KEY } }]).catch((e) => log("beat", e.message));
@@ -196,4 +353,8 @@ every(180e3, "radar", radarTick);
 every(120e3, "speeches", speechTick);
 every(600e3, "beat", beat);
 every(20 * 60e3, "explainers", explainTick);
+every(60e3, "releases", releaseTick);
+every(5 * 60e3, "summary", summaryTick);
+every(20e3, "tests", testTick);
+botLoop();
 process.on("unhandledRejection", (e) => { oops("unhandled", e); log("unhandled", e && e.message); });

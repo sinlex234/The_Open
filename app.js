@@ -3,7 +3,7 @@ import {
   initMe, me, myMarkets, myAssets, isBeginner, isLearning, depth, hasStrat, levelTrader, intraday, stratsFor, followUps,
   forYouEvent, forYouHeadline, forYouStrength, relevance, greeting, windowStatus, startAlerts, openAlerts, editSetup,
   profileQuery, marketLabel, myStruggles, isProp, newsRestricted, notify,
-  userTZ, plan, isPaid, authToken, rpc, loadPlan, signedIn, mySessions as mySessionsC, sbClient, setProfileLocal, hasProfile, SESSIONS as SESSIONS_C,
+  userTZ, plan, isPaid, authToken, rpc, loadPlan, signedIn, mySessions as mySessionsC, sbClient, setProfileLocal, hasProfile, SESSIONS as SESSIONS_C, toast,
 } from './me.js';
 import { GLOSSARY } from './glossary.js';
 import { SUPABASE_URL, SUPABASE_KEY } from './config.js';
@@ -2996,6 +2996,107 @@ PAGES.profile = () => {
   Promise.all([P.get().catch(() => ({})), P.stats().catch(() => ({}))]).then(([p, s]) => { prof = p || {}; st = s || {}; if (!$('#profCard')) return; draw(); });
 };
 
+// ---------- Alerts page: Telegram now, email and SMS coming soon ----------
+const TG_BOT = 'TheOpenOneBot';
+const AL_MKTS = [['NQ', 'NQ'], ['ES', 'ES'], ['GC', 'Gold'], ['CL', 'Oil'], ['EURUSD', 'EUR/USD'], ['USDJPY', 'USD/JPY'], ['BTC', 'Bitcoin'], ['ETH', 'Ethereum']];
+const AL_TYPES = [
+  ['moves', '⚡', 'Sudden moves', 'When a market moves far more than normal in 5 minutes, with the news behind it.'],
+  ['releases', '📅', 'Big economic releases', 'CPI, jobs, Fed decisions and more.'],
+  ['speeches', '🏛', 'Fed &amp; central bank speeches', 'Only the lines that could move markets, and whether they lean to higher rates or cuts.'],
+  ['memes', '🚀', 'Memecoins taking off <span class="al-tag">Pro</span> <span class="al-tag warn">High risk</span>', 'Coins jumping with real trading behind them, always with their warning signs.']
+];
+const AL_FREQ = [['big', 'Only the big ones', 'A few a week. Shocks, Fed days, huge moves.'], ['normal', 'Normal', 'About 1 to 4 on a busy day.'], ['all', 'Everything', 'Every alert for your markets.']];
+const AL_LIMIT = { free: 3, plus: 20, pro: 'unlimited' };
+const hhmm = m => { const h = Math.floor(m / 60), mm = m % 60; return `${(h % 12) || 12}:${String(mm).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`; };
+// sensible first settings from the reader's setup
+function alertDefaults() {
+  const ids = myAssets().map(a => String(a.id).toUpperCase()), out = [];
+  const add = k => { if (!out.includes(k)) out.push(k); };
+  ids.forEach(id => { if (/^M?NQ$|BIGTECH|CHIPS/.test(id)) add('NQ'); if (/^M?ES$|INDEX/.test(id)) add('ES'); if (/^GC|GOLD/.test(id)) add('GC'); if (/^CL|OIL/.test(id)) add('CL'); if (/EUR/.test(id)) add('EURUSD'); if (/JPY/.test(id)) add('USDJPY'); if (/BTC|BITCOIN/.test(id)) add('BTC'); if (/ETH/.test(id)) add('ETH'); });
+  return { types: { moves: true, releases: true, speeches: true, memes: false }, release_opts: { pre: true, result: true }, markets: out.length ? out : ['NQ', 'ES'], freq: 'normal', quiet_from: 1380, quiet_to: 420, tz: userTZ() || Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/New_York', weekend_crypto: true, summary: true };
+}
+PAGES.alerts = () => {
+  layout(`<div class="al-page"><h1 class="page-h">Alerts</h1>
+    <p class="page-intro">Get a message the moment something moves your markets, with what happened and why. Set up in a minute; change anything any time.</p>
+    <div id="alBody">${skel(4)}</div></div>`);
+  if (!signedIn()) { $('#alBody').innerHTML = `<div class="al-card">${upsellHTML('signin', 'Sign in (it’s free) to get alerts for your markets on Telegram.')}</div>`; return; }
+  const sb = sbClient(), uid = me.user && me.user.id;
+  let P = null, link = null, sent = 0, poll = null, saveT = null;
+  const save = () => { clearTimeout(saveT); saveT = setTimeout(async () => { const { error } = await sb.from('open_alert_prefs').upsert({ user_id: uid, ...P, updated_at: new Date().toISOString() }); if (error) toast('Couldn’t save', error.message); }, 400); };
+  const draw = () => {
+    const el = $('#alBody'); if (!el) return;
+    const tier = plan.admin ? 'pro' : plan.tier, lim = AL_LIMIT[tier];
+    el.innerHTML = `
+    <section class="al-card"><h2>Where to send alerts</h2><p class="al-sub">Pick where you want them. More options are on the way.</p>
+      <div class="al-row ch"><span class="al-lg tg"><svg viewBox="0 0 24 24" fill="#fff"><path d="M21.5 4.2 2.9 11.4c-1.3.5-1.3 1.2-.2 1.6l4.8 1.5 1.8 5.6c.2.6.1.9.8.9.5 0 .7-.2 1-.5l2.4-2.3 4.9 3.6c.9.5 1.5.2 1.8-.8l3.2-15.2c.3-1.3-.5-1.9-1.4-1.6zM8.6 14l9.6-6c.5-.3.9-.1.5.2l-8.2 7.4-.3 3.4L8.6 14z"/></svg></span>
+        <div class="al-tx"><b>Telegram</b>${link ? `<p><i class="al-dot"></i>Connected as ${esc(link.tg_name || 'you')} · <button class="linkbtn" id="alTest">Send a test</button> · <button class="linkbtn" id="alOff">Disconnect</button></p>` : `<p>Free app, instant on your phone. Tap Connect, then <b>Start</b> in Telegram.</p>`}</div>
+        ${link ? '' : `<button class="btn-primary al-btn" id="alConnect">Connect Telegram</button>`}</div>
+      <div class="al-row ch soon"><span class="al-lg"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg></span><div class="al-tx"><b>Email</b><p>Morning summary and the biggest alerts in your inbox.</p></div><span class="al-soon">Coming soon</span></div>
+      <div class="al-row ch soon"><span class="al-lg"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M11 18h2"/></svg></span><div class="al-tx"><b>Text message (SMS) <span class="al-tag">Pro</span></b><p>Alerts as texts to your phone.</p></div><span class="al-soon">Coming soon</span></div>
+      <p class="al-sub" style="margin:10px 0 0">Want pop-ups while the site is open in a tab? <button class="linkbtn" id="alSite">On-site alerts</button></p>
+    </section>
+    <section class="al-card"><h2>What to alert me about</h2><p class="al-sub">Only for your markets. Every alert says what happened and why, in plain words.</p>
+      ${AL_TYPES.map(([k, ic, t, d]) => `<div class="al-row"><span class="al-ic">${ic}</span><div class="al-tx"><b>${t}</b><p>${d}</p>
+        ${k === 'releases' && P.types.releases ? `<div class="al-opts"><button class="chip ${P.release_opts.pre ? 'on' : ''}" data-ro="pre" aria-pressed="${!!P.release_opts.pre}">10 min heads-up</button><button class="chip ${P.release_opts.result ? 'on' : ''}" data-ro="result" aria-pressed="${!!P.release_opts.result}">The result + what it means</button></div>` : ''}
+        ${k === 'memes' && tier !== 'pro' ? '<p class="al-note">Part of Pro. <a href="/plans">See plans</a></p>' : ''}</div>
+        <button class="al-sw ${P.types[k] ? 'on' : ''}" role="switch" aria-checked="${!!P.types[k]}" aria-label="${t.replace(/<[^>]+>/g, '')}" data-ty="${k}" ${k === 'memes' && tier !== 'pro' ? 'disabled' : ''}></button></div>`).join('')}
+      <div class="al-row"><span class="al-ic">☀️</span><div class="al-tx"><b>Morning summary</b><p>At 8 AM on weekdays: today’s big events and the stories moving markets. Doesn’t count toward your daily limit.</p></div><button class="al-sw ${P.summary ? 'on' : ''}" role="switch" aria-checked="${!!P.summary}" aria-label="Morning summary" data-sum></button></div>
+    </section>
+    <section class="al-card"><h2>Your markets</h2><p class="al-sub">From your setup. Tap to add or remove.</p>
+      <div class="al-chips">${AL_MKTS.map(([k, l]) => `<button class="chip ${P.markets.includes(k) ? 'on' : ''}" data-mk="${k}" aria-pressed="${P.markets.includes(k)}">${l}</button>`).join('')}</div></section>
+    <section class="al-card"><h2>How often</h2><p class="al-sub">You can always mute a market for the day straight from an alert.</p>
+      <div class="al-seg">${AL_FREQ.map(([k, t, d]) => `<button class="${P.freq === k ? 'on' : ''}" data-fq="${k}" aria-pressed="${P.freq === k}"><b>${t}</b><span>${d}</span></button>`).join('')}</div></section>
+    <section class="al-card"><h2>Quiet hours</h2><p class="al-sub">No alerts while you sleep, in your own time zone.</p>
+      <div class="al-two"><label class="al-field"><small>From</small><select id="alQf">${Array.from({ length: 48 }, (_, i) => i * 30).map(m => `<option value="${m}" ${m === P.quiet_from ? 'selected' : ''}>${hhmm(m)}</option>`).join('')}</select></label>
+        <label class="al-field"><small>Until</small><select id="alQt">${Array.from({ length: 48 }, (_, i) => i * 30).map(m => `<option value="${m}" ${m === P.quiet_to ? 'selected' : ''}>${hhmm(m)}</option>`).join('')}</select></label></div>
+      <div class="al-row" style="margin-top:6px"><div class="al-tx"><b>Weekends: crypto only</b><p>Stocks, futures and forex are closed, so only crypto alerts on Saturday and Sunday.</p></div><button class="al-sw ${P.weekend_crypto ? 'on' : ''}" role="switch" aria-checked="${!!P.weekend_crypto}" aria-label="Weekends crypto only" data-wk></button></div>
+      <p class="al-sub" style="margin:8px 0 0">Time zone: ${esc(P.tz.replace(/_/g, ' '))}</p></section>
+    <section class="al-card"><div class="al-plan"><span><b>${PLAN_NAME[tier] || tier}</b> · ${lim === 'unlimited' ? 'no daily limit' : `up to ${lim} alerts a day`}</span><span>${sent} in the last 24 hours</span></div>
+      ${lim === 'unlimited' ? '' : `<div class="al-meter"><i style="width:${Math.min(100, sent / lim * 100)}%"></i></div>`}
+      <p class="al-sub" style="margin:8px 0 0">Free: 3 a day and the morning summary · Plus: 20 a day · Pro: no limit, plus memecoin alerts. ${tier === 'pro' ? '' : '<a href="/plans">See plans</a>'}</p></section>`;
+    el.querySelectorAll('[data-ty]').forEach(b => b.onclick = () => { P.types[b.dataset.ty] = !P.types[b.dataset.ty]; save(); draw(); });
+    el.querySelectorAll('[data-ro]').forEach(b => b.onclick = () => { P.release_opts[b.dataset.ro] = !P.release_opts[b.dataset.ro]; save(); draw(); });
+    el.querySelectorAll('[data-mk]').forEach(b => b.onclick = () => { const k = b.dataset.mk; P.markets = P.markets.includes(k) ? P.markets.filter(x => x !== k) : [...P.markets, k]; if (!P.markets.length) { P.markets = [k]; toast('Keep at least one market', 'Alerts need at least one market to watch.'); } save(); draw(); });
+    el.querySelectorAll('[data-fq]').forEach(b => b.onclick = () => { P.freq = b.dataset.fq; save(); draw(); });
+    const sumB = el.querySelector('[data-sum]'); if (sumB) sumB.onclick = () => { P.summary = !P.summary; save(); draw(); };
+    const wk = el.querySelector('[data-wk]'); if (wk) wk.onclick = () => { P.weekend_crypto = !P.weekend_crypto; save(); draw(); };
+    $('#alQf').onchange = e => { P.quiet_from = +e.target.value; save(); };
+    $('#alQt').onchange = e => { P.quiet_to = +e.target.value; save(); };
+    $('#alSite').onclick = openAlerts;
+    const c = $('#alConnect'); if (c) c.onclick = connect;
+    const t = $('#alTest'); if (t) t.onclick = async () => { t.disabled = true; const { error } = await sb.from('open_alert_prefs').upsert({ user_id: uid, ...P, test_at: new Date().toISOString() }); toast(error ? 'Couldn’t send' : 'Test on its way', error ? error.message : 'Check Telegram in the next 30 seconds.'); };
+    const o = $('#alOff'); if (o) o.onclick = async () => { const { error } = await sb.from('open_alert_links').delete().eq('user_id', uid); if (!error) { link = null; draw(); toast('Disconnected', 'You won’t get Telegram alerts any more.'); } };
+  };
+  // Connect: save settings, get a one-time code, open Telegram, then watch for the link
+  async function connect() {
+    const b = $('#alConnect'); if (b) { b.disabled = true; b.textContent = 'Opening Telegram…'; }
+    try {
+      await sb.from('open_alert_prefs').upsert({ user_id: uid, ...P });
+      const code = await rpc('open_alert_code');
+      window.open(`https://t.me/${TG_BOT}?start=${encodeURIComponent(code)}`, '_blank', 'noopener');
+      if (b) b.textContent = 'Waiting for you to tap Start…';
+      let n = 0; clearInterval(poll);
+      poll = setInterval(async () => {
+        if (!$('#alBody') || ++n > 60) { clearInterval(poll); if ($('#alConnect')) { $('#alConnect').disabled = false; $('#alConnect').textContent = 'Connect Telegram'; } return; }
+        const { data } = await sb.from('open_alert_links').select('tg_name,linked_at').eq('user_id', uid).maybeSingle();
+        if (data) { clearInterval(poll); link = data; draw(); toast('Telegram connected', 'You’ll get alerts for your markets there.'); }
+      }, 3000);
+    } catch (e) { toast('Couldn’t connect', e.message); if (b) { b.disabled = false; b.textContent = 'Connect Telegram'; } }
+  }
+  (async () => {
+    const [pr, lk, st] = await Promise.all([
+      sb.from('open_alert_prefs').select('*').eq('user_id', uid).maybeSingle(),
+      sb.from('open_alert_links').select('tg_name,linked_at').eq('user_id', uid).maybeSingle(),
+      sb.from('open_alert_sent').select('kind').eq('user_id', uid).gte('t', new Date(Date.now() - 864e5).toISOString())]);
+    if (pr.error && /relation|does not exist|schema cache/i.test(pr.error.message)) { $('#alBody').innerHTML = '<p class="empty">Alerts are being switched on. Check back soon.</p>'; return; }
+    const d = alertDefaults();
+    P = pr.data ? { ...d, ...pr.data, types: { ...d.types, ...(pr.data.types || {}) }, release_opts: { ...d.release_opts, ...(pr.data.release_opts || {}) } } : d;
+    ['user_id', 'updated_at', 'test_at'].forEach(k => delete P[k]);
+    link = lk.data || null; sent = (st.data || []).filter(r => r.kind !== 'test' && r.kind !== 'summary').length;
+    draw();
+  })().catch(e => { const b = $('#alBody'); if (b) b.innerHTML = errBox('your alerts', e.message); });
+};
+
 // ---------- router ----------
 const ALIASES = { movers: 'markets', memecoins: 'memes', economy: 'calendar', earnings: 'calendar' };
 const SLUG = { memes: 'memecoins' };
@@ -3430,7 +3531,7 @@ new MutationObserver(() => { clearTimeout(markScrollers.t); markScrollers.t = se
 // ---------- start ----------
 let calendarCache = null;
 tick(); setInterval(tick, 30e3);
-$('#bellBtn').onclick = () => { if (started) openAlerts(); };
+$('#bellBtn').onclick = () => { if (started) go('/alerts'); };
 // Privacy and terms show straight away, signed in or not
 if (/^\/(privacy|terms)\/?$/.test(location.pathname)) { const k = location.pathname.replace(/\W/g, ''); shownPage = k; main.dataset.page = k; PAGES[k](); }
 initMe(() => {

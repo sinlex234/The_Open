@@ -819,7 +819,7 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') { const m = 
 // ================= alerts =================
 let alertGetters = null, alertTimer = null;
 // Toasts stack, so a countdown alert isn't covered by a breaking story that arrives at the same moment
-function toast(title, body, onOpen) {
+export function toast(title, body, onOpen) {
   let st = $('#toastStack');
   if (!st) { st = document.createElement('div'); st.id = 'toastStack'; st.setAttribute('role', 'status'); document.body.appendChild(st); }
   const t = document.createElement('div'); t.className = 'toast' + (onOpen ? ' toast-act' : '');

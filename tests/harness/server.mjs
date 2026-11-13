@@ -11,7 +11,7 @@ http.createServer(async (req, res) => {
     try { await handler(Object.assign(req, { query: Object.fromEntries(url.searchParams) }), shim); } catch (e) { res.writeHead(500); res.end(JSON.stringify({ error: String(e) })); }
     return;
   }
-  const pages = /^\/(today|news|markets|futures|forex|crypto|memes|memecoins|options|calendar|economy|confluences|earnings|glossary|heatmaps|movers|scorecard|privacy|terms|plans|profile)\/?$/;
+  const pages = /^\/(today|news|markets|futures|forex|crypto|memes|memecoins|options|calendar|economy|confluences|earnings|glossary|heatmaps|movers|scorecard|privacy|terms|plans|profile|alerts)\/?$/;
   const p = path.join(root, decodeURIComponent(url.pathname === '/' || pages.test(url.pathname) ? '/index.html' : url.pathname));
   if (!p.startsWith(root) || !fs.existsSync(p) || fs.statSync(p).isDirectory()) { res.writeHead(404); return res.end('Not found'); }
   res.writeHead(200, { 'Content-Type': types[path.extname(p)] || 'application/octet-stream' }); fs.createReadStream(p).pipe(res);
