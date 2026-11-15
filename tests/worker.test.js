@@ -100,3 +100,14 @@ test("rule 4: only a headline about the market itself is the cause; general news
   assert.equal(W.findCause(mv, "ETH", [], at("Morning Minute: Tokenized Stock Venues Are Launching Without Big Tech’s Approval")).kind, "none");
   assert.equal(W.findCause(mv, "NQ", [], at("Retailers generate separate revenue streams")).kind, "none", "whole words: 'rate' inside 'generate' doesn't count");
 });
+
+test("rule 4: with the site offline, a big release scheduled for that minute is still named (no result yet)", () => {
+  const mv = { t: NOW, pct: -0.5 };
+  const ev = [{ title: "CPI m/m", time: NOW - 2 * 6e4, impact: "High", country: "USD", forecast: "0.3%", scheduled: true }];
+  const c = W.findCause(mv, "NQ", ev, []);
+  assert.equal(c.kind, "release");
+  assert.equal(c.text, "CPI m/m just came out (forecast was 0.3%)");
+  // a euro release doesn't explain a Nasdaq move
+  assert.equal(W.findCause(mv, "NQ", [{ ...ev[0], country: "EUR" }], []).kind, "none");
+  assert.equal(W.findCause(mv, "EURUSD", [{ ...ev[0], country: "EUR" }], []).kind, "release");
+});

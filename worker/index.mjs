@@ -59,7 +59,9 @@ const VOICE = `You write for The Open One, a market-news site for everyday trade
 const lastAlert = {};
 async function bars1m(sym) {
   // two days, so right after midnight (when "today" has no bars yet) there's still a full day to compare with
-  const j = await get(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?range=2d&interval=1m&includePrePost=true`);
+  const path = `/v8/finance/chart/${encodeURIComponent(sym)}?range=2d&interval=1m&includePrePost=true`;
+  // Yahoo's two hosts: if one blips, the other usually answers
+  const j = await get("https://query1.finance.yahoo.com" + path).catch(() => get("https://query2.finance.yahoo.com" + path));
   const r = j.chart && j.chart.result && j.chart.result[0]; if (!r || !r.timestamp || !r.indicators || !r.indicators.quote) return [];
   const c = r.indicators.quote[0].close;
   return r.timestamp.map((t, i) => ({ t: t * 1000, c: c[i] })).filter((b) => b.c != null);
@@ -73,10 +75,15 @@ async function moverTick() {
     } catch (e) { oops("bars " + key, e); log("bars", key, e.message); }
   }
   if (!found.length) return;
-  const [res, wire] = await Promise.all([get(`${SITE}/api/data?fn=results`).catch(() => null), get(`${SITE}/api/data?fn=wire`).catch(() => null)]);
+  // the site's headlines and results when it's up, plus the watcher's own fast news feeds and calendar,
+  // so causes are still found when the site is offline
+  const [res, wire, own, cal] = await Promise.all([get(`${SITE}/api/data?fn=results`).catch(() => null), get(`${SITE}/api/data?fn=wire`).catch(() => null), ownHeadlines(), ownCalendar()]);
+  const heads = [...((wire && wire.items) || [])];
+  own.forEach((h) => { if (!heads.some((x) => x.title === h.title)) heads.push(h); });
+  const events = (res && res.events && res.events.length) ? res.events : cal;
   const rows = [];
   for (const [key, cfg, mv] of found) {
-    const cause = L.findCause(mv, key, res && res.events, wire && wire.items);
+    const cause = L.findCause(mv, key, events, heads);
     let why = "";
     // with several possible headlines, the AI picks the one that fits (or none) and says why in one sentence
     if ((cause.kind === "headline" || cause.kind === "maybe") && cause.candidates.length && AI_KEY) {
@@ -94,6 +101,35 @@ async function moverTick() {
   }
   stats.moves += await save("open_moves", rows);
   rows.forEach((r) => alertMove(r).catch((e) => oops("alert move", e)));
+}
+
+// ---------- the watcher's own news and calendar (doesn't depend on the website) ----------
+const NEWS = {
+  FinancialJuice: "https://www.financialjuice.com/feed.ashx?xy=rss",
+  investingLive: "https://rss.investinglive.com/rss/",
+  "MarketWatch": "https://feeds.content.dowjones.io/public/rss/mw_marketpulse",
+  "CNBC": "https://www.cnbc.com/id/20910258/device/rss/rss.html",
+  "CoinDesk": "https://www.coindesk.com/arc/outboundfeeds/rss/",
+  "Cointelegraph": "https://cointelegraph.com/rss",
+  "Google News": "https://news.google.com/rss/search?q=" + encodeURIComponent("stocks OR markets OR Fed OR dollar OR oil OR bitcoin when:1h") + "&hl=en-US&gl=US&ceid=US:en"
+};
+let ownHeadsAt = 0, ownHeads = [];
+async function ownHeadlines() {
+  if (Date.now() - ownHeadsAt < 60e3) return ownHeads;
+  const lists = await Promise.all(Object.entries(NEWS).map(([src, url]) => get(url, { json: false, timeout: 8e3 }).then((x) => L.parseFeed(x).map((h) => ({ title: h.title, time: h.t, source: src }))).catch(() => [])));
+  ownHeads = lists.flat().filter((h) => h.time && Date.now() - h.time < 3 * 36e5); ownHeadsAt = Date.now();
+  return ownHeads;
+}
+let calAt = 0, cal = [];
+async function ownCalendar() {
+  // ForexFactory blocks frequent requests, so at most every 30 minutes, keeping the last good copy
+  if (Date.now() - calAt < 30 * 6e4) return cal;
+  calAt = Date.now();
+  try {
+    const j = await get("https://nfs.faireconomy.media/ff_calendar_thisweek.json");
+    cal = (Array.isArray(j) ? j : []).map((e) => ({ title: e.title, country: e.country, time: Date.parse(e.date), impact: e.impact, forecast: e.forecast || null, previous: e.previous || null, actual: e.actual || null, scheduled: true })).filter((e) => isFinite(e.time));
+  } catch (e) { oops("calendar", e); }
+  return cal;
 }
 
 // ---------- memecoin radar ----------
