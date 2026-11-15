@@ -59,11 +59,18 @@ function shouldAlert(move, lastAlert) {
   return Math.sign(move.pct) === Math.sign(lastAlert.pct) && Math.abs(move.pct) >= 2 * Math.abs(lastAlert.pct);
 }
 // rule 4: events [{title, time, actual}], heads [{title, time, source, themeLabel}]
+// which countries' releases can move which market
+const REL_CUR = { NQ: ["USD"], ES: ["USD"], GC: ["USD"], CL: ["USD"], EURUSD: ["USD", "EUR"], USDJPY: ["USD", "JPY"], BTC: ["USD"], ETH: ["USD"] };
+const relFor = (key, cur) => !cur || (REL_CUR[key] || ["USD"]).includes(String(cur).toUpperCase());
 function findCause(move, key, events, heads) {
   const cfg = MOVERS[key];
-  const rel = (events || []).filter((e) => e && e.time && e.actual != null && e.actual !== "" && move.t - e.time >= -60e3 && move.t - e.time <= 10 * 6e4 && (e.impact === "High" || e.impact === "Medium"))
+  // a release with its result, or (from the raw calendar, before the result is known) one scheduled for that minute
+  const has = (e) => (e.actual != null && e.actual !== "") || e.scheduled;
+  const rel = (events || []).filter((e) => e && e.time && has(e) && move.t - e.time >= -60e3 && move.t - e.time <= 10 * 6e4 && (e.impact === "High" || e.impact === "Medium") && relFor(key, e.country))
     .sort((a, b) => b.time - a.time)[0];
-  if (rel) return { kind: "release", text: `${rel.title} came out at ${rel.actual}${rel.forecast ? ` (forecast ${rel.forecast})` : ""}`, title: rel.title };
+  if (rel) return { kind: "release", title: rel.title, text: rel.actual != null && rel.actual !== ""
+    ? `${rel.title} came out at ${rel.actual}${rel.forecast ? ` (forecast ${rel.forecast})` : ""}`
+    : `${rel.title} just came out${rel.forecast ? ` (forecast was ${rel.forecast})` : ""}` };
   const inWin = (heads || []).filter((h) => h && h.time && h.title && move.t - h.time >= -2 * 6e4 && move.t - h.time <= 20 * 6e4).sort((a, b) => b.time - a.time);
   const strong = inWin.filter((h) => cfg.key.test(h.title)), weak = inWin.filter((h) => !cfg.key.test(h.title) && cfg.wide.test(h.title));
   if (strong.length) return { kind: "headline", text: strong[0].title, source: strong[0].source || "", candidates: strong.concat(weak).slice(0, 6) };
